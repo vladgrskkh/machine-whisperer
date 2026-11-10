@@ -9,15 +9,19 @@ import (
 
 type Repository interface {
 	Create(ctx context.Context, email, passwordHash string) (user.User, error)
+	FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error)
+	FindByID(ctx context.Context, id string) (user.User, error)
 }
 
 type PasswordHasher interface {
 	Hash(ctx context.Context, password string) (string, error)
+	Verify(ctx context.Context, password, hash string) (bool, error)
 }
 
 type Usecase struct {
 	repository Repository
 	hasher     PasswordHasher
+	login      LoginDependencies
 }
 
 func New(repository Repository, hasher PasswordHasher) *Usecase {

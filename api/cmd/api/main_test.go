@@ -9,13 +9,23 @@ import (
 	"time"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUnknownRoute(t *testing.T) {
-	server := httptest.NewServer(application.NewHandler(nil, application.Config{}))
+	id, signing, verifying, _ := testutil.AuthKeys(t)
+	handler, err := application.NewHandler(
+		t.Context(),
+		nil,
+		application.Config{
+			Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+		},
+	)
+	require.NoError(t, err)
+	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 
 	response, err := server.Client().Get(server.URL + "/unknown")
