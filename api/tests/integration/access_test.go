@@ -107,13 +107,17 @@ func TestProtectedRouteRequiresUserBearer(t *testing.T) {
 func authConfig(t *testing.T) application.Config {
 	t.Helper()
 	id, signing, verifying, _ := testutil.AuthKeys(t)
-	return application.Config{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying}
+	return application.Config{
+		Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+	}
 }
 
 func newAuthServer(t *testing.T, pool *pgxpool.Pool, config application.Config) *httptest.Server {
 	t.Helper()
 	keys := authConfig(t)
-	config.SigningKeyID, config.SigningKeyFile, config.VerifyKeysFile = keys.SigningKeyID, keys.SigningKeyFile, keys.VerifyKeysFile
+	config.Auth.SigningKeyID = keys.Auth.SigningKeyID
+	config.Auth.SigningKeyFile = keys.Auth.SigningKeyFile
+	config.Auth.VerifyKeysFile = keys.Auth.VerifyKeysFile
 	handler, err := application.NewHandler(t.Context(), pool, config)
 	require.NoError(t, err)
 	return httptest.NewServer(handler)
@@ -171,10 +175,10 @@ func TestSharedAuthIPBudget(t *testing.T) {
 		t,
 		pool,
 		application.Config{
-			RateLimit: middleware.RateLimitConfig{
+			RateLimits: application.RateLimitsConfig{IP: middleware.RateLimitConfig{
 				Now:            now,
 				TrustedProxies: []netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
-			},
+			}},
 		},
 	)
 	t.Cleanup(server.Close)
@@ -234,7 +238,12 @@ func TestLoginEmailBudgetHTTP(t *testing.T) {
 	server := newAuthServer(
 		t,
 		pool,
-		application.Config{Now: now, EmailAttempts: attempts.Config{Limit: 2, Window: 10 * time.Second, Capacity: 1}},
+		application.Config{
+			Auth: application.AuthConfig{Now: now},
+			RateLimits: application.RateLimitsConfig{
+				Email: attempts.Config{Limit: 2, Window: 10 * time.Second, Capacity: 1},
+			},
+		},
 	)
 	t.Cleanup(server.Close)
 	for _, tc := range []struct {
@@ -281,12 +290,12 @@ func TestAccessJWTHTTP(t *testing.T) {
 	handler, err := application.NewHandler(
 		t.Context(),
 		pool,
-		application.Config{
+		application.Config{Auth: application.AuthConfig{
 			SigningKeyID:   id,
 			SigningKeyFile: signing,
 			VerifyKeysFile: verifying,
 			Now:            func() time.Time { return now },
-		},
+		}},
 	)
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)

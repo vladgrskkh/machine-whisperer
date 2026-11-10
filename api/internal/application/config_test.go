@@ -22,23 +22,23 @@ func TestLoadConfig(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, 30, config.RateLimit.Limit)
-	assert.Equal(t, time.Minute, config.RateLimit.Window)
-	assert.Equal(t, 10000, config.RateLimit.MaxClients)
-	assert.Empty(t, config.RateLimit.TrustedProxies)
+	assert.Equal(t, 30, config.RateLimits.IP.Limit)
+	assert.Equal(t, time.Minute, config.RateLimits.IP.Window)
+	assert.Equal(t, 10000, config.RateLimits.IP.MaxClients)
+	assert.Empty(t, config.RateLimits.IP.TrustedProxies)
 	t.Setenv("AUTH_RATE_LIMIT", "2")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
 	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "20")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.0/8, ::1/128")
 	config, err = application.LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, 2, config.RateLimit.Limit)
-	assert.Equal(t, 30*time.Second, config.RateLimit.Window)
-	assert.Equal(t, 20, config.RateLimit.MaxClients)
+	assert.Equal(t, 2, config.RateLimits.IP.Limit)
+	assert.Equal(t, 30*time.Second, config.RateLimits.IP.Window)
+	assert.Equal(t, 20, config.RateLimits.IP.MaxClients)
 	assert.Equal(
 		t,
 		[]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
-		config.RateLimit.TrustedProxies,
+		config.RateLimits.IP.TrustedProxies,
 	)
 }
 
@@ -94,8 +94,8 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, math.MaxInt, config.RateLimit.Limit)
-	assert.Equal(t, math.MaxInt, config.RateLimit.MaxClients)
+	assert.Equal(t, math.MaxInt, config.RateLimits.IP.Limit)
+	assert.Equal(t, math.MaxInt, config.RateLimits.IP.MaxClients)
 }
 
 func keyEnvironment(t *testing.T) {
@@ -113,20 +113,20 @@ func TestAuthConfig(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://test")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, "active", config.SigningKeyID)
-	assert.Equal(t, "/test/private.pem", config.SigningKeyFile)
-	assert.Equal(t, "/test/public.json", config.VerifyKeysFile)
-	assert.Equal(t, 5, config.EmailAttempts.Limit)
-	assert.Equal(t, time.Minute, config.EmailAttempts.Window)
-	assert.Equal(t, 10000, config.EmailAttempts.Capacity)
+	assert.Equal(t, "active", config.Auth.SigningKeyID)
+	assert.Equal(t, "/test/private.pem", config.Auth.SigningKeyFile)
+	assert.Equal(t, "/test/public.json", config.Auth.VerifyKeysFile)
+	assert.Equal(t, 5, config.RateLimits.Email.Limit)
+	assert.Equal(t, time.Minute, config.RateLimits.Email.Window)
+	assert.Equal(t, 10000, config.RateLimits.Email.Capacity)
 	t.Setenv("AUTH_EMAIL_RATE_LIMIT", "2")
 	t.Setenv("AUTH_EMAIL_RATE_LIMIT_WINDOW", "10s")
 	t.Setenv("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", strconv.Itoa(math.MaxInt))
 	config, err = application.LoadConfig()
 	require.NoError(t, err)
-	assert.Equal(t, 2, config.EmailAttempts.Limit)
-	assert.Equal(t, 10*time.Second, config.EmailAttempts.Window)
-	assert.Equal(t, math.MaxInt, config.EmailAttempts.Capacity)
+	assert.Equal(t, 2, config.RateLimits.Email.Limit)
+	assert.Equal(t, 10*time.Second, config.RateLimits.Email.Window)
+	assert.Equal(t, math.MaxInt, config.RateLimits.Email.Capacity)
 }
 
 func TestAuthConfigRejectsInvalidSettings(t *testing.T) {

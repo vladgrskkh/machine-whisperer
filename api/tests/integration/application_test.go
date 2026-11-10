@@ -174,23 +174,36 @@ func TestSignupHTTP(t *testing.T) {
 func TestNewPool(t *testing.T) {
 	t.Parallel()
 	existing := testutil.Postgres(t)
-	pool, err := application.NewPool(t.Context(), application.Config{DatabaseURL: existing.Config().ConnString()})
+	pool, err := application.NewPool(
+		t.Context(),
+		application.Config{Database: application.DatabaseConfig{URL: existing.Config().ConnString()}},
+	)
 	require.NoError(t, err)
 	require.NotNil(t, pool)
 	t.Cleanup(pool.Close)
 	require.NoError(t, pool.Ping(t.Context()))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = application.NewPool(ctx, application.Config{DatabaseURL: existing.Config().ConnString()})
+	_, err = application.NewPool(
+		ctx,
+		application.Config{Database: application.DatabaseConfig{URL: existing.Config().ConnString()}},
+	)
 	assert.Error(t, err)
-	_, err = application.NewPool(t.Context(), application.Config{DatabaseURL: "://invalid"})
+	_, err = application.NewPool(
+		t.Context(),
+		application.Config{Database: application.DatabaseConfig{URL: "://invalid"}},
+	)
 	assert.Error(t, err)
 }
 
 func TestSignupRateLimit(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	server := newAuthServer(t, pool, application.Config{RateLimit: middleware.RateLimitConfig{Limit: 1}})
+	server := newAuthServer(
+		t,
+		pool,
+		application.Config{RateLimits: application.RateLimitsConfig{IP: middleware.RateLimitConfig{Limit: 1}}},
+	)
 	t.Cleanup(server.Close)
 	for _, tc := range []struct {
 		body string

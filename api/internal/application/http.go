@@ -33,11 +33,11 @@ func NewHandler(ctx context.Context, pool *pgxpool.Pool, config Config) (http.Ha
 	if startupCtx.Err() != nil {
 		return nil, errors.New("auth initialization failed")
 	}
-	keys, err := token.LoadKeys(config.SigningKeyID, config.SigningKeyFile, config.VerifyKeysFile)
+	keys, err := token.LoadKeys(config.Auth.SigningKeyID, config.Auth.SigningKeyFile, config.Auth.VerifyKeysFile)
 	if err != nil {
 		return nil, errors.New("invalid auth key configuration")
 	}
-	now := config.Now
+	now := config.Auth.Now
 	if now == nil {
 		now = time.Now
 	}
@@ -50,7 +50,7 @@ func NewHandler(ctx context.Context, pool *pgxpool.Pool, config Config) (http.Ha
 	if err != nil {
 		return nil, errors.New("auth initialization failed")
 	}
-	emailConfig := config.EmailAttempts
+	emailConfig := config.RateLimits.Email
 	if emailConfig.Now == nil {
 		emailConfig.Now = now
 	}
@@ -65,10 +65,10 @@ func NewHandler(ctx context.Context, pool *pgxpool.Pool, config Config) (http.Ha
 		DummyHash:    dummy,
 	})
 	router := chi.NewRouter()
-	limit := middleware.RateLimit(config.RateLimit)
+	limit := middleware.RateLimit(config.RateLimits.IP)
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(usecase).ServeHTTP)
 	router.Route("/v1/auth/login", func(login chi.Router) {
-		login.Use(authhandler.NoStore)
+		login.Use(middleware.NoStore)
 		login.With(limit).Post("/", authhandler.NewLogin(usecase).ServeHTTP)
 	})
 	router.With(middleware.AccessToken(signer)).Get("/v1/users/me", users.NewMe(usecase).ServeHTTP)

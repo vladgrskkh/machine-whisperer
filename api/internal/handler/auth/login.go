@@ -9,6 +9,7 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
@@ -16,15 +17,8 @@ type Login interface {
 	Login(context.Context, string, string) (auth.TokenPair, error)
 }
 
-func NoStore(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		next.ServeHTTP(w, r)
-	})
-}
-
 func NewLogin(usecase Login) http.Handler {
-	return NoStore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return middleware.NoStore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), signupTimeout)
 		defer cancel()
 		input, err := decodeCredentials(w, r)

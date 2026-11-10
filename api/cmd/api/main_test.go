@@ -20,7 +20,9 @@ func TestUnknownRoute(t *testing.T) {
 	handler, err := application.NewHandler(
 		t.Context(),
 		nil,
-		application.Config{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+		application.Config{
+			Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+		},
 	)
 	require.NoError(t, err)
 	server := httptest.NewServer(handler)

@@ -16,7 +16,7 @@ func TestNewHandlerRejectsInvalidKeys(t *testing.T) {
 	handler, err := application.NewHandler(
 		t.Context(),
 		nil,
-		application.Config{SigningKeyFile: "private-path-with-secret"},
+		application.Config{Auth: application.AuthConfig{SigningKeyFile: "private-path-with-secret"}},
 	)
 	require.Error(t, err)
 	assert.Nil(t, handler)
@@ -31,7 +31,9 @@ func TestNewHandlerPropagatesStartupCancellation(t *testing.T) {
 	handler, err := application.NewHandler(
 		ctx,
 		nil,
-		application.Config{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+		application.Config{
+			Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
+		},
 	)
 	require.Error(t, err)
 	assert.Nil(t, handler)

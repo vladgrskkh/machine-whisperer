@@ -13,7 +13,7 @@ const databaseStartupTimeout = 10 * time.Second
 func NewPool(ctx context.Context, config Config) (*pgxpool.Pool, error) {
 	startupCtx, cancel := context.WithTimeout(ctx, databaseStartupTimeout)
 	defer cancel()
-	pool, err := pgxpool.New(startupCtx, config.DatabaseURL)
+	pool, err := pgxpool.New(startupCtx, config.Database.URL)
 	if err != nil {
 		return nil, errors.New("invalid database configuration")
 	}
