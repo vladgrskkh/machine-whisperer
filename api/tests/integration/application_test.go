@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -104,7 +103,7 @@ func TestConcurrentSignup(t *testing.T) {
 func TestSignupHTTP(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	server := httptest.NewServer(application.NewHandler(pool, application.Config{}))
+	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	request := func(t *testing.T, body string) (int, map[string]json.RawMessage) {
 		t.Helper()
@@ -191,9 +190,7 @@ func TestNewPool(t *testing.T) {
 func TestSignupRateLimit(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	server := httptest.NewServer(
-		application.NewHandler(pool, application.Config{RateLimit: middleware.RateLimitConfig{Limit: 1}}),
-	)
+	server := newAuthServer(t, pool, application.Config{RateLimit: middleware.RateLimitConfig{Limit: 1}})
 	t.Cleanup(server.Close)
 	for _, tc := range []struct {
 		body string

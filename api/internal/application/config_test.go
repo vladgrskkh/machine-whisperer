@@ -14,6 +14,7 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
+	keyEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 	t.Setenv("AUTH_RATE_LIMIT", "")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -48,6 +49,7 @@ func TestLoadConfigRejectsInvalidSettings(t *testing.T) {
 		{"AUTH_RATE_LIMIT_MAX_CLIENTS", "-1"}, {"TRUSTED_PROXY_CIDRS", "127.0.0.1"},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
+			keyEnvironment(t)
 			t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 			t.Setenv("AUTH_RATE_LIMIT", "")
 			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -66,6 +68,7 @@ func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
 		"AUTH_RATE_LIMIT", "AUTH_RATE_LIMIT_WINDOW", "AUTH_RATE_LIMIT_MAX_CLIENTS", "TRUSTED_PROXY_CIDRS",
 	} {
 		t.Run(key, func(t *testing.T) {
+			keyEnvironment(t)
 			t.Setenv("DATABASE_URL", databaseURL)
 			t.Setenv("AUTH_RATE_LIMIT", "")
 			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -83,6 +86,7 @@ func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
 }
 
 func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
+	keyEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 	t.Setenv("AUTH_RATE_LIMIT", strconv.Itoa(math.MaxInt))
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -92,4 +96,55 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, math.MaxInt, config.RateLimit.Limit)
 	assert.Equal(t, math.MaxInt, config.RateLimit.MaxClients)
+}
+
+func keyEnvironment(t *testing.T) {
+	t.Helper()
+	t.Setenv("AUTH_SIGNING_KEY_ID", "active")
+	t.Setenv("AUTH_SIGNING_KEY_FILE", "/test/private.pem")
+	t.Setenv("AUTH_VERIFY_KEYS_FILE", "/test/public.json")
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT", "")
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT_WINDOW", "")
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "")
+}
+
+func TestAuthConfig(t *testing.T) {
+	keyEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://test")
+	config, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, "active", config.SigningKeyID)
+	assert.Equal(t, "/test/private.pem", config.SigningKeyFile)
+	assert.Equal(t, "/test/public.json", config.VerifyKeysFile)
+	assert.Equal(t, 5, config.EmailAttempts.Limit)
+	assert.Equal(t, time.Minute, config.EmailAttempts.Window)
+	assert.Equal(t, 10000, config.EmailAttempts.Capacity)
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT", "2")
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT_WINDOW", "10s")
+	t.Setenv("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", strconv.Itoa(math.MaxInt))
+	config, err = application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 2, config.EmailAttempts.Limit)
+	assert.Equal(t, 10*time.Second, config.EmailAttempts.Window)
+	assert.Equal(t, math.MaxInt, config.EmailAttempts.Capacity)
+}
+
+func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"AUTH_SIGNING_KEY_ID", ""}, {"AUTH_SIGNING_KEY_FILE", ""}, {"AUTH_VERIFY_KEYS_FILE", ""},
+		{"AUTH_EMAIL_RATE_LIMIT", "0"}, {"AUTH_EMAIL_RATE_LIMIT", "private-invalid-value"},
+		{"AUTH_EMAIL_RATE_LIMIT_WINDOW", "-1s"}, {"AUTH_EMAIL_RATE_LIMIT_WINDOW", "private-invalid-value"},
+		{"AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "0"}, {"AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "private-invalid-value"},
+	} {
+		t.Run(tc.key+tc.value, func(t *testing.T) {
+			keyEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://secret")
+			t.Setenv(tc.key, tc.value)
+			config, err := application.LoadConfig()
+			require.Error(t, err)
+			assert.Zero(t, config)
+			assert.NotContains(t, err.Error(), "private-invalid-value")
+			assert.NotContains(t, err.Error(), "postgres://secret")
+		})
+	}
 }

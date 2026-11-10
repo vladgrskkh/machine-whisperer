@@ -64,7 +64,11 @@ func serve(ctx context.Context, address string) error {
 		return err
 	}
 	defer pool.Close()
-	return run(ctx, address, application.NewHandler(pool, config))
+	handler, err := application.NewHandler(ctx, pool, config)
+	if err != nil {
+		return err
+	}
+	return run(ctx, address, handler)
 }
 
 func main() {
