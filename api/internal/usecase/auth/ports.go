@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
@@ -25,3 +26,13 @@ type RefreshGenerator interface {
 }
 
 type Clock interface{ Now() time.Time }
+
+var ErrRateLimited = errors.New("rate limited")
+
+type EmailAttempts interface {
+	Begin(ctx context.Context, email string) (finish func(bool), retryAfter time.Duration, err error)
+}
+
+type IDGenerator interface {
+	Generate(ctx context.Context) (string, error)
+}

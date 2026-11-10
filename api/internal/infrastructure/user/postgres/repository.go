@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -42,4 +43,41 @@ func (r *Repository) Create(ctx context.Context, email, passwordHash string) (us
 	}
 	created.CreatedAt = created.CreatedAt.UTC()
 	return created, nil
+}
+
+func (r *Repository) FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error) {
+	account := user.User{}
+	var hash string
+	queryRow := r.pool.QueryRow
+	if tx := transaction.FromContext(ctx); tx != nil {
+		queryRow = tx.QueryRow
+	}
+	err := queryRow(ctx, `SELECT id::text,email,created_at,password_hash FROM users WHERE email=$1`, email).
+		Scan(&account.ID, &account.Email, &account.CreatedAt, &hash)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return user.User{}, "", user.ErrNotFound
+	}
+	if err != nil {
+		return user.User{}, "", fmt.Errorf("find user credentials: %w", err)
+	}
+	account.CreatedAt = account.CreatedAt.UTC()
+	return account, hash, nil
+}
+
+func (r *Repository) FindByID(ctx context.Context, id string) (user.User, error) {
+	account := user.User{}
+	queryRow := r.pool.QueryRow
+	if tx := transaction.FromContext(ctx); tx != nil {
+		queryRow = tx.QueryRow
+	}
+	err := queryRow(ctx, `SELECT id::text,email,created_at FROM users WHERE id=$1`, id).
+		Scan(&account.ID, &account.Email, &account.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return user.User{}, user.ErrNotFound
+	}
+	if err != nil {
+		return user.User{}, fmt.Errorf("find user: %w", err)
+	}
+	account.CreatedAt = account.CreatedAt.UTC()
+	return account, nil
 }
