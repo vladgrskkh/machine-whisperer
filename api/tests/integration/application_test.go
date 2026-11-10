@@ -165,7 +165,7 @@ func TestSignupHTTP(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(), "SELECT count(*) FROM users").Scan(&count))
 	assert.Equal(t, 1, count)
-	_, err = pool.Exec(t.Context(), "DROP TABLE users")
+	_, err = pool.Exec(t.Context(), "DROP TABLE users CASCADE")
 	require.NoError(t, err)
 	status, result = request(t, `{"email":"failure@example.com","password":"long enough password"}`)
 	assert.Equal(t, http.StatusInternalServerError, status)
