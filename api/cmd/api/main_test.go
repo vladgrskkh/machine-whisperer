@@ -8,12 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUnknownRoute(t *testing.T) {
-	server := httptest.NewServer(newHandler())
+	server := httptest.NewServer(application.NewHandler(nil, application.Config{}))
 	t.Cleanup(server.Close)
 
 	response, err := server.Client().Get(server.URL + "/unknown")
@@ -27,7 +29,7 @@ func TestRunReturnsListenError(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = listener.Close() })
 
-	assert.Error(t, run(context.Background(), listener.Addr().String()))
+	assert.Error(t, run(context.Background(), listener.Addr().String(), http.NotFoundHandler()))
 }
 
 func TestRunShutsDownOnCancellation(t *testing.T) {
@@ -39,7 +41,7 @@ func TestRunShutsDownOnCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	result := make(chan error, 1)
-	go func() { result <- run(ctx, address) }()
+	go func() { result <- run(ctx, address, http.NotFoundHandler()) }()
 	client := &http.Client{Timeout: time.Second}
 	require.Eventually(t, func() bool {
 		response, err := client.Get("http://" + address + "/unknown")

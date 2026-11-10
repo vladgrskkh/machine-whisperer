@@ -12,24 +12,21 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 )
 
 const (
 	readHeaderTimeout = 5 * time.Second
+	readTimeout       = 10 * time.Second
 	shutdownTimeout   = 10 * time.Second
 )
 
-func newHandler() http.Handler {
-	return chi.NewRouter()
-}
-
-func run(ctx context.Context, address string) error {
+func run(ctx context.Context, address string, handler http.Handler) error {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	server := &http.Server{Handler: newHandler(), ReadHeaderTimeout: readHeaderTimeout}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout}
 	done := make(chan struct{})
 	shutdownDone := make(chan struct{})
 	defer close(done)
@@ -57,13 +54,26 @@ func run(ctx context.Context, address string) error {
 	return nil
 }
 
+func serve(ctx context.Context, address string) error {
+	config, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	pool, err := application.NewPool(ctx, config)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	return run(ctx, address, application.NewHandler(pool, config))
+}
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	address := os.Getenv("API_ADDRESS")
 	if address == "" {
 		address = ":8080"
 	}
-	err := run(ctx, address)
+	err := serve(ctx, address)
 	stop()
 	if err != nil {
 		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("api stopped", "error", err)
