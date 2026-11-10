@@ -21,7 +21,7 @@ const (
 	signupTimeout = 10 * time.Second
 )
 
-func New(service *auth.Service) http.Handler {
+func New(usecase *auth.Usecase) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), signupTimeout)
 		defer cancel()
@@ -41,7 +41,7 @@ func New(service *auth.Service) http.Handler {
 			writeError(w, http.StatusBadRequest, "invalid_input", "Invalid email, password or request body")
 			return
 		}
-		created, err := service.Signup(ctx, input.Email, input.Password)
+		created, err := usecase.Signup(ctx, input.Email, input.Password)
 		switch {
 		case errors.Is(err, user.ErrInvalidCredentials):
 			writeError(w, http.StatusBadRequest, "invalid_input", "Invalid email, password or request body")

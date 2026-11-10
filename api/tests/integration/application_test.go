@@ -1,6 +1,6 @@
 //go:build integration
 
-package application_test
+package integration_test
 
 import (
 	"context"
@@ -8,15 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-
 	"sync"
 	"testing"
-
-	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
@@ -42,7 +40,7 @@ func TestAccountCreation(t *testing.T) {
 	var initialCount int
 	require.NoError(t, pool.QueryRow(t.Context(), "SELECT count(*) FROM users").Scan(&initialCount))
 	assert.Zero(t, initialCount)
-	created, err := signup.Signup(t.Context(), "  Alice@EXAMPLE.COM  ", "  exact 界 password  ")
+	created, err := signup.Signup(t.Context(), "  Alice@EXAMPLE.COM  ", "  exact \u754c password  ")
 	require.NoError(t, err)
 	assert.NotEmpty(t, created.ID)
 	assert.Equal(t, "alice@example.com", created.Email)
@@ -52,13 +50,13 @@ func TestAccountCreation(t *testing.T) {
 		t,
 		pool.QueryRow(t.Context(), "SELECT password_hash FROM users WHERE id=$1", created.ID).Scan(&hash),
 	)
-	ok, err := hasher.Verify(t.Context(), "  exact 界 password  ", hash)
+	ok, err := hasher.Verify(t.Context(), "  exact \u754c password  ", hash)
 	require.NoError(t, err)
 	assert.True(t, ok)
 	var wg sync.WaitGroup
 	for range 5 {
 		wg.Go(func() {
-			_, signupErr := signup.Signup(t.Context(), "ALICE@example.com", "  exact 界 password  ")
+			_, signupErr := signup.Signup(t.Context(), "ALICE@example.com", "  exact \u754c password  ")
 			assert.ErrorIs(t, signupErr, user.ErrEmailExists)
 		})
 	}
@@ -117,7 +115,7 @@ func TestSignupHTTP(t *testing.T) {
 		require.NoError(t, json.NewDecoder(response.Body).Decode(&result))
 		return response.StatusCode, result
 	}
-	status, result := request(t, `{"email":"  Bob@Example.COM ","password":"  exact 界 password  "}`)
+	status, result := request(t, "{\"email\":\"  Bob@Example.COM \",\"password\":\"  exact \u754c password  \"}")
 	assert.Equal(t, http.StatusCreated, status)
 	assert.Len(t, result, 3)
 	assert.JSONEq(t, `"bob@example.com"`, string(result["email"]))
@@ -129,7 +127,7 @@ func TestSignupHTTP(t *testing.T) {
 		pool.QueryRow(t.Context(), "SELECT password_hash FROM users WHERE email=$1", "bob@example.com").
 			Scan(&storedHash),
 	)
-	matches, err := (password.Argon2id{}).Verify(t.Context(), "  exact 界 password  ", storedHash)
+	matches, err := (password.Argon2id{}).Verify(t.Context(), "  exact \u754c password  ", storedHash)
 	require.NoError(t, err)
 	assert.True(t, matches)
 	cases := []struct {

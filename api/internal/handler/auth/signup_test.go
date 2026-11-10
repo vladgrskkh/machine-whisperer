@@ -95,15 +95,15 @@ func TestSignupRejectsUnpairedSurrogatesBeforeHashing(t *testing.T) {
 func TestSignupPreservesValidJSONPasswordContents(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ name, encoded, password string }{
-		{"surrogate pair", `aaaaaaaaaaaaaa\ud83d\ude00`, "aaaaaaaaaaaaaa😀"},
-		{"uppercase hex pair", `aaaaaaaaaaaaaa\uD83D\uDE00`, "aaaaaaaaaaaaaa😀"},
+		{"surrogate pair", `aaaaaaaaaaaaaa\ud83d\ude00`, "aaaaaaaaaaaaaa\U0001f600"},
+		{"uppercase hex pair", `aaaaaaaaaaaaaa\uD83D\uDE00`, "aaaaaaaaaaaaaa\U0001f600"},
 		{"lowest pair", `aaaaaaaaaaaaaa\ud800\udc00`, "aaaaaaaaaaaaaa\U00010000"},
 		{"highest pair", `aaaaaaaaaaaaaa\udbff\udfff`, "aaaaaaaaaaaaaa\U0010ffff"},
-		{"literal supplementary", `aaaaaaaaaaaaaa😀`, "aaaaaaaaaaaaaa😀"},
-		{"literal replacement", `aaaaaaaaaaaaaa�`, "aaaaaaaaaaaaaa�"},
-		{"escaped replacement", `aaaaaaaaaaaaaa\ufffd`, "aaaaaaaaaaaaaa�"},
+		{"literal supplementary", "aaaaaaaaaaaaaa\U0001f600", "aaaaaaaaaaaaaa\U0001f600"},
+		{"literal replacement", "aaaaaaaaaaaaaa\ufffd", "aaaaaaaaaaaaaa\ufffd"},
+		{"escaped replacement", `aaaaaaaaaaaaaa\ufffd`, "aaaaaaaaaaaaaa\ufffd"},
 		{"literal backslash u", `aaaaaaaaaaaaaa\\ud800`, `aaaaaaaaaaaaaa\ud800`},
-		{"escaped backslash before pair", `aaaaaaaaaaaaaa\\\ud83d\ude00`, `aaaaaaaaaaaaaa\😀`},
+		{"escaped backslash before pair", `aaaaaaaaaaaaaa\\\ud83d\ude00`, "aaaaaaaaaaaaaa\\\U0001f600"},
 		{"ordinary JSON escapes", `  password\"\\\/\n\t\u0061  `, "  password\"\\/\n\ta  "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -22,7 +23,8 @@ func (r *Repository) Create(ctx context.Context, email, passwordHash string) (us
 		Scan(&created.ID, &created.Email, &created.CreatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "users_email_key" {
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation &&
+			pgErr.ConstraintName == "users_email_key" {
 			return user.User{}, user.ErrEmailExists
 		}
 		return user.User{}, fmt.Errorf("insert user: %w", err)

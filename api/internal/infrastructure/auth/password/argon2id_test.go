@@ -13,7 +13,7 @@ import (
 func TestHashAndVerify(t *testing.T) {
 	t.Parallel()
 	hasher := password.Argon2id{}
-	original := "  exact 界 password  "
+	original := "  exact \u754c password  "
 	first, err := hasher.Hash(context.Background(), original)
 	require.NoError(t, err)
 	second, err := hasher.Hash(context.Background(), original)
@@ -23,7 +23,7 @@ func TestHashAndVerify(t *testing.T) {
 	ok, err := hasher.Verify(context.Background(), original, first)
 	require.NoError(t, err)
 	assert.True(t, ok)
-	ok, err = hasher.Verify(context.Background(), "exact 界 password", first)
+	ok, err = hasher.Verify(context.Background(), "exact \u754c password", first)
 	require.NoError(t, err)
 	assert.False(t, ok)
 	for _, hash := range []string{"bad", "$argon2id$v=19$m=4294967295,t=2,p=1$AA$AA"} {

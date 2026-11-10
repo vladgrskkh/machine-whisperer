@@ -1,7 +1,9 @@
 package application_test
 
 import (
+	"math"
 	"net/netip"
+	"strconv"
 	"testing"
 	"time"
 
@@ -56,4 +58,38 @@ func TestLoadConfigRejectsInvalidSettings(t *testing.T) {
 			assert.Error(t, err)
 		})
 	}
+}
+
+func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
+	const databaseURL = "postgres://signup:database-secret@localhost/signup"
+	for _, key := range []string{
+		"AUTH_RATE_LIMIT", "AUTH_RATE_LIMIT_WINDOW", "AUTH_RATE_LIMIT_MAX_CLIENTS", "TRUSTED_PROXY_CIDRS",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", databaseURL)
+			t.Setenv("AUTH_RATE_LIMIT", "")
+			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+			t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "")
+			t.Setenv("TRUSTED_PROXY_CIDRS", "")
+			t.Setenv(key, "private-invalid-value")
+			config, err := application.LoadConfig()
+			require.Error(t, err)
+			assert.Zero(t, config)
+			assert.NotContains(t, err.Error(), "private-invalid-value")
+			assert.NotContains(t, err.Error(), databaseURL)
+			assert.NotContains(t, err.Error(), "database-secret")
+		})
+	}
+}
+
+func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
+	t.Setenv("AUTH_RATE_LIMIT", strconv.Itoa(math.MaxInt))
+	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", strconv.Itoa(math.MaxInt))
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	config, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, math.MaxInt, config.RateLimit.Limit)
+	assert.Equal(t, math.MaxInt, config.RateLimit.MaxClients)
 }

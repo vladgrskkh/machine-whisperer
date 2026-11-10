@@ -1,6 +1,6 @@
 //go:build integration
 
-package auth_test
+package integration_test
 
 import (
 	"net/http"
@@ -33,7 +33,7 @@ func TestSignupStoresExactEscapedUnicodePassword(t *testing.T) {
 	var hash string
 	require.NoError(t, pool.QueryRow(t.Context(),
 		"SELECT password_hash FROM users WHERE email=$1", "unicode@example.com").Scan(&hash))
-	matches, err := hasher.Verify(t.Context(), `  exact😀 � \ud800 password  `, hash)
+	matches, err := hasher.Verify(t.Context(), "  exact\U0001f600 \ufffd \\ud800 password  ", hash)
 	require.NoError(t, err)
 	assert.True(t, matches)
 }

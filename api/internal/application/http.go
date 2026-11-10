@@ -13,15 +13,10 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
-type Config struct {
-	DatabaseURL string
-	RateLimit   middleware.RateLimitConfig
-}
-
 func NewHandler(pool *pgxpool.Pool, config Config) http.Handler {
 	router := chi.NewRouter()
-	service := auth.New(postgres.New(pool), password.Argon2id{})
+	usecase := auth.New(postgres.New(pool), password.Argon2id{})
 	router.With(middleware.RateLimit(config.RateLimit)).
-		Post("/v1/auth/signup", authhandler.New(service).ServeHTTP)
+		Post("/v1/auth/signup", authhandler.New(usecase).ServeHTTP)
 	return router
 }
