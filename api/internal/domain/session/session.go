@@ -1,6 +1,11 @@
 package session
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+var ErrNotFound = errors.New("session or refresh token not found")
 
 type Session struct {
 	ID, UserID           string

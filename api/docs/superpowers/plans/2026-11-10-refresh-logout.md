@@ -10,7 +10,7 @@
 
 **Spec:** `docs/superpowers/specs/2026-11-10-user-auth-design.md` (approved).
 
-**Depends on:** `2026-11-10-login-jwt.md`, merged and verified first. This is a plan against its published interfaces, not evidence those interfaces exist in signup main yet.
+**Depends on:** `2026-11-10-login-jwt.md`, merged and verified first. PR #3 merged as `5022501`. This plan uses the merged application and per-operation auth use cases.
 
 ## Global Constraints
 
@@ -43,13 +43,13 @@
 
 **Files:** Create `internal/usecase/auth/{refresh,logout}.go`, declare the interfaces each use case consumes in its own file; extend `internal/infrastructure/session/postgres/repository.go`; add `tests/integration/refresh_test.go` and transaction failure tests. Use login PR's existing domain/session models, token generator, signer and transaction manager.
 
-**Interfaces:** Add `Refresh(ctx context.Context, raw string) (TokenPair,error)` and `Logout(ctx context.Context, raw string) error` to `auth.Usecase`. Extend its session repository port with:
+**Interfaces:** Create separate `auth.Refresh` and `auth.Logout` structs with `Refresh(ctx context.Context, raw string) (TokenPair,error)` and `Logout(ctx context.Context, raw string) error` respectively. Declare the repository interfaces each operation consumes beside its struct. Add the following PostgreSQL operations:
 
 - `LockByRefreshHash(ctx context.Context, hash [32]byte) (session.Session,session.RefreshToken,error)`;
 - `ConsumeRefresh(ctx context.Context, hash [32]byte, at time.Time) error`;
 - `RevokeSession(ctx context.Context, sessionID string, at time.Time) error`.
 
-Reuse `InsertRefresh`, `WithinTransaction`, `Sign`, `Generate` and `Now` from the login plan. A not-found sentinel must distinguish missing credentials from DB failure, never by error-string comparison.
+Reuse `InsertRefresh`, `WithinTransaction`, `Sign`, and `Generate` from login. Inject `func() time.Time` as in `auth.Login`. A not-found sentinel must distinguish missing credentials from DB failure, never by error-string comparison.
 
 **Lock protocol:** Within the transaction, first resolve hash to session ID, then lock that session row FOR UPDATE, then read/lock the token row and recheck state. All refresh/logout operations follow this same order; no path locks a refresh row before its session. The hash lookup uses the existing primary key. Session ID/hash association is immutable. `ConsumeRefresh` must condition its update on unconsumed state and verify affected rows. Unique successor hash and session FK constraints remain enforced. Different sessions do not serialize globally.
 
@@ -67,7 +67,7 @@ Reuse `InsertRefresh`, `WithinTransaction`, `Sign`, `Generate` and `Now` from th
 
 **Files:** Create `internal/handler/auth/{refresh,logout}.go` and tests; extend auth DTOs, application/http.go, README, `tests/integration/refresh_test.go` and `tests/integration/access_test.go`. Retain existing CI and tools.
 
-**Interfaces:** Refresh handler calls `Refresh(ctx, raw)`, logout calls `Logout(ctx, raw)`. Reuse login TokenPair mapping, typed auth/rate-limit errors, strict decoder and bounded contexts. Application reuses exactly the same IP middleware instance for signup/login/refresh.
+**Interfaces:** Refresh handler calls `Refresh(ctx, raw)`, logout calls `Logout(ctx, raw)`. Reuse login TokenPair mapping, authentication errors and the route-level rate limiter, strict decoder and bounded contexts. Application reuses exactly the same IP middleware instance for signup/login/refresh.
 
 - [ ] Write failing real-HTTP tests for approved statuses/payloads: refresh 200 token pair/no-store; unknown/expired/revoked/reused secret 401 generic envelope; logout known/unknown/already revoked 204 with empty body. Real SQL failure returns sanitized 500, never logout success. Observe RED then implement handlers and route wiring.
 - [ ] Test malformed/unknown/trailing/oversized/null/non-string bodies and wrong secret lengths/alphabet/padding as 400 before repository calls. Test canonical 43-character base64url encoding; reject noncanonical trailing bits instead of accepting aliases. No credentials in URLs, response errors or request logging. Keep raw Unicode/surrogate regressions in shared decoding.
