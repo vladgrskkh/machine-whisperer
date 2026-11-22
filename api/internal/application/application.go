@@ -23,6 +23,8 @@ type Application struct {
 	ownsPool        bool
 	signup          *auth.Signup
 	login           *auth.Login
+	refresh         *auth.Refresh
+	logout          *auth.Logout
 	me              *auth.Me
 	verifier        *token.JWT
 	rateLimitConfig middleware.RateLimitConfig
@@ -65,11 +67,22 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("database pool is required")
 	}
 	repository := postgres.New(app.pool)
+	sessions := sessionpostgres.New(app.pool)
+	transactions := transactionpostgres.New(app.pool)
 	app.signup = auth.NewSignup(repository, hasher)
 	app.login = auth.NewLogin(
-		repository, hasher, sessionpostgres.New(app.pool), transactionpostgres.New(app.pool),
-		signer, token.Refresh{}, token.IDs{}, now, dummy,
+		repository,
+		hasher,
+		sessions,
+		transactions,
+		signer,
+		token.Refresh{},
+		token.IDs{},
+		now,
+		dummy,
 	)
+	app.refresh = auth.NewRefresh(sessions, transactions, signer, token.Refresh{}, token.IDs{}, now)
+	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
 
 	return app, nil

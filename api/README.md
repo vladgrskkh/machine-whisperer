@@ -31,7 +31,7 @@ unknown fields, malformed bodies and trailing JSON return `400`. Duplicate email
 returns `409`, rate limits `429`, and unexpected failures `500`. Errors use
 `{"error":{"code":"...","message":"..."}}`.
 
-Rate limiting runs before password hashing. Configuration:
+Rate limiting runs before password hashing or refresh-token rotation. Configuration:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -80,6 +80,30 @@ never trimmed or normalized. Every login creates an independent session with a
 fixed 30-day expiry and stores only the SHA-256 hash of the initial refresh
 secret. Login responses, including errors and limits, use `Cache-Control: no-store`.
 
+`POST /v1/auth/refresh` and `POST /v1/auth/logout` accept a JSON body containing
+only `refresh_token`. The token is a canonical 43-character unpadded base64url
+encoding of 32 random bytes. Malformed tokens and request bodies return `400`.
+Refresh returns `200` with the same four fields as login and rotates the refresh
+token atomically. All refresh responses use `Cache-Control: no-store`. Unknown,
+expired, revoked and reused tokens all return `401 authentication_failed`.
+Reusing a consumed token revokes its session if it is still active. Rotation retains the session's
+original 30-day expiry.
+
+Serialize refresh requests in the app and replace the stored token as soon as a
+refresh succeeds. Log in again if the response is lost or the commit outcome is
+uncertain. Retrying the previous token after a successful rotation triggers
+reuse detection and revokes the session. Store refresh tokens in OS secure
+storage, send tokens over HTTPS and keep them out of URLs and logs.
+
+Logout returns `204` with an empty body. A current or consumed token revokes
+its session. Unknown and already revoked tokens also return `204`. Other
+sessions stay active. An access token issued before logout or reuse revocation
+remains usable until its 15-minute lifetime and 30-second skew allowance end.
+
+PostgreSQL retains consumed token hashes through session expiry for reuse
+detection. Plan for this database growth. Expired-session cleanup is a separate
+maintenance task and must preserve hashes for sessions that have yet to expire.
+
 `GET /v1/users/me` accepts one `Authorization: Bearer <access_token>` header and
 returns only `id`, `email` and `created_at`. Invalid, missing, ambiguous, expired
 or device credentials return `401` with `WWW-Authenticate: Bearer`; deleted users
@@ -87,11 +111,11 @@ also return `401`. JWT validation is stateless: session revocation does not
 invalidate an already-issued access token before its expiry and allowed skew.
 Access JWTs use Ed25519 (`EdDSA`), a 15-minute lifetime and 30 seconds of clock
 skew. They require UUID `sub`, `sid`, `jti`, issuer `machine-whisperer`, audience
-`machine-whisperer-api`, issuance time and expiry. `/me` is outside the signup/login
-IP budget.
+`machine-whisperer-api`, issuance time and expiry.
 
-Signup and login share one IP request budget per API instance. Rate-limit responses
-include `Retry-After` in seconds. The shared per-email failed-login limit is
+Signup, login and refresh share one IP request budget per API instance. Logout and
+`/me` are outside this budget. Rate-limit responses include `Retry-After` in
+seconds. The shared per-email failed-login limit is
 tracked in [issue #4](https://github.com/vladgrskkh/machine-whisperer/issues/4).
 Additional configuration:
 
@@ -121,8 +145,4 @@ the active signing ID and private file. Restart instances to load changed files.
 Retain old public keys until all their access tokens have expired, including the
 30-second skew allowance. Token-supplied paths or URLs never select keys.
 
-Refresh and logout endpoints are intentionally reserved for the next PR. Initial
-refresh tokens are persisted now but cannot yet be renewed or revoked through
-HTTP. Keep this staged auth flow off public deployment until refresh/logout and
-client secure-token storage are complete. Use HTTPS and never put tokens in URLs
-or logs.
+Complete client secure-token storage before public deployment.

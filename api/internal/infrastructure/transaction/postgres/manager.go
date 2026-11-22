@@ -18,7 +18,7 @@ type Manager struct{ pool *pgxpool.Pool }
 func New(pool *pgxpool.Pool) *Manager { return &Manager{pool: pool} }
 
 func (m *Manager) WithinTransaction(ctx context.Context, fn func(context.Context) error) error {
-	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{})
+	tx, err := m.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
 	if err != nil {
 		return fmt.Errorf("begin transaction: %w", err)
 	}
