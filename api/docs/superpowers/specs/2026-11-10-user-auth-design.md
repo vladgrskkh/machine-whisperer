@@ -86,6 +86,10 @@ failed login attempts per email per minute. Trust forwarded client addresses
 only from the configured load balancer. A single-instance limiter is sufficient
 at launch; shared limits must precede scaling auth to multiple instances.
 
+The login/JWT PR ships the IP limit. The per-email failed-login limit will use
+Redis so replicas share one budget. Track that follow-up in
+[issue #4](https://github.com/vladgrskkh/machine-whisperer/issues/4).
+
 ## Storage and boundaries
 
 PostgreSQL stores users, sessions and refresh-token hashes with uniqueness and

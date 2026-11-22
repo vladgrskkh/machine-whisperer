@@ -22,7 +22,7 @@ func TestSignupStoresExactEscapedUnicodePassword(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
-	server := httptest.NewServer(handler.New(auth.New(postgres.New(pool), hasher)))
+	server := httptest.NewServer(handler.New(auth.NewSignup(postgres.New(pool), hasher)))
 	t.Cleanup(server.Close)
 	response, err := server.Client().Post(server.URL, "application/json", strings.NewReader(
 		`{"email":"unicode@example.com","password":"  exact\ud83d\ude00 \ufffd \\ud800 password  "}`,

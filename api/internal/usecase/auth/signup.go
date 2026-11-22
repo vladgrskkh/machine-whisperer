@@ -7,7 +7,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 )
 
-type Repository interface {
+type SignupRepository interface {
 	Create(ctx context.Context, email, passwordHash string) (user.User, error)
 }
 
@@ -15,16 +15,16 @@ type PasswordHasher interface {
 	Hash(ctx context.Context, password string) (string, error)
 }
 
-type Usecase struct {
-	repository Repository
+type Signup struct {
+	repository SignupRepository
 	hasher     PasswordHasher
 }
 
-func New(repository Repository, hasher PasswordHasher) *Usecase {
-	return &Usecase{repository: repository, hasher: hasher}
+func NewSignup(repository SignupRepository, hasher PasswordHasher) *Signup {
+	return &Signup{repository: repository, hasher: hasher}
 }
 
-func (u *Usecase) Signup(ctx context.Context, email, password string) (user.User, error) {
+func (u *Signup) Signup(ctx context.Context, email, password string) (user.User, error) {
 	canonical, err := user.ValidateCredentials(email, password)
 	if err != nil {
 		return user.User{}, err

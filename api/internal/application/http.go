@@ -4,19 +4,21 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	authhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 )
 
-func NewHandler(pool *pgxpool.Pool, config Config) http.Handler {
+func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
-	usecase := auth.New(postgres.New(pool), password.Argon2id{})
-	router.With(middleware.RateLimit(config.RateLimit)).
-		Post("/v1/auth/signup", authhandler.New(usecase).ServeHTTP)
+	limit := middleware.RateLimit(a.rateLimitConfig)
+	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)
+	router.Route("/v1/auth/login", func(login chi.Router) {
+		login.Use(middleware.NoStore)
+		login.With(limit).Post("/", authhandler.NewLogin(a.login).ServeHTTP)
+	})
+	router.With(middleware.AccessToken(a.verifier)).Get("/v1/users/me", users.NewMe(a.me).ServeHTTP)
+
 	return router
 }

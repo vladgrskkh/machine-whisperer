@@ -27,7 +27,7 @@ func TestAccountCreation(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
-	signup := auth.New(postgres.New(pool), hasher)
+	signup := auth.NewSignup(postgres.New(pool), hasher)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, credentials := range []struct{ email, password string }{
@@ -69,7 +69,7 @@ func TestAccountCreation(t *testing.T) {
 func TestConcurrentSignup(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	signup := auth.New(postgres.New(pool), password.Argon2id{})
+	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{})
 	results := make(chan error, 6)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -104,7 +104,7 @@ func TestConcurrentSignup(t *testing.T) {
 func TestSignupHTTP(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	server := httptest.NewServer(application.NewHandler(pool, application.Config{}))
+	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	request := func(t *testing.T, body string) (int, map[string]json.RawMessage) {
 		t.Helper()
@@ -165,34 +165,41 @@ func TestSignupHTTP(t *testing.T) {
 	var count int
 	require.NoError(t, pool.QueryRow(t.Context(), "SELECT count(*) FROM users").Scan(&count))
 	assert.Equal(t, 1, count)
-	_, err = pool.Exec(t.Context(), "DROP TABLE users")
+	_, err = pool.Exec(t.Context(), "DROP TABLE users CASCADE")
 	require.NoError(t, err)
 	status, result = request(t, `{"email":"failure@example.com","password":"long enough password"}`)
 	assert.Equal(t, http.StatusInternalServerError, status)
 	assert.JSONEq(t, `{"code":"internal_error","message":"An internal error occurred"}`, string(result["error"]))
 }
 
-func TestNewPool(t *testing.T) {
+func TestApplicationWithDatabase(t *testing.T) {
 	t.Parallel()
 	existing := testutil.Postgres(t)
-	pool, err := application.NewPool(t.Context(), application.Config{DatabaseURL: existing.Config().ConnString()})
+	config := authConfig(t)
+	config.Database.URL = existing.Config().ConnString()
+	app, err := application.New(t.Context(), config, application.WithDatabase(config.Database))
 	require.NoError(t, err)
-	require.NotNil(t, pool)
-	t.Cleanup(pool.Close)
-	require.NoError(t, pool.Ping(t.Context()))
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = application.NewPool(ctx, application.Config{DatabaseURL: existing.Config().ConnString()})
-	assert.Error(t, err)
-	_, err = application.NewPool(t.Context(), application.Config{DatabaseURL: "://invalid"})
+	t.Cleanup(app.Close)
+	server := httptest.NewServer(app.Routes())
+	t.Cleanup(server.Close)
+
+	response, err := server.Client().Get(server.URL + "/unknown")
+	require.NoError(t, err)
+	response.Body.Close()
+	assert.Equal(t, http.StatusNotFound, response.StatusCode)
+
+	invalid := application.DatabaseConfig{URL: "://invalid"}
+	_, err = application.New(t.Context(), config, application.WithDatabase(invalid))
 	assert.Error(t, err)
 }
 
 func TestSignupRateLimit(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	server := httptest.NewServer(
-		application.NewHandler(pool, application.Config{RateLimit: middleware.RateLimitConfig{Limit: 1}}),
+	server := newAuthServer(
+		t,
+		pool,
+		application.Config{RateLimits: application.RateLimitsConfig{IP: middleware.RateLimitConfig{Limit: 1}}},
 	)
 	t.Cleanup(server.Close)
 	for _, tc := range []struct {

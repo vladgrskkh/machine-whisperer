@@ -13,11 +13,9 @@ type userResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type errorResponse struct {
-	Error errorDetail `json:"error"`
-}
-
-type errorDetail struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+type tokenResponse struct {
+	AccessToken  string `json:"access_token"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	RefreshToken string `json:"refresh_token"`
 }

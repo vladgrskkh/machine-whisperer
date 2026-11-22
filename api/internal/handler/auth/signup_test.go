@@ -35,7 +35,7 @@ func TestInvalidSignupDoesNotHash(t *testing.T) {
 		t.Run(body[:min(len(body), 60)], func(t *testing.T) {
 			t.Parallel()
 			hasher := authmock.NewPasswordHasher(t)
-			server := httptest.NewServer(handler.New(auth.New(nil, hasher)))
+			server := httptest.NewServer(handler.New(auth.NewSignup(nil, hasher)))
 			t.Cleanup(server.Close)
 			response, err := server.Client().Post(server.URL, "application/json", strings.NewReader(body))
 			require.NoError(t, err)
@@ -73,7 +73,7 @@ func TestSignupRejectsUnpairedSurrogatesBeforeHashing(t *testing.T) {
 			hasher := authmock.NewPasswordHasher(t)
 			hasher.EXPECT().Hash(mock.Anything, mock.Anything).
 				Return("", errors.New("stop before persistence")).Maybe()
-			server := httptest.NewServer(handler.New(auth.New(nil, hasher)))
+			server := httptest.NewServer(handler.New(auth.NewSignup(nil, hasher)))
 			t.Cleanup(server.Close)
 			body := `{"email":"a@example.com","password":"` + tc.password + `"}`
 			response, err := server.Client().Post(server.URL, "application/json", strings.NewReader(body))
@@ -111,7 +111,7 @@ func TestSignupPreservesValidJSONPasswordContents(t *testing.T) {
 			hasher := authmock.NewPasswordHasher(t)
 			hasher.EXPECT().Hash(mock.Anything, tc.password).
 				Return("", errors.New("stop before persistence")).Once()
-			server := httptest.NewServer(handler.New(auth.New(nil, hasher)))
+			server := httptest.NewServer(handler.New(auth.NewSignup(nil, hasher)))
 			t.Cleanup(server.Close)
 			body := `{"email":"a@example.com","password":"` + tc.encoded + `"}`
 			response, err := server.Client().Post(server.URL, "application/json", strings.NewReader(body))
@@ -130,7 +130,7 @@ func TestRateLimitBeforePasswordHashing(t *testing.T) {
 		Return("", errors.New("private cryptographic failure")).
 		Once()
 	server := httptest.NewServer(
-		middleware.RateLimit(middleware.RateLimitConfig{Limit: 1})(handler.New(auth.New(nil, hasher))),
+		middleware.RateLimit(middleware.RateLimitConfig{Limit: 1})(handler.New(auth.NewSignup(nil, hasher))),
 	)
 	t.Cleanup(server.Close)
 	for _, expected := range []int{http.StatusInternalServerError, http.StatusTooManyRequests} {
@@ -155,7 +155,7 @@ func TestRateLimitBeforePasswordHashing(t *testing.T) {
 
 func TestSignupExpiredContextUsesErrorEnvelope(t *testing.T) {
 	t.Parallel()
-	signup := handler.New(auth.New(nil, password.Argon2id{}))
+	signup := handler.New(auth.NewSignup(nil, password.Argon2id{}))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithDeadline(r.Context(), time.Now().Add(-time.Second))
 		defer cancel()
