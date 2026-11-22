@@ -12,10 +12,11 @@ import (
 
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
-	router.With(a.rateLimit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)
+	limit := middleware.RateLimit(a.rateLimitConfig)
+	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)
 	router.Route("/v1/auth/login", func(login chi.Router) {
 		login.Use(middleware.NoStore)
-		login.With(a.rateLimit).Post("/", authhandler.NewLogin(a.login).ServeHTTP)
+		login.With(limit).Post("/", authhandler.NewLogin(a.login).ServeHTTP)
 	})
 	router.With(middleware.AccessToken(a.verifier)).Get("/v1/users/me", users.NewMe(a.me).ServeHTTP)
 

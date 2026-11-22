@@ -34,13 +34,13 @@ const exactLoginPassword = "  exact\U0001f600 \ufffd \\ud800 password  "
 const dummyLoginPassword = "fixed dummy password material"
 
 type loginFixtures struct {
-	signup       *auth.Signup
-	login        *auth.Login
-	me           *auth.Me
-	pool         *pgxpool.Pool
-	signer       *token.JWT
-	now          time.Time
-	dependencies auth.LoginDependencies
+	signup    *auth.Signup
+	login     *auth.Login
+	me        *auth.Me
+	pool      *pgxpool.Pool
+	signer    *token.JWT
+	now       time.Time
+	dummyHash string
 }
 
 func loginFixture(t *testing.T) loginFixtures {
@@ -61,24 +61,18 @@ func loginFixture(t *testing.T) loginFixtures {
 		func() time.Time { return now },
 	)
 	require.NoError(t, err)
-	dependencies := auth.LoginDependencies{
-		Sessions:     sessionpostgres.New(pool),
-		Transactions: transactionpostgres.New(pool),
-		Signer:       signer,
-		Refresh:      token.Refresh{},
-		IDs:          token.IDs{},
-		Now:          func() time.Time { return now },
-		DummyHash:    dummy,
-	}
 	repository := userpostgres.New(pool)
 	return loginFixtures{
-		signup:       auth.NewSignup(repository, hasher),
-		login:        auth.NewLogin(repository, hasher, dependencies),
-		me:           auth.NewMe(repository),
-		pool:         pool,
-		signer:       signer,
-		now:          now,
-		dependencies: dependencies,
+		signup: auth.NewSignup(repository, hasher),
+		login: auth.NewLogin(
+			repository, hasher, sessionpostgres.New(pool), transactionpostgres.New(pool),
+			signer, token.Refresh{}, token.IDs{}, func() time.Time { return now }, dummy,
+		),
+		me:        auth.NewMe(repository),
+		pool:      pool,
+		signer:    signer,
+		now:       now,
+		dummyHash: dummy,
 	}
 }
 
@@ -221,7 +215,7 @@ func TestLoginRollback(t *testing.T) {
 func TestLoginCancellationRollsBack(t *testing.T) {
 	t.Parallel()
 	fixture := loginFixture(t)
-	pool, dependencies := fixture.pool, fixture.dependencies
+	pool := fixture.pool
 	_, err := fixture.signup.Signup(t.Context(), "cancel@example.com", exactLoginPassword)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -239,8 +233,10 @@ func TestLoginCancellationRollsBack(t *testing.T) {
 			return nil
 		}).
 		Once()
-	dependencies.Sessions = repository
-	login := auth.NewLogin(userpostgres.New(pool), password.Argon2id{}, dependencies)
+	login := auth.NewLogin(
+		userpostgres.New(pool), password.Argon2id{}, repository, transactionpostgres.New(pool),
+		fixture.signer, token.Refresh{}, token.IDs{}, func() time.Time { return fixture.now }, fixture.dummyHash,
+	)
 	pair, err := login.Login(ctx, "cancel@example.com", exactLoginPassword)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, pair)

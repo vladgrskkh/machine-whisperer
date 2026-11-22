@@ -29,31 +29,29 @@ type loginMocks struct {
 	signer       *authmock.AccessSigner
 	refresh      *authmock.RefreshGenerator
 	ids          *authmock.IDGenerator
-	dependencies auth.LoginDependencies
+	now          time.Time
 }
 
 func newLoginMocks(t *testing.T) *loginMocks {
 	t.Helper()
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
 
-	value := &loginMocks{
-		repository: authmock.NewLoginRepository(t), verifier: authmock.NewPasswordVerifier(t),
-		sessions: authmock.NewSessionRepository(t), transactions: authmock.NewTransactionManager(t),
-		signer: authmock.NewAccessSigner(t), refresh: authmock.NewRefreshGenerator(t), ids: authmock.NewIDGenerator(t),
+	return &loginMocks{
+		repository:   authmock.NewLoginRepository(t),
+		verifier:     authmock.NewPasswordVerifier(t),
+		sessions:     authmock.NewSessionRepository(t),
+		transactions: authmock.NewTransactionManager(t),
+		signer:       authmock.NewAccessSigner(t),
+		refresh:      authmock.NewRefreshGenerator(t),
+		ids:          authmock.NewIDGenerator(t),
+		now:          now,
 	}
-	value.dependencies = auth.LoginDependencies{
-		Sessions:     value.sessions,
-		Transactions: value.transactions,
-		Signer:       value.signer,
-		Refresh:      value.refresh,
-		IDs:          value.ids,
-		Now:          func() time.Time { return now },
-		DummyHash:    "dummy PHC",
-	}
-	return value
 }
 func (m *loginMocks) usecase() *auth.Login {
-	return auth.NewLogin(m.repository, m.verifier, m.dependencies)
+	return auth.NewLogin(
+		m.repository, m.verifier, m.sessions, m.transactions, m.signer, m.refresh, m.ids,
+		func() time.Time { return m.now }, "dummy PHC",
+	)
 }
 func (m *loginMocks) validCredentials() {
 	m.repository.EXPECT().

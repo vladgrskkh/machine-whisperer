@@ -3,7 +3,6 @@ package application
 import (
 	"context"
 	"errors"
-	"net/http"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,13 +19,13 @@ import (
 const authStartupTimeout = 10 * time.Second
 
 type Application struct {
-	pool      *pgxpool.Pool
-	ownsPool  bool
-	signup    *auth.Signup
-	login     *auth.Login
-	me        *auth.Me
-	verifier  *token.JWT
-	rateLimit func(http.Handler) http.Handler
+	pool            *pgxpool.Pool
+	ownsPool        bool
+	signup          *auth.Signup
+	login           *auth.Login
+	me              *auth.Me
+	verifier        *token.JWT
+	rateLimitConfig middleware.RateLimitConfig
 }
 
 type Option func(context.Context, *Application) error
@@ -55,7 +54,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("auth initialization failed")
 	}
 
-	app := &Application{verifier: signer, rateLimit: middleware.RateLimit(config.RateLimits.IP)}
+	app := &Application{verifier: signer, rateLimitConfig: config.RateLimits.IP}
 	for _, option := range options {
 		if err = option(ctx, app); err != nil {
 			app.Close()
@@ -67,15 +66,10 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	}
 	repository := postgres.New(app.pool)
 	app.signup = auth.NewSignup(repository, hasher)
-	app.login = auth.NewLogin(repository, hasher, auth.LoginDependencies{
-		Sessions:     sessionpostgres.New(app.pool),
-		Transactions: transactionpostgres.New(app.pool),
-		Signer:       signer,
-		Refresh:      token.Refresh{},
-		IDs:          token.IDs{},
-		Now:          now,
-		DummyHash:    dummy,
-	})
+	app.login = auth.NewLogin(
+		repository, hasher, sessionpostgres.New(app.pool), transactionpostgres.New(app.pool),
+		signer, token.Refresh{}, token.IDs{}, now, dummy,
+	)
 	app.me = auth.NewMe(repository)
 
 	return app, nil

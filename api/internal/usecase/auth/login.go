@@ -51,24 +51,33 @@ type IDGenerator interface {
 	Generate(ctx context.Context) (string, error)
 }
 
-type LoginDependencies struct {
-	Sessions     SessionRepository
-	Transactions TransactionManager
-	Signer       AccessSigner
-	Refresh      RefreshGenerator
-	IDs          IDGenerator
-	Now          func() time.Time
-	DummyHash    string
-}
-
 type Login struct {
 	repository   LoginRepository
 	verifier     PasswordVerifier
-	dependencies LoginDependencies
+	sessions     SessionRepository
+	transactions TransactionManager
+	signer       AccessSigner
+	refresh      RefreshGenerator
+	ids          IDGenerator
+	now          func() time.Time
+	dummyHash    string
 }
 
-func NewLogin(repository LoginRepository, verifier PasswordVerifier, dependencies LoginDependencies) *Login {
-	return &Login{repository: repository, verifier: verifier, dependencies: dependencies}
+func NewLogin(
+	repository LoginRepository,
+	verifier PasswordVerifier,
+	sessions SessionRepository,
+	transactions TransactionManager,
+	signer AccessSigner,
+	refresh RefreshGenerator,
+	ids IDGenerator,
+	now func() time.Time,
+	dummyHash string,
+) *Login {
+	return &Login{
+		repository: repository, verifier: verifier, sessions: sessions, transactions: transactions,
+		signer: signer, refresh: refresh, ids: ids, now: now, dummyHash: dummyHash,
+	}
 }
 
 func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, error) {
@@ -85,7 +94,7 @@ func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, e
 		return TokenPair{}, fmt.Errorf("find login user: %w", err)
 	}
 	if unknown {
-		hash = u.dependencies.DummyHash
+		hash = u.dummyHash
 	}
 	matches, err := u.verifier.Verify(ctx, password, hash)
 	if err != nil {
@@ -101,19 +110,19 @@ func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, e
 }
 
 func (u *Login) createSession(ctx context.Context, userID string) (TokenPair, error) {
-	id, err := u.dependencies.IDs.Generate(ctx)
+	id, err := u.ids.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate session ID: %w", err)
 	}
-	jti, err := u.dependencies.IDs.Generate(ctx)
+	jti, err := u.ids.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate token ID: %w", err)
 	}
-	refresh, hash, err := u.dependencies.Refresh.Generate(ctx)
+	refresh, hash, err := u.refresh.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
-	now := u.dependencies.Now().UTC()
+	now := u.now().UTC()
 	claims := session.AccessClaims{
 		UserID:    userID,
 		SessionID: id,
@@ -121,17 +130,17 @@ func (u *Login) createSession(ctx context.Context, userID string) (TokenPair, er
 		IssuedAt:  now,
 		ExpiresAt: now.Add(accessLifetime),
 	}
-	access, err := u.dependencies.Signer.Sign(ctx, claims)
+	access, err := u.signer.Sign(ctx, claims)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("sign access token: %w", err)
 	}
-	err = u.dependencies.Transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
+	err = u.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		value := session.Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(sessionLifetime)}
-		if insertErr := u.dependencies.Sessions.InsertSession(txCtx, value); insertErr != nil {
+		if insertErr := u.sessions.InsertSession(txCtx, value); insertErr != nil {
 			return fmt.Errorf("insert session: %w", insertErr)
 		}
 		token := session.RefreshToken{Hash: hash, SessionID: id, CreatedAt: now}
-		if insertErr := u.dependencies.Sessions.InsertRefresh(txCtx, token); insertErr != nil {
+		if insertErr := u.sessions.InsertRefresh(txCtx, token); insertErr != nil {
 			return fmt.Errorf("insert refresh token: %w", insertErr)
 		}
 		return txCtx.Err()
