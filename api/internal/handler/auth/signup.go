@@ -10,9 +10,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
 )
 
-const (
-	signupTimeout = 10 * time.Second
-)
+const authTimeout = 10 * time.Second
 
 type Signup interface {
 	Signup(context.Context, string, string) (user.User, error)
@@ -20,9 +18,9 @@ type Signup interface {
 
 func New(usecase Signup) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), signupTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), authTimeout)
 		defer cancel()
-		input, err := decodeCredentials(w, r)
+		input, err := decodeAuthRequest[signupRequest](w, r)
 		if err != nil {
 			handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid email, password or request body")
 			return

@@ -17,9 +17,9 @@ type Login interface {
 
 func NewLogin(usecase Login) http.Handler {
 	return middleware.NoStore(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), signupTimeout)
+		ctx, cancel := context.WithTimeout(r.Context(), authTimeout)
 		defer cancel()
-		input, err := decodeCredentials(w, r)
+		input, err := decodeAuthRequest[signupRequest](w, r)
 		if err != nil {
 			handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid email, password or request body")
 			return
@@ -33,16 +33,7 @@ func NewLogin(usecase Login) http.Handler {
 		case err != nil:
 			handler.Error(w, http.StatusInternalServerError, "internal_error", "An internal error occurred")
 		default:
-			handler.JSON(
-				w,
-				http.StatusOK,
-				tokenResponse{
-					AccessToken:  pair.AccessToken,
-					TokenType:    "Bearer",
-					ExpiresIn:    pair.ExpiresIn,
-					RefreshToken: pair.RefreshToken,
-				},
-			)
+			writeTokenPair(w, pair)
 		}
 	}))
 }

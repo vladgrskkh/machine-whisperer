@@ -13,14 +13,14 @@ import (
 
 const maxAuthBody = 8 * 1024
 
-func decodeCredentials(w http.ResponseWriter, r *http.Request) (*signupRequest, error) {
+func decodeAuthRequest[T any](w http.ResponseWriter, r *http.Request) (*T, error) {
 	data, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAuthBody))
 	if err != nil || !utf8.Valid(data) || !validJSONUnicode(data) {
 		return nil, errors.New("invalid request body")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
-	var input *signupRequest
+	var input *T
 	if err = decoder.Decode(&input); err != nil {
 		return nil, err
 	}

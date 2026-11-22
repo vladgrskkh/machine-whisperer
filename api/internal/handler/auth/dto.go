@@ -1,6 +1,12 @@
 package auth
 
-import "time"
+import (
+	"net/http"
+	"time"
+
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
+)
 
 type signupRequest struct {
 	Email    string `json:"email"`
@@ -18,4 +24,17 @@ type tokenResponse struct {
 	TokenType    string `json:"token_type"`
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token"`
+}
+
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+func writeTokenPair(w http.ResponseWriter, pair auth.TokenPair) {
+	handler.JSON(w, http.StatusOK, tokenResponse{
+		AccessToken:  pair.AccessToken,
+		TokenType:    "Bearer",
+		ExpiresIn:    pair.ExpiresIn,
+		RefreshToken: pair.RefreshToken,
+	})
 }

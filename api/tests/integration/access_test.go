@@ -7,28 +7,26 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"net/netip"
 	"os"
+	"strings"
 	"sync/atomic"
+	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-
-	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
-	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"strings"
-	"testing"
-
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
@@ -182,52 +180,70 @@ func TestSharedAuthIPBudget(t *testing.T) {
 		},
 	)
 	t.Cleanup(server.Close)
-	for index := range 32 {
-		path := "/v1/auth/signup"
-		if index%2 != 0 {
-			path = "/v1/auth/login"
-		}
-		body := `{}`
-		if index >= 30 {
-			body = `{"email":"limited@example.com","password":"long enough password"}`
-		}
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+path, strings.NewReader(body))
-		require.NoError(t, err)
-		req.Header.Add("X-Forwarded-For", strings.Repeat("spoof,", 2000)+"198.51.100.99")
-		req.Header.Add("X-Forwarded-For", "198.51.100.8")
-		response, err := server.Client().Do(req)
-		require.NoError(t, err)
-		response.Body.Close()
-		want := 400
-		if index >= 30 {
-			want = 429
-			assert.Equal(t, "60", response.Header.Get("Retry-After"))
-		}
-		assert.Equal(t, want, response.StatusCode)
-		if path == "/v1/auth/login" {
-			assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+	pair := startHTTPSession(t, server)
+	logoutPair := loginHTTPSession(t, server)
+	paths := []string{"/v1/auth/signup", "/v1/auth/login", refreshPath}
+	headers := func(spoof string) http.Header {
+		return http.Header{"X-Forwarded-For": {strings.Repeat("spoof,", 2000) + spoof, "198.51.100.8"}}
+	}
+	for index := range 30 {
+		path := paths[index%len(paths)]
+		spoof := fmt.Sprintf("192.0.2.%d", index+1)
+		response := authHTTPRequest(t, server, http.MethodPost, path, `{}`, headers(spoof))
+		assert.Equal(t, http.StatusBadRequest, response.status)
+	}
+	for _, request := range []struct{ path, body string }{
+		{refreshPath, refreshBody(pair.RefreshToken)},
+		{"/v1/auth/signup", `{"email":"limited@example.com","password":"long enough password"}`},
+		{"/v1/auth/login", httpCredentials},
+	} {
+		response := authHTTPRequest(t, server, http.MethodPost, request.path, request.body, headers("198.51.100.99"))
+		assert.Equal(t, http.StatusTooManyRequests, response.status, request.path)
+		assert.Equal(t, "60", response.header.Get("Retry-After"))
+		assert.JSONEq(t, `{"error":{"code":"rate_limited","message":"Too many requests"}}`, response.body)
+		if request.path != "/v1/auth/signup" {
+			assert.Equal(t, "no-store", response.header.Get("Cache-Control"))
 		}
 	}
-	response, err := server.Client().Get(server.URL + "/v1/users/me")
-	require.NoError(t, err)
-	response.Body.Close()
-	assert.Equal(t, 401, response.StatusCode)
-	seconds.Store(60)
-	req, err := http.NewRequestWithContext(
-		t.Context(),
-		http.MethodPost,
-		server.URL+"/v1/auth/login",
-		strings.NewReader(`{}`),
+	otherIP := authHTTPRequest(
+		t, server, http.MethodPost, refreshPath, `{}`, http.Header{"X-Forwarded-For": {"198.51.100.9"}},
 	)
-	require.NoError(t, err)
-	req.Header.Set("X-Forwarded-For", "198.51.100.8")
-	response, err = server.Client().Do(req)
-	require.NoError(t, err)
-	response.Body.Close()
-	assert.Equal(t, 400, response.StatusCode)
-	var count int
-	require.NoError(t, pool.QueryRow(t.Context(), "SELECT count(*) FROM users").Scan(&count))
-	assert.Zero(t, count)
+	assert.Equal(t, http.StatusBadRequest, otherIP.status)
+	logout := authHTTPRequest(
+		t,
+		server,
+		http.MethodPost,
+		logoutPath,
+		refreshBody(logoutPair.RefreshToken),
+		headers("192.0.2.5"),
+	)
+	assertHTTPLogout(t, logout)
+	me := authHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers("192.0.2.5"))
+	assert.Equal(t, http.StatusUnauthorized, me.status)
+	state := readRefreshSession(t, pool, httpSessionID(t, pair))
+	assert.Len(t, state.tokens, 1)
+	oldHash := refreshHash(t, pair.RefreshToken)
+	assert.Contains(t, state.tokens, oldHash)
+	assert.Nil(t, state.tokens[oldHash])
+	var users, sessions int
+	require.NoError(
+		t,
+		pool.QueryRow(t.Context(), "SELECT (SELECT count(*) FROM users), (SELECT count(*) FROM sessions)").
+			Scan(&users, &sessions),
+	)
+	assert.Equal(t, 1, users)
+	assert.Equal(t, 2, sessions)
+
+	seconds.Store(60)
+	response := authHTTPRequest(
+		t,
+		server,
+		http.MethodPost,
+		refreshPath,
+		refreshBody(pair.RefreshToken),
+		headers("192.0.2.6"),
+	)
+	readHTTPTokenPair(t, response)
 }
 
 func TestLoginFailuresUseIPBudget(t *testing.T) {
@@ -402,4 +418,43 @@ func TestLoginMethodErrorsDoNotCache(t *testing.T) {
 	defer response.Body.Close()
 	assert.Equal(t, http.StatusMethodNotAllowed, response.StatusCode)
 	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+}
+
+func TestAccessJWTsRemainValidAfterLogoutAndRefreshReuse(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	server, setElapsed := newSessionServer(t, pool)
+	loggedOut := startHTTPSession(t, server)
+	reused := loginHTTPSession(t, server)
+	assertHTTPLogout(t, postRefreshToken(t, server, logoutPath, loggedOut.RefreshToken))
+	readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, reused.RefreshToken))
+	assertRefreshHTTPRejected(t, postRefreshToken(t, server, refreshPath, reused.RefreshToken))
+
+	getMe := func(raw string) authHTTPResponse {
+		t.Helper()
+		headers := http.Header{"Authorization": {"Bearer " + raw}}
+		return authHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers)
+	}
+	assertUnauthorized := func(response authHTTPResponse) {
+		t.Helper()
+		assert.Equal(t, http.StatusUnauthorized, response.status)
+		assert.Equal(t, "Bearer", response.header.Get("WWW-Authenticate"))
+		assert.JSONEq(t, authFailedJSON, response.body)
+	}
+	assertUnauthorized(getMe(loggedOut.RefreshToken))
+	assertUnauthorized(getMe("device-key"))
+	for _, elapsed := range []time.Duration{0, 15 * time.Minute, 15*time.Minute + 29*time.Second} {
+		setElapsed(elapsed)
+		assert.Equal(t, http.StatusOK, getMe(loggedOut.AccessToken).status, elapsed)
+		assert.Equal(t, http.StatusOK, getMe(reused.AccessToken).status, elapsed)
+	}
+	setElapsed(15*time.Minute + 30*time.Second)
+	assertUnauthorized(getMe(loggedOut.AccessToken))
+	assertUnauthorized(getMe(reused.AccessToken))
+
+	deleted := loginHTTPSession(t, server)
+	require.Equal(t, http.StatusOK, getMe(deleted.AccessToken).status)
+	_, err := pool.Exec(t.Context(), "DELETE FROM users")
+	require.NoError(t, err)
+	assertUnauthorized(getMe(deleted.AccessToken))
 }

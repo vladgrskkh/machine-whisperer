@@ -18,6 +18,11 @@ func (a *Application) Routes() http.Handler {
 		login.Use(middleware.NoStore)
 		login.With(limit).Post("/", authhandler.NewLogin(a.login).ServeHTTP)
 	})
+	router.Route("/v1/auth/refresh", func(refresh chi.Router) {
+		refresh.Use(middleware.NoStore)
+		refresh.With(limit).Post("/", authhandler.NewRefresh(a.refresh).ServeHTTP)
+	})
+	router.Post("/v1/auth/logout", authhandler.NewLogout(a.logout).ServeHTTP)
 	router.With(middleware.AccessToken(a.verifier)).Get("/v1/users/me", users.NewMe(a.me).ServeHTTP)
 
 	return router
