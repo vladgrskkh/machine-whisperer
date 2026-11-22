@@ -17,14 +17,38 @@ const (
 
 var ErrAuthenticationFailed = errors.New("authentication failed")
 
-type RateLimitError struct{ RetryAfter time.Duration }
-
-func (*RateLimitError) Error() string { return "rate limited" }
-func (*RateLimitError) Unwrap() error { return ErrRateLimited }
-
 type TokenPair struct {
 	AccessToken, RefreshToken string
 	ExpiresIn                 int
+}
+
+type LoginRepository interface {
+	FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error)
+}
+
+type PasswordVerifier interface {
+	Verify(ctx context.Context, password, hash string) (bool, error)
+}
+
+type TransactionManager interface {
+	WithinTransaction(ctx context.Context, fn func(context.Context) error) error
+}
+
+type SessionRepository interface {
+	InsertSession(ctx context.Context, value session.Session) error
+	InsertRefresh(ctx context.Context, value session.RefreshToken) error
+}
+
+type AccessSigner interface {
+	Sign(ctx context.Context, claims session.AccessClaims) (string, error)
+}
+
+type RefreshGenerator interface {
+	Generate(ctx context.Context) (string, [32]byte, error)
+}
+
+type IDGenerator interface {
+	Generate(ctx context.Context) (string, error)
 }
 
 type LoginDependencies struct {
@@ -33,40 +57,37 @@ type LoginDependencies struct {
 	Signer       AccessSigner
 	Refresh      RefreshGenerator
 	IDs          IDGenerator
-	Clock        Clock
-	Attempts     EmailAttempts
+	Now          func() time.Time
 	DummyHash    string
 }
 
-func NewWithLogin(repository Repository, hasher PasswordHasher, dependencies LoginDependencies) *Usecase {
-	u := New(repository, hasher)
-	u.login = dependencies
-	return u
+type Login struct {
+	repository   LoginRepository
+	verifier     PasswordVerifier
+	dependencies LoginDependencies
 }
 
-func (u *Usecase) Login(ctx context.Context, email, password string) (TokenPair, error) {
+func NewLogin(repository LoginRepository, verifier PasswordVerifier, dependencies LoginDependencies) *Login {
+	return &Login{repository: repository, verifier: verifier, dependencies: dependencies}
+}
+
+func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, error) {
 	canonical, err := user.ValidateCredentials(email, password)
 	if err != nil {
 		return TokenPair{}, err
 	}
-	finish, retry, err := u.login.Attempts.Begin(ctx, canonical)
-	if err != nil {
-		if errors.Is(err, ErrRateLimited) {
-			return TokenPair{}, &RateLimitError{RetryAfter: retry}
-		}
-		return TokenPair{}, fmt.Errorf("begin login attempt: %w", err)
+	if err = ctx.Err(); err != nil {
+		return TokenPair{}, err
 	}
-	failed := false
-	defer func() { finish(failed) }()
 	account, hash, err := u.repository.FindCredentialsByEmail(ctx, canonical)
 	unknown := errors.Is(err, user.ErrNotFound)
 	if err != nil && !unknown {
 		return TokenPair{}, fmt.Errorf("find login user: %w", err)
 	}
 	if unknown {
-		hash = u.login.DummyHash
+		hash = u.dependencies.DummyHash
 	}
-	matches, err := u.hasher.Verify(ctx, password, hash)
+	matches, err := u.verifier.Verify(ctx, password, hash)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("verify login password: %w", err)
 	}
@@ -74,26 +95,25 @@ func (u *Usecase) Login(ctx context.Context, email, password string) (TokenPair,
 		return TokenPair{}, err
 	}
 	if unknown || !matches {
-		failed = true
 		return TokenPair{}, ErrAuthenticationFailed
 	}
 	return u.createSession(ctx, account.ID)
 }
 
-func (u *Usecase) createSession(ctx context.Context, userID string) (TokenPair, error) {
-	id, err := u.login.IDs.Generate(ctx)
+func (u *Login) createSession(ctx context.Context, userID string) (TokenPair, error) {
+	id, err := u.dependencies.IDs.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate session ID: %w", err)
 	}
-	jti, err := u.login.IDs.Generate(ctx)
+	jti, err := u.dependencies.IDs.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate token ID: %w", err)
 	}
-	refresh, hash, err := u.login.Refresh.Generate(ctx)
+	refresh, hash, err := u.dependencies.Refresh.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
-	now := u.login.Clock.Now().UTC()
+	now := u.dependencies.Now().UTC()
 	claims := session.AccessClaims{
 		UserID:    userID,
 		SessionID: id,
@@ -101,17 +121,17 @@ func (u *Usecase) createSession(ctx context.Context, userID string) (TokenPair, 
 		IssuedAt:  now,
 		ExpiresAt: now.Add(accessLifetime),
 	}
-	access, err := u.login.Signer.Sign(ctx, claims)
+	access, err := u.dependencies.Signer.Sign(ctx, claims)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("sign access token: %w", err)
 	}
-	err = u.login.Transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
+	err = u.dependencies.Transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		value := session.Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(sessionLifetime)}
-		if insertErr := u.login.Sessions.InsertSession(txCtx, value); insertErr != nil {
+		if insertErr := u.dependencies.Sessions.InsertSession(txCtx, value); insertErr != nil {
 			return fmt.Errorf("insert session: %w", insertErr)
 		}
 		token := session.RefreshToken{Hash: hash, SessionID: id, CreatedAt: now}
-		if insertErr := u.login.Sessions.InsertRefresh(txCtx, token); insertErr != nil {
+		if insertErr := u.dependencies.Sessions.InsertRefresh(txCtx, token); insertErr != nil {
 			return fmt.Errorf("insert refresh token: %w", insertErr)
 		}
 		return txCtx.Err()

@@ -8,14 +8,17 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
 const (
 	signupTimeout = 10 * time.Second
 )
 
-func New(usecase *auth.Usecase) http.Handler {
+type Signup interface {
+	Signup(context.Context, string, string) (user.User, error)
+}
+
+func New(usecase Signup) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), signupTimeout)
 		defer cancel()

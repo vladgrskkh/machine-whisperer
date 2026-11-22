@@ -20,7 +20,6 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/attempts"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
@@ -34,7 +33,17 @@ import (
 const exactLoginPassword = "  exact\U0001f600 \ufffd \\ud800 password  "
 const dummyLoginPassword = "fixed dummy password material"
 
-func loginFixture(t *testing.T) (*auth.Usecase, *pgxpool.Pool, *token.JWT, time.Time, auth.LoginDependencies) {
+type loginFixtures struct {
+	signup       *auth.Signup
+	login        *auth.Login
+	me           *auth.Me
+	pool         *pgxpool.Pool
+	signer       *token.JWT
+	now          time.Time
+	dependencies auth.LoginDependencies
+}
+
+func loginFixture(t *testing.T) loginFixtures {
 	t.Helper()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
@@ -52,30 +61,36 @@ func loginFixture(t *testing.T) (*auth.Usecase, *pgxpool.Pool, *token.JWT, time.
 		func() time.Time { return now },
 	)
 	require.NoError(t, err)
-	clock := authmock.NewClock(t)
-	clock.EXPECT().Now().Return(now).Maybe()
 	dependencies := auth.LoginDependencies{
 		Sessions:     sessionpostgres.New(pool),
 		Transactions: transactionpostgres.New(pool),
 		Signer:       signer,
 		Refresh:      token.Refresh{},
 		IDs:          token.IDs{},
-		Clock:        clock,
-		Attempts:     attempts.New(attempts.Config{Now: func() time.Time { return now }}),
+		Now:          func() time.Time { return now },
 		DummyHash:    dummy,
 	}
-	uc := auth.NewWithLogin(userpostgres.New(pool), hasher, dependencies)
-	return uc, pool, signer, now, dependencies
+	repository := userpostgres.New(pool)
+	return loginFixtures{
+		signup:       auth.NewSignup(repository, hasher),
+		login:        auth.NewLogin(repository, hasher, dependencies),
+		me:           auth.NewMe(repository),
+		pool:         pool,
+		signer:       signer,
+		now:          now,
+		dependencies: dependencies,
+	}
 }
 
 func TestLogin(t *testing.T) {
 	t.Parallel()
-	uc, pool, signer, now, _ := loginFixture(t)
-	original, err := uc.Signup(t.Context(), "alice@example.com", exactLoginPassword)
+	fixture := loginFixture(t)
+	pool, signer, now := fixture.pool, fixture.signer, fixture.now
+	original, err := fixture.signup.Signup(t.Context(), "alice@example.com", exactLoginPassword)
 	require.NoError(t, err)
-	first, err := uc.Login(t.Context(), "  Alice@Example.COM  ", exactLoginPassword)
+	first, err := fixture.login.Login(t.Context(), "  Alice@Example.COM  ", exactLoginPassword)
 	require.NoError(t, err)
-	second, err := uc.Login(t.Context(), "alice@example.com", exactLoginPassword)
+	second, err := fixture.login.Login(t.Context(), "alice@example.com", exactLoginPassword)
 	require.NoError(t, err)
 	assert.Equal(t, 900, first.ExpiresIn)
 	assert.NotEmpty(t, first.AccessToken)
@@ -117,7 +132,7 @@ func TestLogin(t *testing.T) {
 	require.NoError(t, err)
 	_, err = signer.Verify(t.Context(), first.AccessToken)
 	require.NoError(t, err)
-	current, err := uc.Me(t.Context(), original.ID)
+	current, err := fixture.me.Me(t.Context(), original.ID)
 	require.NoError(t, err)
 	assert.Equal(t, original, current)
 	for _, input := range []struct{ email, password string }{
@@ -126,7 +141,7 @@ func TestLogin(t *testing.T) {
 		{"missing@example.com", dummyLoginPassword},
 		{"alice@example.com", "exact\U0001f600 \ufffd \\ud800 password"},
 	} {
-		pair, loginErr := uc.Login(t.Context(), input.email, input.password)
+		pair, loginErr := fixture.login.Login(t.Context(), input.email, input.password)
 		assert.ErrorIs(t, loginErr, auth.ErrAuthenticationFailed)
 		assert.Empty(t, pair)
 	}
@@ -145,23 +160,24 @@ func TestLogin(t *testing.T) {
 
 func TestCurrentUser(t *testing.T) {
 	t.Parallel()
-	uc, pool, _, _, _ := loginFixture(t)
-	original, err := uc.Signup(t.Context(), "me@example.com", exactLoginPassword)
+	fixture := loginFixture(t)
+	pool := fixture.pool
+	original, err := fixture.signup.Signup(t.Context(), "me@example.com", exactLoginPassword)
 	require.NoError(t, err)
-	current, err := uc.Me(t.Context(), original.ID)
+	current, err := fixture.me.Me(t.Context(), original.ID)
 	require.NoError(t, err)
 	assert.Equal(t, original, current)
-	missing, err := uc.Me(t.Context(), uuid.NewString())
+	missing, err := fixture.me.Me(t.Context(), uuid.NewString())
 	assert.ErrorIs(t, err, auth.ErrAuthenticationFailed)
 	assert.Empty(t, missing)
 	_, err = pool.Exec(t.Context(), "DELETE FROM users WHERE id=$1", original.ID)
 	require.NoError(t, err)
-	missing, err = uc.Me(t.Context(), original.ID)
+	missing, err = fixture.me.Me(t.Context(), original.ID)
 	assert.ErrorIs(t, err, auth.ErrAuthenticationFailed)
 	assert.Empty(t, missing)
 	_, err = pool.Exec(t.Context(), "DROP TABLE users CASCADE")
 	require.NoError(t, err)
-	missing, err = uc.Me(t.Context(), original.ID)
+	missing, err = fixture.me.Me(t.Context(), original.ID)
 	assert.Error(t, err)
 	assert.NotErrorIs(t, err, auth.ErrAuthenticationFailed)
 	assert.Empty(t, missing)
@@ -183,12 +199,13 @@ func TestLoginRollback(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			uc, pool, _, _, _ := loginFixture(t)
-			_, err := uc.Signup(t.Context(), "rollback@example.com", exactLoginPassword)
+			fixture := loginFixture(t)
+			pool := fixture.pool
+			_, err := fixture.signup.Signup(t.Context(), "rollback@example.com", exactLoginPassword)
 			require.NoError(t, err)
 			_, err = pool.Exec(t.Context(), tc.setup)
 			require.NoError(t, err)
-			pair, err := uc.Login(t.Context(), "rollback@example.com", exactLoginPassword)
+			pair, err := fixture.login.Login(t.Context(), "rollback@example.com", exactLoginPassword)
 			assert.Error(t, err)
 			assert.NotErrorIs(t, err, auth.ErrAuthenticationFailed)
 			assert.Empty(t, pair)
@@ -203,8 +220,9 @@ func TestLoginRollback(t *testing.T) {
 
 func TestLoginCancellationRollsBack(t *testing.T) {
 	t.Parallel()
-	uc, pool, _, _, dependencies := loginFixture(t)
-	_, err := uc.Signup(t.Context(), "cancel@example.com", exactLoginPassword)
+	fixture := loginFixture(t)
+	pool, dependencies := fixture.pool, fixture.dependencies
+	_, err := fixture.signup.Signup(t.Context(), "cancel@example.com", exactLoginPassword)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
@@ -222,8 +240,8 @@ func TestLoginCancellationRollsBack(t *testing.T) {
 		}).
 		Once()
 	dependencies.Sessions = repository
-	uc = auth.NewWithLogin(userpostgres.New(pool), password.Argon2id{}, dependencies)
-	pair, err := uc.Login(ctx, "cancel@example.com", exactLoginPassword)
+	login := auth.NewLogin(userpostgres.New(pool), password.Argon2id{}, dependencies)
+	pair, err := login.Login(ctx, "cancel@example.com", exactLoginPassword)
 	assert.ErrorIs(t, err, context.Canceled)
 	assert.Empty(t, pair)
 	for _, query := range []string{"SELECT count(*) FROM sessions", "SELECT count(*) FROM refresh_tokens"} {

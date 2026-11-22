@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -26,7 +27,7 @@ func TestAccountCreation(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
-	signup := auth.New(postgres.New(pool), hasher)
+	signup := auth.NewSignup(postgres.New(pool), hasher)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, credentials := range []struct{ email, password string }{
@@ -68,7 +69,7 @@ func TestAccountCreation(t *testing.T) {
 func TestConcurrentSignup(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	signup := auth.New(postgres.New(pool), password.Argon2id{})
+	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{})
 	results := make(chan error, 6)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -171,28 +172,24 @@ func TestSignupHTTP(t *testing.T) {
 	assert.JSONEq(t, `{"code":"internal_error","message":"An internal error occurred"}`, string(result["error"]))
 }
 
-func TestNewPool(t *testing.T) {
+func TestApplicationWithDatabase(t *testing.T) {
 	t.Parallel()
 	existing := testutil.Postgres(t)
-	pool, err := application.NewPool(
-		t.Context(),
-		application.Config{Database: application.DatabaseConfig{URL: existing.Config().ConnString()}},
-	)
+	config := authConfig(t)
+	config.Database.URL = existing.Config().ConnString()
+	app, err := application.New(t.Context(), config, application.WithDatabase(config.Database))
 	require.NoError(t, err)
-	require.NotNil(t, pool)
-	t.Cleanup(pool.Close)
-	require.NoError(t, pool.Ping(t.Context()))
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	_, err = application.NewPool(
-		ctx,
-		application.Config{Database: application.DatabaseConfig{URL: existing.Config().ConnString()}},
-	)
-	assert.Error(t, err)
-	_, err = application.NewPool(
-		t.Context(),
-		application.Config{Database: application.DatabaseConfig{URL: "://invalid"}},
-	)
+	t.Cleanup(app.Close)
+	server := httptest.NewServer(app.Routes())
+	t.Cleanup(server.Close)
+
+	response, err := server.Client().Get(server.URL + "/unknown")
+	require.NoError(t, err)
+	response.Body.Close()
+	assert.Equal(t, http.StatusNotFound, response.StatusCode)
+
+	invalid := application.DatabaseConfig{URL: "://invalid"}
+	_, err = application.New(t.Context(), config, application.WithDatabase(invalid))
 	assert.Error(t, err)
 }
 

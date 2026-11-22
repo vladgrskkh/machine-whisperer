@@ -11,11 +11,10 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
-func TestNewHandlerRejectsInvalidKeys(t *testing.T) {
+func TestNewRejectsInvalidKeys(t *testing.T) {
 	t.Parallel()
-	handler, err := application.NewHandler(
+	handler, err := application.New(
 		t.Context(),
-		nil,
 		application.Config{Auth: application.AuthConfig{SigningKeyFile: "private-path-with-secret"}},
 	)
 	require.Error(t, err)
@@ -23,14 +22,13 @@ func TestNewHandlerRejectsInvalidKeys(t *testing.T) {
 	assert.NotContains(t, err.Error(), "private-path-with-secret")
 }
 
-func TestNewHandlerPropagatesStartupCancellation(t *testing.T) {
+func TestNewPropagatesStartupCancellation(t *testing.T) {
 	t.Parallel()
 	id, signing, verifying, _ := testutil.AuthKeys(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	handler, err := application.NewHandler(
+	handler, err := application.New(
 		ctx,
-		nil,
 		application.Config{
 			Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
 		},

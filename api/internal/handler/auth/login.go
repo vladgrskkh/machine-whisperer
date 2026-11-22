@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
@@ -32,18 +30,6 @@ func NewLogin(usecase Login) http.Handler {
 			handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid email, password or request body")
 		case errors.Is(err, auth.ErrAuthenticationFailed):
 			handler.Error(w, http.StatusUnauthorized, "authentication_failed", "Authentication failed")
-		case errors.Is(err, auth.ErrRateLimited):
-			retry := time.Second
-			var limit *auth.RateLimitError
-			if errors.As(err, &limit) && limit.RetryAfter > 0 {
-				retry = limit.RetryAfter
-			}
-			seconds := int64(retry / time.Second)
-			if retry%time.Second != 0 {
-				seconds++
-			}
-			w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
-			handler.Error(w, http.StatusTooManyRequests, "rate_limited", "Too many requests")
 		case err != nil:
 			handler.Error(w, http.StatusInternalServerError, "internal_error", "An internal error occurred")
 		default:

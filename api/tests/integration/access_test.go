@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/attempts"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 
 	"io"
@@ -118,9 +117,10 @@ func newAuthServer(t *testing.T, pool *pgxpool.Pool, config application.Config) 
 	config.Auth.SigningKeyID = keys.Auth.SigningKeyID
 	config.Auth.SigningKeyFile = keys.Auth.SigningKeyFile
 	config.Auth.VerifyKeysFile = keys.Auth.VerifyKeysFile
-	handler, err := application.NewHandler(t.Context(), pool, config)
+	app, err := application.New(t.Context(), config, application.WithPool(pool))
 	require.NoError(t, err)
-	return httptest.NewServer(handler)
+	t.Cleanup(app.Close)
+	return httptest.NewServer(app.Routes())
 }
 
 func TestLoginHTTPRejectsInvalidBodies(t *testing.T) {
@@ -230,44 +230,22 @@ func TestSharedAuthIPBudget(t *testing.T) {
 	assert.Zero(t, count)
 }
 
-func TestLoginEmailBudgetHTTP(t *testing.T) {
+func TestLoginFailuresUseIPBudget(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	var seconds atomic.Int64
-	now := func() time.Time { return time.Unix(1800000000+seconds.Load(), 0) }
-	server := newAuthServer(
-		t,
-		pool,
-		application.Config{
-			Auth: application.AuthConfig{Now: now},
-			RateLimits: application.RateLimitsConfig{
-				Email: attempts.Config{Limit: 2, Window: 10 * time.Second, Capacity: 1},
-			},
-		},
-	)
+	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
-	for _, tc := range []struct {
-		email  string
-		status int
-	}{
-		{" Unknown@Example.COM ", 401}, {"unknown@example.com", 401}, {"UNKNOWN@example.com", 429}, {"other@example.com", 429},
-	} {
-		response, err := server.Client().
-			Post(server.URL+"/v1/auth/login", "application/json", strings.NewReader(`{"email":"`+tc.email+`","password":"long enough password"}`))
+
+	for range 6 {
+		response, err := server.Client().Post(
+			server.URL+"/v1/auth/login", "application/json",
+			strings.NewReader(`{"email":"unknown@example.com","password":"long enough password"}`),
+		)
 		require.NoError(t, err)
 		response.Body.Close()
-		assert.Equal(t, tc.status, response.StatusCode)
+		assert.Equal(t, http.StatusUnauthorized, response.StatusCode)
 		assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
-		if tc.status == 429 {
-			assert.Equal(t, "10", response.Header.Get("Retry-After"))
-		}
 	}
-	seconds.Store(10)
-	response, err := server.Client().
-		Post(server.URL+"/v1/auth/login", "application/json", strings.NewReader(`{"email":"other@example.com","password":"long enough password"}`))
-	require.NoError(t, err)
-	response.Body.Close()
-	assert.Equal(t, 401, response.StatusCode)
 }
 
 func TestAccessJWTHTTP(t *testing.T) {
@@ -287,18 +265,19 @@ func TestAccessJWTHTTP(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(verifying, data, 0o600))
 	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
-	handler, err := application.NewHandler(
+	app, err := application.New(
 		t.Context(),
-		pool,
 		application.Config{Auth: application.AuthConfig{
 			SigningKeyID:   id,
 			SigningKeyFile: signing,
 			VerifyKeysFile: verifying,
 			Now:            func() time.Time { return now },
 		}},
+		application.WithPool(pool),
 	)
 	require.NoError(t, err)
-	server := httptest.NewServer(handler)
+	t.Cleanup(app.Close)
+	server := httptest.NewServer(app.Routes())
 	t.Cleanup(server.Close)
 	created, err := userpostgres.New(pool).Create(t.Context(), "access@example.com", "unused password hash")
 	require.NoError(t, err)

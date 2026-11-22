@@ -22,7 +22,7 @@
 - Existing access JWTs remain usable until expiry plus 30 seconds skew, including after logout/reuse revocation. Do not add session-state lookup to JWT middleware or /me.
 - Refresh requests must be serialized by the app. Simultaneous use of the same token means one rotation can succeed, the other detects reuse and revokes the session; no two successors. A lost successful response requires login again.
 - Reuse existing strict 8 KiB decoder, Unicode checks, stable JSON error envelope and sanitized error mapping. Structurally malformed body/secret is `400`; well-formed but unrecognized/expired secret is `401` on refresh, `204` on logout. A well-formed secret strictly decodes to exactly 32 bytes.
-- One shared 30/minute/IP budget across signup/login/refresh with the same trusted-proxy contract. The approved email-failure limit remains login-only. Logout is idempotent and outside this shared auth-request quota.
+- One shared 30/minute/IP budget across signup/login/refresh with the same trusted-proxy contract. The login-only email limit is tracked separately in [issue #4](https://github.com/vladgrskkh/machine-whisperer/issues/4). Logout is idempotent and outside this shared auth-request quota.
 - Every transaction boundary belongs to the use case; adapters use the callback transaction. Never return a replacement token before successful commit.
 - HTTP integration tests live in `tests/integration`, use real httptest.NewServer clients and PostgreSQL Testcontainers, including concurrent races. Controlled clocks, deterministic barriers, no sleep-based races; generate mocks with mockery.
 
@@ -41,7 +41,7 @@
 
 ## Task 1: Transactional refresh, reuse detection and logout
 
-**Files:** Create `internal/usecase/auth/{refresh,logout}.go`, extend `ports.go`; extend `internal/infrastructure/session/postgres/repository.go`; add `tests/integration/refresh_test.go` and transaction failure tests. Use login PR's existing domain/session models, token generator, signer and transaction manager.
+**Files:** Create `internal/usecase/auth/{refresh,logout}.go`, declare the interfaces each use case consumes in its own file; extend `internal/infrastructure/session/postgres/repository.go`; add `tests/integration/refresh_test.go` and transaction failure tests. Use login PR's existing domain/session models, token generator, signer and transaction manager.
 
 **Interfaces:** Add `Refresh(ctx context.Context, raw string) (TokenPair,error)` and `Logout(ctx context.Context, raw string) error` to `auth.Usecase`. Extend its session repository port with:
 
@@ -73,7 +73,7 @@ Reuse `InsertRefresh`, `WithinTransaction`, `Sign`, `Generate` and `Now` from th
 - [ ] Test malformed/unknown/trailing/oversized/null/non-string bodies and wrong secret lengths/alphabet/padding as 400 before repository calls. Test canonical 43-character base64url encoding; reject noncanonical trailing bits instead of accepting aliases. No credentials in URLs, response errors or request logging. Keep raw Unicode/surrogate regressions in shared decoding.
 - [ ] Add full real-HTTP concurrent same-token refresh and refresh-vs-logout tests using barriers and multiple clients; verify the Task 1 storage outcomes, not merely HTTP counts. Assert one surviving user session's refresh stays valid when another is revoked.
 - [ ] With an injected clock, authenticate /me using a JWT issued before logout and before reuse revocation; it must remain accepted until its own expiry/skew boundary. Missing user still returns 401. Refresh secrets and device credentials never authenticate /me.
-- [ ] Interleave signup/login/refresh requests to prove one shared 30/minute/IP quota; 31st request returns 429 before hashing/rotation. Test reset and proxy spoofing regressions; per-email failures affect login alone. Test quota rejection leaves token usable once the window resets.
+- [ ] Interleave signup/login/refresh requests to prove one shared 30/minute/IP quota; 31st request returns 429 before hashing/rotation. Test reset and proxy spoofing regressions. Test quota rejection leaves token usable once the window resets.
 - [ ] Document app serialization, lost-response/ambiguous-commit login recovery, logout's access-token delay, fixed session lifetime and key rotation. Keep all secrets out of logs and examples. Retain consumed hashes at least until session expiry; physical expiry cleanup is separate maintenance work and must never delete live reuse evidence. Record database growth as an operational follow-up, not an implicit deletion job in this PR.
 - [ ] Run `golangci-lint fmt --diff`, `make build`, `make test`, `make test-integration`, `make lint`, `git diff --check`; expected clean format/build, all unit/integration/race tests PASS, zero lint issues (record inherited warnings). Obtain fresh task review followed by whole-branch review, fix Important findings, commit and open the focused PR with actual check results. Verify hosted CI before completion.
 

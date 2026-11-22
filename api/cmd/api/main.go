@@ -59,16 +59,12 @@ func serve(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	pool, err := application.NewPool(ctx, config)
+	app, err := application.New(ctx, config, application.WithDatabase(config.Database))
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
-	handler, err := application.NewHandler(ctx, pool, config)
-	if err != nil {
-		return err
-	}
-	return run(ctx, address, handler)
+	defer app.Close()
+	return run(ctx, address, app.Routes())
 }
 
 func main() {

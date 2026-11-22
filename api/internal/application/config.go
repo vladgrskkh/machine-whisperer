@@ -11,7 +11,6 @@ import (
 	"github.com/caarlos0/env/v11"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/attempts"
 )
 
 type Config struct {
@@ -32,8 +31,7 @@ type AuthConfig struct {
 }
 
 type RateLimitsConfig struct {
-	IP    middleware.RateLimitConfig
-	Email attempts.Config
+	IP middleware.RateLimitConfig
 }
 
 type environmentConfig struct {
@@ -53,12 +51,9 @@ type authEnvironmentConfig struct {
 }
 
 type rateLimitsEnvironmentConfig struct {
-	IPLimit           int           `env:"AUTH_RATE_LIMIT"                   envDefault:"30"`
-	IPWindow          time.Duration `env:"AUTH_RATE_LIMIT_WINDOW"            envDefault:"1m"`
-	IPMaxClients      int           `env:"AUTH_RATE_LIMIT_MAX_CLIENTS"       envDefault:"10000"`
-	EmailLimit        int           `env:"AUTH_EMAIL_RATE_LIMIT"             envDefault:"5"`
-	EmailWindow       time.Duration `env:"AUTH_EMAIL_RATE_LIMIT_WINDOW"      envDefault:"1m"`
-	EmailMaxClients   int           `env:"AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS" envDefault:"10000"`
+	IPLimit           int           `env:"AUTH_RATE_LIMIT"             envDefault:"30"`
+	IPWindow          time.Duration `env:"AUTH_RATE_LIMIT_WINDOW"      envDefault:"1m"`
+	IPMaxClients      int           `env:"AUTH_RATE_LIMIT_MAX_CLIENTS" envDefault:"10000"`
 	TrustedProxyCIDRs string        `env:"TRUSTED_PROXY_CIDRS"`
 }
 
@@ -85,11 +80,6 @@ func LoadConfig() (Config, error) {
 				Limit:      settings.RateLimits.IPLimit,
 				Window:     settings.RateLimits.IPWindow,
 				MaxClients: settings.RateLimits.IPMaxClients,
-			},
-			Email: attempts.Config{
-				Limit:    settings.RateLimits.EmailLimit,
-				Window:   settings.RateLimits.EmailWindow,
-				Capacity: settings.RateLimits.EmailMaxClients,
 			},
 		},
 	}
@@ -129,15 +119,6 @@ func validateConfig(config Config) error {
 	}
 	if config.Auth.VerifyKeysFile == "" {
 		return errors.New("AUTH_VERIFY_KEYS_FILE is required")
-	}
-	if config.RateLimits.Email.Limit <= 0 {
-		return errors.New("AUTH_EMAIL_RATE_LIMIT must be a positive integer")
-	}
-	if config.RateLimits.Email.Window <= 0 {
-		return errors.New("AUTH_EMAIL_RATE_LIMIT_WINDOW must be a positive duration")
-	}
-	if config.RateLimits.Email.Capacity <= 0 {
-		return errors.New("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS must be a positive integer")
 	}
 	return nil
 }

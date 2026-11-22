@@ -90,20 +90,16 @@ skew. They require UUID `sub`, `sid`, `jti`, issuer `machine-whisperer`, audienc
 `machine-whisperer-api`, issuance time and expiry. `/me` is outside the signup/login
 IP budget.
 
-Signup and login share one IP request budget. Login also allows five failed
-attempts per canonical email per minute, counting in-flight attempts to prevent
-concurrent bypass. Successful logins do not erase earlier failures. Bounded email
-state rejects new identities when full until windows expire. Rate-limit responses
-include `Retry-After` in seconds. Additional configuration:
+Signup and login share one IP request budget per API instance. Rate-limit responses
+include `Retry-After` in seconds. The shared per-email failed-login limit is
+tracked in [issue #4](https://github.com/vladgrskkh/machine-whisperer/issues/4).
+Additional configuration:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `AUTH_SIGNING_KEY_ID` | Required | Active signing key identifier |
 | `AUTH_SIGNING_KEY_FILE` | Required | Ed25519 PKCS#8 PEM private-key file |
 | `AUTH_VERIFY_KEYS_FILE` | Required | JSON verification-key map file |
-| `AUTH_EMAIL_RATE_LIMIT` | `5` | Failed/in-flight logins per canonical email |
-| `AUTH_EMAIL_RATE_LIMIT_WINDOW` | `1m` | Email window duration |
-| `AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS` | `10000` | Maximum active email windows |
 
 Provision the signing key outside source control and mount it read-only for the
 API process. Restrict private-key access to that process. The PEM block must have

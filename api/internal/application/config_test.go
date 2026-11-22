@@ -103,9 +103,6 @@ func keyEnvironment(t *testing.T) {
 	t.Setenv("AUTH_SIGNING_KEY_ID", "active")
 	t.Setenv("AUTH_SIGNING_KEY_FILE", "/test/private.pem")
 	t.Setenv("AUTH_VERIFY_KEYS_FILE", "/test/public.json")
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT", "")
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT_WINDOW", "")
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "")
 }
 
 func TestAuthConfig(t *testing.T) {
@@ -116,25 +113,11 @@ func TestAuthConfig(t *testing.T) {
 	assert.Equal(t, "active", config.Auth.SigningKeyID)
 	assert.Equal(t, "/test/private.pem", config.Auth.SigningKeyFile)
 	assert.Equal(t, "/test/public.json", config.Auth.VerifyKeysFile)
-	assert.Equal(t, 5, config.RateLimits.Email.Limit)
-	assert.Equal(t, time.Minute, config.RateLimits.Email.Window)
-	assert.Equal(t, 10000, config.RateLimits.Email.Capacity)
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT", "2")
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT_WINDOW", "10s")
-	t.Setenv("AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", strconv.Itoa(math.MaxInt))
-	config, err = application.LoadConfig()
-	require.NoError(t, err)
-	assert.Equal(t, 2, config.RateLimits.Email.Limit)
-	assert.Equal(t, 10*time.Second, config.RateLimits.Email.Window)
-	assert.Equal(t, math.MaxInt, config.RateLimits.Email.Capacity)
 }
 
 func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
 	for _, tc := range []struct{ key, value string }{
 		{"AUTH_SIGNING_KEY_ID", ""}, {"AUTH_SIGNING_KEY_FILE", ""}, {"AUTH_VERIFY_KEYS_FILE", ""},
-		{"AUTH_EMAIL_RATE_LIMIT", "0"}, {"AUTH_EMAIL_RATE_LIMIT", "private-invalid-value"},
-		{"AUTH_EMAIL_RATE_LIMIT_WINDOW", "-1s"}, {"AUTH_EMAIL_RATE_LIMIT_WINDOW", "private-invalid-value"},
-		{"AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "0"}, {"AUTH_EMAIL_RATE_LIMIT_MAX_CLIENTS", "private-invalid-value"},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			keyEnvironment(t)
