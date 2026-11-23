@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -37,6 +39,7 @@ type Application struct {
 	listMachines    *machine.List
 	machineDetail   *machine.Detail
 	verifier        *token.JWT
+	logger          *slog.Logger
 	rateLimitConfig middleware.RateLimitConfig
 }
 
@@ -73,7 +76,8 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("auth initialization failed")
 	}
 
-	app := &Application{verifier: signer, rateLimitConfig: config.RateLimits.IP}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	app := &Application{verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP}
 	for _, option := range options {
 		if err = option(ctx, app); err != nil {
 			app.Close()
@@ -101,14 +105,13 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
-	app.setupEnrollment(transactions, now, claimTTL)
+	app.setupEnrollment(transactions, claimTTL)
 
 	return app, nil
 }
 
 func (a *Application) setupEnrollment(
 	transactions *transactionpostgres.Manager,
-	now func() time.Time,
 	claimTTL time.Duration,
 ) {
 	devices := devicepostgres.New(a.pool)
@@ -118,11 +121,10 @@ func (a *Application) setupEnrollment(
 		token.IDs{},
 		credential.Generator{},
 		credential.Generator{},
-		now,
 		claimTTL,
 	)
-	a.claim = device.NewClaim(devices, transactions, now)
-	a.createMachine = machine.NewCreate(machines, token.IDs{}, now)
+	a.claim = device.NewClaim(devices, transactions)
+	a.createMachine = machine.NewCreate(machines, token.IDs{})
 	a.listMachines = machine.NewList(machines)
 	a.machineDetail = machine.NewDetail(machines)
 }

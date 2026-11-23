@@ -2,7 +2,6 @@ package devices
 
 import (
 	"context"
-	"log/slog"
 	"net/http"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
@@ -23,7 +22,6 @@ func NewProvision(usecase Provisioner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := usecase.Provision(r.Context())
 		if err != nil {
-			slog.ErrorContext(r.Context(), "device provisioning failed", "error", err)
 			handler.InternalError(w)
 			return
 		}

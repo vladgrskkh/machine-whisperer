@@ -3,7 +3,6 @@ package devices
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
@@ -44,7 +43,6 @@ func NewClaim(usecase Claimer) http.Handler {
 		case errors.Is(err, device.ErrClaimUnavailable):
 			handler.Error(w, http.StatusNotFound, "claim_unavailable", "Device claim unavailable")
 		case err != nil:
-			slog.ErrorContext(r.Context(), "device claim failed", "error", err)
 			handler.InternalError(w)
 		default:
 			handler.JSON(w, http.StatusOK, claimResponse{

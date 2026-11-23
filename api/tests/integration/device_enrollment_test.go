@@ -133,7 +133,6 @@ func TestProvisioningEntropyFailureWritesNoDeviceOrSecret(t *testing.T) {
 		token.IDs{},
 		credential.NewGenerator(bytes.NewReader(apiSecret)),
 		credential.NewGenerator(iotest.ErrReader(generatorFailure)),
-		time.Now,
 		time.Hour,
 	)
 	var logs bytes.Buffer

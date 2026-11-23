@@ -25,7 +25,6 @@ type Provision struct {
 	ids        IDGenerator
 	apiSecrets SecretGenerator
 	claimCodes SecretGenerator
-	now        func() time.Time
 	claimTTL   time.Duration
 }
 
@@ -39,7 +38,6 @@ func NewProvision(
 	repository ProvisionRepository,
 	ids IDGenerator,
 	apiSecrets, claimCodes SecretGenerator,
-	now func() time.Time,
 	claimTTL time.Duration,
 ) *Provision {
 	return &Provision{
@@ -47,7 +45,6 @@ func NewProvision(
 		ids:        ids,
 		apiSecrets: apiSecrets,
 		claimCodes: claimCodes,
-		now:        now,
 		claimTTL:   claimTTL,
 	}
 }
@@ -65,7 +62,7 @@ func (p *Provision) Provision(ctx context.Context) (Provisioned, error) {
 	if err != nil {
 		return Provisioned{}, fmt.Errorf("generate device claim code: %w", err)
 	}
-	now := p.now().UTC()
+	now := time.Now().UTC()
 	value := device.Device{
 		ID:             id,
 		KeyVerifier:    apiSecret.Verifier(),

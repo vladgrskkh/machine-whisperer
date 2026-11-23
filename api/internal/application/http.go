@@ -15,6 +15,7 @@ import (
 
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
+	router.Use(middleware.NewRequestLogger(a.logger).Middleware)
 	limit := middleware.RateLimit(a.rateLimitConfig)
 	access := middleware.AccessToken(a.verifier)
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)

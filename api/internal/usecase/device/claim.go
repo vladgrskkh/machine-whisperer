@@ -21,11 +21,10 @@ type TransactionManager interface {
 type Claim struct {
 	repository   ClaimRepository
 	transactions TransactionManager
-	now          func() time.Time
 }
 
-func NewClaim(repository ClaimRepository, transactions TransactionManager, now func() time.Time) *Claim {
-	return &Claim{repository: repository, transactions: transactions, now: now}
+func NewClaim(repository ClaimRepository, transactions TransactionManager) *Claim {
+	return &Claim{repository: repository, transactions: transactions}
 }
 
 func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, code device.Secret) error {
@@ -42,7 +41,7 @@ func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID stri
 			return err
 		}
 		// Waiting on either row can take the claim past expiry.
-		now := c.now().UTC()
+		now := time.Now().UTC()
 		if !now.Before(value.ClaimExpiresAt) {
 			return device.ErrClaimUnavailable
 		}
