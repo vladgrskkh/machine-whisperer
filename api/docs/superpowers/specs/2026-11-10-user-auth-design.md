@@ -37,11 +37,11 @@ account. Duplicate signup returns a conflict; this exposes account existence.
 ## Tokens and sessions
 
 - Access JWT: 15-minute lifetime, Ed25519 signature (`EdDSA`), required `sub`
-  (user UUID), `sid` (session UUID), `iss`, `aud`, `iat`, `exp` and `jti` claims.
+  (user UUID), `sid` (session UUID), `roles` (array of role names assigned to the user in PostgreSQL), `iss`, `aud`, `iat`, `exp` and `jti` claims.
   Issuer is `machine-whisperer`; audience is `machine-whisperer-api`.
 - Accept only the configured algorithm, issuer, audience and known key ID;
   reject malformed, expired or invalidly signed tokens. Allow 30 seconds of
-  clock skew. Do not place email, passwords or device credentials in JWTs.
+  clock skew. Load role assignments from PostgreSQL when issuing tokens at login and refresh. A role change takes effect after already-issued access tokens expire, including clock skew. Do not place email, passwords or device credentials in JWTs.
 - Supply signing keys outside source control. Sign with one active key and
   support a configured verification key set for rotation; retain old public
   keys until their access tokens have expired.
@@ -92,8 +92,8 @@ Redis so replicas share one budget. Track that follow-up in
 
 ## Storage and boundaries
 
-PostgreSQL stores users, sessions and refresh-token hashes with uniqueness and
-foreign-key constraints. Session creation and refresh rotation use transactions
+PostgreSQL stores users, user-role assignments, sessions and refresh-token hashes with uniqueness and
+foreign-key constraints. PostgreSQL user-role assignments are the authorization source of truth; access JWT roles are a signed snapshot valid for the token lifetime. Session creation and refresh rotation use transactions
 controlled by use cases; concurrent consumption must not create two successors.
 Transport stays in handlers, business rules in use cases, models in domain and
 password hashing, signing and persistence in infrastructure. Interfaces belong

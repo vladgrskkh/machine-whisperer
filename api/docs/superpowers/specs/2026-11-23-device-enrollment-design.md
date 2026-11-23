@@ -80,7 +80,7 @@ Device key rotation creates a replacement credential for that device, updates th
 
 ## Open decisions
 
-- How device_provisioner accounts are initially granted by trusted operators; role self-assignment is prohibited.
+- How operators authenticate to the controlled role-assignment procedure.
 - Claim-code length and expiration period.
 - Whether a machine must exist before claim or can be created in the same request.
 - Exact ESP32 variant, provisioning interface and flash-encryption/Secure-Boot recovery procedure.
