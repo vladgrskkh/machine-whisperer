@@ -63,6 +63,7 @@ frequency/current values. Normalize timestamps to UTC. Accept `running` and
 `unknown` operating states; defer `idle` until firmware can identify it
 reliably. Preserve strict bounded JSON decoding: reject unknown or duplicate
 keys, malformed JSON, trailing data and bodies larger than 8 KiB.
+Valid JSON string escapes in `observed_at` are decoded before RFC3339 parsing.
 
 Normalize `observed_at` to PostgreSQL's microsecond timestamp precision before
 payload comparison, hashing, ordering and persistence, so sub-microsecond input
@@ -77,6 +78,10 @@ differences cannot bypass the machine cursor.
   history. Use PostgreSQL `clock_timestamp()` after acquiring the machine lock
   for receipt time, future-skew checks and age checks, so replicas share one
   clock boundary.
+- Check the submitted event identity/expiry explicitly. Opportunistic expiry
+  cleanup is scoped to the locked machine and deletes at most 100 other expired
+  identities per request, so one machine cannot delete another machine's retry
+  record or make an ingestion transaction scan an unbounded backlog.
 - Reject an event whose timestamp is 30 days old or older before checking its
   idempotency key. Check an existing `(device_id, event_id)` before observation
   ordering. An identical normalized payload is an idempotent success and

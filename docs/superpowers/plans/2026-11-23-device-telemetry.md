@@ -47,9 +47,9 @@
 - Produces `telemetry.Observation{SchemaVersion int, EventID string, ObservedAt time.Time, OperatingState string, VibrationRMSG float64, DominantFrequencyHz, CurrentRMSA *float64}` and `telemetry.Event{Observation, DeviceID, MachineID string, ReceivedAt time.Time, PayloadHash [32]byte}`.
 - Produces domain sentinel `telemetry.ErrEventConflict` for unique event/outbox key conflicts; the PostgreSQL adapter wraps driver violations with this sentinel.
 - Adds nullable `machine.Machine.LastTelemetryObservedAt *time.Time` as the durable per-machine order cursor.
-- PostgreSQL adapter supports `LockMachineForTelemetry(ctx, machineID) (lastObservedAt *time.Time, dbNow time.Time, err error)`, event lookup/insert, expired idempotency cleanup, cursor update and outbox insertion, all using the transaction from context.
+- PostgreSQL adapter supports `LockMachineForTelemetry(ctx, machineID) (lastObservedAt *time.Time, dbNow time.Time, err error)`, event lookup including expiry, scoped single-key expiry removal, bounded machine-scoped expiry cleanup (100 identities per request), event/outbox insert and cursor update, all using the transaction from context.
 
-The migration adds `machines.last_telemetry_observed_at`; `telemetry_events` stores `(device_id,event_id)`, machine ID, observation time, payload hash and `expires_at`; `telemetry_outbox` stores the complete v1 JSON payload, device/event IDs, created time and nullable delivered time. The outbox has its own unique `(device_id,event_id)` key and no foreign key to the expiring idempotency table, so unexported events survive dedupe cleanup. An outbox-key conflict maps to 409 instead of creating a second export item.
+The migration adds `machines.last_telemetry_observed_at`; `telemetry_events` stores `(device_id,event_id)`, machine ID, observation time, payload hash and `expires_at`, with an index on `(machine_id,expires_at)` for bounded cleanup; `telemetry_outbox` stores the complete v1 JSON payload, device/event IDs, created time and nullable delivered time. The outbox has its own unique `(device_id,event_id)` key and no foreign key to the expiring idempotency table, so unexported events survive dedupe cleanup. An outbox-key conflict maps to 409 instead of creating a second export item.
 
 - [x] Write Testcontainers tests named `TestTelemetryStorageConstraints`, `TestTelemetryEventAndOutboxInsertAtomically`, `TestTelemetryMachineCursor` and `TestTelemetryExpiredIdempotencyCleanup` for unique keys, payload hash length, machine/device foreign keys, cursor state, independent outbox retention and 30-day idempotency expiry.
 - [x] Run `go test -tags=integration ./tests/integration -run '^TestTelemetry' -count=1` and confirm the new tests fail against the absent schema.
@@ -88,3 +88,10 @@ The migration adds `machines.last_telemetry_observed_at`; `telemetry_events` sto
 - [x] Document device authentication and the telemetry request/response behavior without exposing secrets.
 - [x] Rerun `go test -tags=integration ./tests/integration -run '^TestDeviceTelemetry|^TestDeviceKeyCannot' -count=1` and confirm all new HTTP cases pass. Then run the full unit suite, full `make test-integration`, `make build`, pinned lint and `git diff --check`.
 - [x] Commit `feat: accept authenticated device telemetry`; obtain task and whole-branch reviews before opening a PR.
+
+### Final review fix wave
+
+- [x] Add real-HTTP/Testcontainers coverage `TestDeviceTelemetryExpiryCleanupIsMachineScopedAndBounded` and `TestDeviceTelemetryEscapedObservedAtIsAccepted`, plus a storage lock-wait test proving `LockMachineForTelemetry` samples database time after obtaining the lock.
+- [x] Reproduce the cross-machine cleanup, escaped-string timestamp and post-lock-clock gaps before fixing them.
+- [x] Scope idempotency cleanup to the locked machine, cap each batch at 100 rows, return/handle the submitted identity's `expires_at` explicitly, and decode `observed_at` as a JSON string before RFC3339 parsing.
+- [x] Run the focused regressions, full serial Testcontainers suite, unit tests, build and lint; obtain a scoped re-review.
