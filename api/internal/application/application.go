@@ -45,6 +45,8 @@ type Application struct {
 	createMachine   *machine.Create
 	listMachines    *machine.List
 	machineDetail   *machine.Detail
+	getBaseline     *machine.GetBaseline
+	setBaseline     *machine.SetBaseline
 	verifier        *token.JWT
 	logger          *slog.Logger
 	rateLimitConfig middleware.RateLimitConfig
@@ -147,6 +149,8 @@ func (a *Application) setupEnrollment(
 	a.createMachine = machine.NewCreate(machines, token.IDs{})
 	a.listMachines = machine.NewList(machines)
 	a.machineDetail = machine.NewDetail(machines)
+	a.getBaseline = machine.NewGetBaseline(machines)
+	a.setBaseline = machine.NewSetBaseline(machines, transactions)
 }
 
 func (a *Application) setupRelay(config RelayConfig) {

@@ -203,6 +203,25 @@ to the user's machine and consumes the code atomically. Unknown devices,
 incorrect or expired codes, revoked or already-claimed devices and unavailable
 machines all return `404 claim_unavailable`. Malformed requests return `400`.
 
+## Machine baselines
+
+Machine owners use a user access JWT to read or set the current RMS vibration
+baseline at `/v1/machines/{id}/baseline`. Send a `PUT` with both values in g.
+
+```json
+{"mean_rms_g":0.4,"stddev_rms_g":0.05}
+```
+
+The mean must be finite and nonnegative. The standard deviation must be finite
+and positive. Both `GET` and a successful `PUT` return `200` with `machine_id`,
+`mean_rms_g`, `stddev_rms_g`, `version` and `updated_at` (UTC). The first write
+starts at version 1. Changing either value increments the version and updates
+the timestamp. Repeating the same values preserves both.
+
+`GET` returns `404 baseline_not_found` when there is no baseline available to the
+owner. `PUT` returns `404 machine_not_found` when the machine is missing or
+belongs to another user. Malformed IDs, bodies and values return `400`.
+
 ## Device telemetry
 
 A claimed sensor sends `POST /v1/machines/{machine_id}/telemetry` over HTTPS
