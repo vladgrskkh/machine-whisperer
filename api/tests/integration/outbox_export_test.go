@@ -60,6 +60,7 @@ func TestOutboxLeaseCanBeReclaimed(t *testing.T) {
 	oldToken, events, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
+	assertOutboxLeaseEligibility(t, pool, event.EventID)
 	_, events, err = repository.ClaimBatch(t.Context(), 1, outboxTestLease)
 	require.NoError(t, err)
 	assert.Empty(t, events)
@@ -71,6 +72,7 @@ func TestOutboxLeaseCanBeReclaimed(t *testing.T) {
 	assert.Equal(t, event.EventID, events[0].EventID)
 	assert.NotEqual(t, oldToken, newToken)
 	assert.EqualValues(t, 2, events[0].AttemptCount)
+	assertOutboxLeaseEligibility(t, pool, event.EventID)
 }
 
 func TestOutboxStaleLeaseCannotAcknowledge(t *testing.T) {
@@ -82,11 +84,14 @@ func TestOutboxStaleLeaseCannotAcknowledge(t *testing.T) {
 	oldToken, _, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
 	require.NoError(t, err)
 	expireOutboxLease(t, pool, event.EventID)
-	newToken, _, err := repository.ClaimBatch(t.Context(), 2, outboxTestLease)
-	require.NoError(t, err)
-
 	keys := []telemetry.EventKey{{DeviceID: event.DeviceID, EventID: event.EventID}}
 	updated, err := repository.MarkDelivered(t.Context(), oldToken, keys)
+	require.NoError(t, err)
+	assert.Zero(t, updated)
+
+	newToken, _, err := repository.ClaimBatch(t.Context(), 2, outboxTestLease)
+	require.NoError(t, err)
+	updated, err = repository.MarkDelivered(t.Context(), oldToken, keys)
 	require.NoError(t, err)
 	assert.Zero(t, updated)
 	require.NoError(t, repository.Reschedule(t.Context(), oldToken, keys, time.Hour, "analytics_http"))
@@ -112,14 +117,16 @@ func TestOutboxRetryBackoff(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, events)
 
-	var future, released bool
+	var delaySeconds float64
+	var released bool
 	var category string
 	require.NoError(
 		t,
-		pool.QueryRow(t.Context(), `SELECT available_at > now(),lease_token IS NULL AND lease_until IS NULL,
-		last_error_category FROM telemetry_outbox WHERE event_id=$1`, event.EventID).Scan(&future, &released, &category),
+		pool.QueryRow(t.Context(), `SELECT extract(epoch from (available_at-now()))::float8,
+		lease_token IS NULL AND lease_until IS NULL,last_error_category
+		FROM telemetry_outbox WHERE event_id=$1`, event.EventID).Scan(&delaySeconds, &released, &category),
 	)
-	assert.True(t, future)
+	assert.InDelta(t, time.Hour.Seconds(), delaySeconds, 10)
 	assert.True(t, released)
 	assert.Equal(t, "analytics_http", category)
 	makeOutboxDue(t, pool, event.EventID)
@@ -127,6 +134,7 @@ func TestOutboxRetryBackoff(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, event.EventID, events[0].EventID)
+	assertOutboxLeaseEligibility(t, pool, event.EventID)
 }
 
 func TestOutboxDeliveredRetentionIsBounded(t *testing.T) {
@@ -247,9 +255,19 @@ func insertOutboxRow(t *testing.T, pool *pgxpool.Pool, deliveredAt *time.Time) t
 	return event
 }
 
+func assertOutboxLeaseEligibility(t *testing.T, pool *pgxpool.Pool, eventID string) {
+	t.Helper()
+	var availableAt, leaseUntil time.Time
+	require.NoError(t, pool.QueryRow(t.Context(),
+		"SELECT available_at,lease_until FROM telemetry_outbox WHERE event_id=$1", eventID).
+		Scan(&availableAt, &leaseUntil))
+	assert.WithinDuration(t, leaseUntil, availableAt, 0)
+}
+
 func expireOutboxLease(t *testing.T, pool *pgxpool.Pool, eventID string) {
 	t.Helper()
-	_, err := pool.Exec(t.Context(), "UPDATE telemetry_outbox SET lease_until=now() WHERE event_id=$1", eventID)
+	_, err := pool.Exec(t.Context(),
+		"UPDATE telemetry_outbox SET available_at=now(),lease_until=now() WHERE event_id=$1", eventID)
 	require.NoError(t, err)
 }
 

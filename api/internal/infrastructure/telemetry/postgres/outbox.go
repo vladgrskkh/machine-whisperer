@@ -30,21 +30,23 @@ func (r *Outbox) ClaimBatch(
 	if err != nil {
 		return "", nil, fmt.Errorf("generate outbox lease token: %w", err)
 	}
-	// The statement is atomic. CollectRows closes it before the caller can send the batch.
+	// Eligibility moves to the lease expiry in the same statement, so one index also serves reclaims.
+	// Updating by the locked tuple IDs keeps prepared plans from re-scanning the table.
 	rows, err := r.pool.Query(ctx, `WITH due AS (
-		SELECT device_id,event_id FROM telemetry_outbox
+		SELECT ctid,device_id,event_id,available_at FROM telemetry_outbox
 		WHERE delivered_at IS NULL AND available_at <= statement_timestamp()
-		  AND (lease_until IS NULL OR lease_until <= statement_timestamp())
 		ORDER BY available_at,created_at,device_id,event_id
 		LIMIT $1 FOR UPDATE SKIP LOCKED
 	), claimed AS (
 		UPDATE telemetry_outbox AS o
-		SET lease_token=$2,lease_until=statement_timestamp()+$3::interval,attempt_count=attempt_count+1
-		FROM due WHERE (o.device_id,o.event_id)=(due.device_id,due.event_id)
-		RETURNING o.*
+		SET lease_token=$2,lease_until=statement_timestamp()+$3::interval,
+		    available_at=statement_timestamp()+$3::interval,attempt_count=attempt_count+1
+		WHERE o.ctid = ANY(ARRAY(SELECT ctid FROM due))
+		RETURNING o.device_id,o.event_id,o.machine_id,o.created_at,o.payload,o.attempt_count
 	)
 	SELECT device_id::text,event_id::text,machine_id::text,created_at,payload,attempt_count
-	FROM claimed ORDER BY available_at,created_at,device_id,event_id`, batchSize, token.String(), outboxInterval(lease))
+	FROM claimed JOIN due USING (device_id,event_id)
+	ORDER BY due.available_at,claimed.created_at,claimed.device_id,claimed.event_id`, batchSize, token.String(), outboxInterval(lease))
 	if err != nil {
 		return "", nil, fmt.Errorf("claim outbox batch: %w", err)
 	}
