@@ -40,13 +40,18 @@ type TransactionManager interface {
 	WithinTransaction(context.Context, func(context.Context) error) error
 }
 
+type ObservationDetector interface {
+	Observe(context.Context, telemetry.Event) error
+}
+
 type Ingest struct {
 	repository   Repository
 	transactions TransactionManager
+	detector     ObservationDetector
 }
 
-func NewIngest(repository Repository, transactions TransactionManager) *Ingest {
-	return &Ingest{repository: repository, transactions: transactions}
+func NewIngest(repository Repository, transactions TransactionManager, detector ObservationDetector) *Ingest {
+	return &Ingest{repository: repository, transactions: transactions, detector: detector}
 }
 
 func (i *Ingest) Ingest(
@@ -117,7 +122,10 @@ func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
 	if err = i.repository.InsertTelemetryOutbox(ctx, event); err != nil {
 		return err
 	}
-	return i.repository.UpdateMachineTelemetryCursor(ctx, event.MachineID, event.ObservedAt)
+	if err = i.repository.UpdateMachineTelemetryCursor(ctx, event.MachineID, event.ObservedAt); err != nil {
+		return err
+	}
+	return i.detector.Observe(ctx, event)
 }
 
 func normalizeObservation(value telemetry.Observation) (telemetry.Observation, error) {

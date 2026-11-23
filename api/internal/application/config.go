@@ -2,6 +2,7 @@ package application
 
 import (
 	"errors"
+	"math"
 	"net/netip"
 	"net/url"
 	"reflect"
@@ -20,6 +21,7 @@ type Config struct {
 	Device     DeviceConfig
 	RateLimits RateLimitsConfig
 	Relay      RelayConfig
+	Detector   DetectorConfig
 }
 
 type DatabaseConfig struct {
@@ -57,7 +59,44 @@ type RelayConfig struct {
 	Retention       time.Duration `env:"OUTBOX_RETENTION"         envDefault:"720h"`
 }
 
-const day = 24 * time.Hour
+type DetectorConfig struct {
+	AlertZThreshold               float64 `env:"DETECTOR_ALERT_Z_THRESHOLD"               envDefault:"3"`
+	RecoveryZThreshold            float64 `env:"DETECTOR_RECOVERY_Z_THRESHOLD"            envDefault:"2"`
+	AlertSustainedObservations    int     `env:"DETECTOR_ALERT_SUSTAINED_OBSERVATIONS"    envDefault:"3"`
+	RecoverySustainedObservations int     `env:"DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS" envDefault:"3"`
+}
+
+const (
+	day                          = 24 * time.Hour
+	defaultAlertZThreshold       = 3
+	defaultRecoveryZThreshold    = 2
+	defaultSustainedObservations = 3
+)
+
+func (c DetectorConfig) withDefaults() DetectorConfig {
+	if c != (DetectorConfig{}) {
+		return c
+	}
+	return DetectorConfig{
+		AlertZThreshold:               defaultAlertZThreshold,
+		RecoveryZThreshold:            defaultRecoveryZThreshold,
+		AlertSustainedObservations:    defaultSustainedObservations,
+		RecoverySustainedObservations: defaultSustainedObservations,
+	}
+}
+
+func (c DetectorConfig) validate() error {
+	if !(c.RecoveryZThreshold >= 0 && c.AlertZThreshold > c.RecoveryZThreshold && c.AlertZThreshold < math.Inf(1)) {
+		return errors.New("detector thresholds must be finite and satisfy " +
+			"DETECTOR_ALERT_Z_THRESHOLD > DETECTOR_RECOVERY_Z_THRESHOLD >= 0")
+	}
+	if c.AlertSustainedObservations <= 0 || c.RecoverySustainedObservations <= 0 {
+		return errors.New(
+			"DETECTOR_ALERT_SUSTAINED_OBSERVATIONS and DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS must be positive",
+		)
+	}
+	return nil
+}
 
 type environmentConfig struct {
 	Database   databaseEnvironmentConfig
@@ -65,6 +104,7 @@ type environmentConfig struct {
 	Device     deviceEnvironmentConfig
 	RateLimits rateLimitsEnvironmentConfig
 	Relay      RelayConfig
+	Detector   DetectorConfig
 }
 
 type databaseEnvironmentConfig struct {
@@ -106,8 +146,9 @@ func LoadConfig() (Config, error) {
 			SigningKeyFile: settings.Auth.SigningKeyFile,
 			VerifyKeysFile: settings.Auth.VerifyKeysFile,
 		},
-		Device: DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
-		Relay:  settings.Relay,
+		Device:   DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
+		Relay:    settings.Relay,
+		Detector: settings.Detector,
 		RateLimits: RateLimitsConfig{
 			IP: middleware.RateLimitConfig{
 				Limit:      settings.RateLimits.IPLimit,
@@ -155,6 +196,9 @@ func validateConfig(config Config) error {
 	}
 	if config.Auth.VerifyKeysFile == "" {
 		return errors.New("AUTH_VERIFY_KEYS_FILE is required")
+	}
+	if err := config.Detector.validate(); err != nil {
+		return err
 	}
 	return config.Relay.validate()
 }

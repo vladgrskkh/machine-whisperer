@@ -11,9 +11,11 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/alert"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 	transaction "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	telemetryusecase "github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
 )
 
 var errTransactionRequired = errors.New("telemetry operation requires a transaction")
@@ -170,4 +172,105 @@ func telemetryInsertError(operation string, err error) error {
 		return fmt.Errorf("%s: %w: %w", operation, telemetry.ErrEventConflict, err)
 	}
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (r *Repository) Load(ctx context.Context, machineID string) (
+	machine.Baseline, telemetryusecase.DetectorState, bool, error,
+) {
+	tx := transaction.FromContext(ctx)
+	if tx == nil {
+		return machine.Baseline{}, telemetryusecase.DetectorState{}, false, errTransactionRequired
+	}
+	var baseline machine.Baseline
+	var state telemetryusecase.DetectorState
+	var activeID *string
+	var peak *float64
+	err := tx.QueryRow(ctx, `SELECT b.machine_id::text,b.mean_rms_g,b.stddev_rms_g,b.version,b.updated_at,
+		COALESCE(s.baseline_version,0),COALESCE(s.pending_alert_count,0),COALESCE(s.pending_recovery_count,0),
+		a.id::text,a.peak_z_score
+		FROM machine_baselines b
+		LEFT JOIN machine_detector_state s ON s.machine_id=b.machine_id
+		LEFT JOIN machine_alerts a ON a.machine_id=b.machine_id AND a.recovered_at IS NULL
+		WHERE b.machine_id=$1`, machineID).Scan(
+		&baseline.MachineID, &baseline.MeanRMSG, &baseline.StddevRMSG, &baseline.Version, &baseline.UpdatedAt,
+		&state.BaselineVersion, &state.PendingAlertCount, &state.PendingRecoveryCount, &activeID, &peak,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return machine.Baseline{}, telemetryusecase.DetectorState{}, false, nil
+	}
+	if err != nil {
+		return machine.Baseline{}, telemetryusecase.DetectorState{}, false, fmt.Errorf("load detector state: %w", err)
+	}
+	baseline.UpdatedAt = baseline.UpdatedAt.UTC()
+	if activeID != nil {
+		state.Active = &telemetryusecase.ActiveAlert{ID: *activeID, PeakZScore: *peak}
+	}
+	return baseline, state, true, nil
+}
+
+func (r *Repository) SaveTransition(
+	ctx context.Context, machineID string, state telemetryusecase.DetectorState, changedAlert *alert.Alert,
+) error {
+	tx := transaction.FromContext(ctx)
+	if tx == nil {
+		return errTransactionRequired
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO machine_detector_state (
+			machine_id,baseline_version,pending_alert_count,pending_recovery_count)
+		VALUES ($1,$2,$3,$4) ON CONFLICT (machine_id) DO UPDATE SET
+			baseline_version=EXCLUDED.baseline_version,pending_alert_count=EXCLUDED.pending_alert_count,
+			pending_recovery_count=EXCLUDED.pending_recovery_count
+		WHERE (machine_detector_state.baseline_version,machine_detector_state.pending_alert_count,
+			machine_detector_state.pending_recovery_count) IS DISTINCT FROM
+			(EXCLUDED.baseline_version,EXCLUDED.pending_alert_count,EXCLUDED.pending_recovery_count)`,
+		machineID, state.BaselineVersion, state.PendingAlertCount, state.PendingRecoveryCount); err != nil {
+		return fmt.Errorf("save detector state: %w", err)
+	}
+	if changedAlert == nil {
+		return nil
+	}
+	if changedAlert.ID == "" {
+		return insertAlert(ctx, tx, changedAlert)
+	}
+	return updateAlert(ctx, tx, changedAlert)
+}
+
+func insertAlert(ctx context.Context, tx pgx.Tx, value *alert.Alert) error {
+	_, err := tx.Exec(
+		ctx,
+		`INSERT INTO machine_alerts (
+		machine_id,trigger_device_id,trigger_event_id,triggered_at,trigger_z_score,trigger_baseline_version,
+		trigger_mean_rms_g,trigger_stddev_rms_g,last_z_score,peak_z_score)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		value.MachineID,
+		value.TriggerDeviceID,
+		value.TriggerEventID,
+		value.TriggeredAt,
+		value.TriggerZScore,
+		value.TriggerBaselineVersion,
+		value.TriggerMeanRMSG,
+		value.TriggerStddevRMSG,
+		value.LastZScore,
+		value.PeakZScore,
+	)
+	if err != nil {
+		return fmt.Errorf("insert machine alert: %w", err)
+	}
+	return nil
+}
+
+func updateAlert(ctx context.Context, tx pgx.Tx, value *alert.Alert) error {
+	tag, err := tx.Exec(ctx, `UPDATE machine_alerts SET last_z_score=$3,peak_z_score=$4,
+		recovery_device_id=$5,recovery_event_id=$6,recovered_at=$7,recovery_baseline_version=$8
+		WHERE machine_id=$1 AND id=$2 AND recovered_at IS NULL`,
+		value.MachineID, value.ID, value.LastZScore, value.PeakZScore,
+		value.RecoveryDeviceID, value.RecoveryEventID, value.RecoveredAt, value.RecoveryBaselineVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("update machine alert: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return alert.ErrNotFound
+	}
+	return nil
 }

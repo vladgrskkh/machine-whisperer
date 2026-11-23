@@ -103,6 +103,10 @@ func configEnvironment(t *testing.T) {
 	t.Setenv("OUTBOX_RETRY_BASE", "")
 	t.Setenv("OUTBOX_RETRY_MAX", "")
 	t.Setenv("OUTBOX_RETENTION", "")
+	t.Setenv("DETECTOR_ALERT_Z_THRESHOLD", "")
+	t.Setenv("DETECTOR_RECOVERY_Z_THRESHOLD", "")
+	t.Setenv("DETECTOR_ALERT_SUSTAINED_OBSERVATIONS", "")
+	t.Setenv("DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS", "")
 }
 
 func TestAuthConfig(t *testing.T) {
@@ -196,6 +200,46 @@ func TestRelayConfigRejectsInvalidSettings(t *testing.T) {
 			if tc.key == "ANALYTICS_URL" && tc.value != "" || tc.key == "ANALYTICS_INGEST_API_KEY" && tc.value != "" {
 				assert.NotContains(t, err.Error(), tc.value)
 			}
+		})
+	}
+}
+
+func TestDetectorConfigDefaultsAndOverrides(t *testing.T) {
+	configEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://test")
+	defaults, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, application.DetectorConfig{
+		AlertZThreshold: 3, RecoveryZThreshold: 2, AlertSustainedObservations: 3, RecoverySustainedObservations: 3,
+	}, defaults.Detector)
+	t.Setenv("DETECTOR_ALERT_Z_THRESHOLD", "4.5")
+	t.Setenv("DETECTOR_RECOVERY_Z_THRESHOLD", "0")
+	t.Setenv("DETECTOR_ALERT_SUSTAINED_OBSERVATIONS", "1")
+	t.Setenv("DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS", "5")
+	overrides, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, application.DetectorConfig{
+		AlertZThreshold: 4.5, RecoveryZThreshold: 0, AlertSustainedObservations: 1, RecoverySustainedObservations: 5,
+	}, overrides.Detector)
+}
+
+func TestDetectorConfigRejectsInvalidSettings(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"DETECTOR_ALERT_Z_THRESHOLD", "2"},
+		{"DETECTOR_ALERT_Z_THRESHOLD", "NaN"},
+		{"DETECTOR_ALERT_Z_THRESHOLD", "+Inf"},
+		{"DETECTOR_RECOVERY_Z_THRESHOLD", "-0.1"},
+		{"DETECTOR_RECOVERY_Z_THRESHOLD", "4"},
+		{"DETECTOR_ALERT_SUSTAINED_OBSERVATIONS", "0"},
+		{"DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS", "-1"},
+	} {
+		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
+			configEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://test")
+			t.Setenv(tc.key, tc.value)
+			config, err := application.LoadConfig()
+			require.Error(t, err)
+			assert.Zero(t, config)
 		})
 	}
 }

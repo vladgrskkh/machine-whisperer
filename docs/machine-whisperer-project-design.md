@@ -49,10 +49,9 @@ The load balancer terminates external TLS and routes requests to REST API
 instances. The API authenticates callers, receives telemetry, commits the
 event and outbox record to PostgreSQL, and serves the app. A worker in the API
 process posts outbox batches to an internal Analytics endpoint. Analytics stores
-the history in ClickHouse. The MVP detector compares measurements with an
-operator-configured baseline; which service performs that comparison and how it
-persists alert state remain design decisions. Post-MVP Analytics will learn or
-adjust baselines from history. The app never connects directly to a database.
+the history in ClickHouse. The API runs the MVP detector and stores alert
+state in PostgreSQL. Post-MVP Analytics will learn or propose baseline
+adjustments from history. The app never connects directly to a database.
 
 | Component            | Proposed technology                              |
 | -------------------- | ------------------------------------------------ |
@@ -95,8 +94,9 @@ thresholds and availability targets after load testing.
 ## 3. Data and delivery
 
 PostgreSQL stores users, organizations, device credential verifiers, machine
-configuration, event IDs, detector state and alerts. An alert is an operational record
-with a machine, severity, time, condition and acknowledgement status.
+configuration, event IDs, detector state and alerts. An alert records the machine,
+trigger observation and baseline snapshot, last and peak z-scores, and
+recovery details and the first acknowledgement timestamp when available.
 
 ClickHouse stores the full telemetry history for charts and analysis. At one
 observation per minute, 100 devices produce around 144,000 records per day,
@@ -105,19 +105,18 @@ queries and indexing, but ClickHouse is the proposed analytics store because the
 product aims to analyze large histories across devices. Capacity and query
 performance must be measured using representative data.
 
-On ingestion, a PostgreSQL transaction stores the accepted event and creates an
-outbox entry. The API relay leases batches and posts them to Analytics, which
+On ingestion, a PostgreSQL transaction stores the accepted event, advances the
+machine cursor, creates an outbox entry and applies any detector or alert
+changes. The API relay leases batches and posts them to Analytics, which
 bulk-inserts them into ClickHouse and acknowledges only after success. A
 successful API response means the event is committed in PostgreSQL; it may take
 longer to appear in ClickHouse. Current status and alerts come from PostgreSQL,
 so charts may temporarily lag.
 
-For the MVP, each machine has an operator-configured baseline. The detector
-compares valid RMS observations against that baseline and creates or updates an
-alert for sustained deviation. Baseline configuration and alert state are
-operational data. Whether the API compares during telemetry ingestion or
-Analytics compares after ClickHouse storage, and how alerts cross that service
-boundary, remain design decisions. The outbox table only delivers telemetry.
+For MVP detection, the API compares valid RMS observations with the machine's
+operator-configured baseline during the telemetry transaction. PostgreSQL holds
+the baseline configuration and alert state. Baseline writes lock the same machine
+row as telemetry ingestion. The outbox table only delivers telemetry.
 
 Post-MVP, Analytics can learn or adjust a machine's baseline from accumulated,
 valid observations collected while the machine is known healthy and running.
@@ -221,20 +220,42 @@ handling after device clock changes remain to be specified.
 | ---------------------------------- | -------------------------------------------- |
 | `GET /v1/machines`                 | List authorized machines and current states. |
 | `GET /v1/machines/{id}`            | Get machine details.                         |
+| `GET /v1/machines/{id}/baseline`   | Get the owner's current machine baseline. |
+| `PUT /v1/machines/{id}/baseline`   | Set or replace the owner's machine baseline. |
 | `GET /v1/machines/{id}/telemetry`  | Get bounded historical observations.         |
 | `GET /v1/machines/{id}/alerts`     | Get alert history.                           |
 | `POST /v1/alerts/{id}/acknowledge` | Record that a user has seen an alert.        |
 
-Acknowledgement does not clear an ongoing condition. Detailed schemas,
-pagination, registration and errors remain to be specified.
+Only the machine owner can list or acknowledge its alerts. History is returned
+newest trigger time first. Acknowledgement records the first time the owner saw
+the alert, including after recovery, and leaves an ongoing condition active.
+Remaining endpoint schemas and errors, pagination, and registration are open.
 
 ## 7. Detection and operations
 
-For the MVP, an operator configures a baseline for each machine. The detector
-compares valid RMS observations with that baseline and opens or updates an alert
-for sustained deviation. Recovery and acknowledgement are separate. An
-offline device is not necessarily healthy or faulty. The comparison location,
-baseline fields and alert thresholds still need design.
+For the MVP, the machine owner configures the baseline using a finite,
+nonnegative RMS mean (`mean_rms_g`) and a finite, positive RMS standard
+deviation (`stddev_rms_g`). The API returns those fields with `machine_id`, the
+current `version` and the `updated_at` timestamp. Changing either value
+increments the version. A write of identical values preserves the version and
+timestamp.
+
+For a newly accepted `running` observation, the API computes
+`abs(vibration_rms_g - mean_rms_g) / stddev_rms_g`. By default, three consecutive
+observations with a z-score of at least 3 open an alert and three with a score
+of at most 2 recover it. A reading outside the range required by the current
+streak resets that count. An `unknown` observation also resets pending counts
+and leaves any active alert unchanged. A changed baseline version resets
+pending counts on the next accepted observation without closing an active alert.
+Exact telemetry retries leave detector state unchanged, and telemetry storage
+continues before a baseline is configured. An offline device is not necessarily
+healthy or faulty.
+
+The thresholds and required observation counts are configurable for the API.
+An alert keeps its initial trigger data and baseline snapshot while its last
+and peak z-scores advance with accepted running observations. Recovery records
+the observation and baseline version used. Each machine can have one active
+alert at a time.
 
 After the MVP, Analytics can analyze historical data and adjust a baseline
 using valid observations collected while the machine is known to be healthy and
@@ -250,8 +271,9 @@ learning periods and thresholds from that evidence and measure missed
 detections and false alerts.
 
 Alerts are displayed in the app. Push notifications and email are outside the
-initial scope. Thresholds, operating modes and baseline resets require further design. The service needs metrics and logs for device connectivity,
-ingestion, alerts and export lag. Detection performance must be evaluated
+initial scope. The service needs metrics and logs for device connectivity,
+ingestion, alerts and export lag. Detector thresholds, calibration and operating
+modes require field validation. Detection performance must be evaluated
 against representative real equipment before making accuracy claims.
 
 ## 8. Decisions and open questions
@@ -271,4 +293,4 @@ balancer. ClickHouse is the long-term telemetry store.
 - Secure provisioning, credential rotation and device enrollment.
 - User identity provider and organization roles.
 - Baseline calibration, operating modes and alert thresholds.
-- How Analytics writes baseline and alert state back to PostgreSQL.
+- Post-MVP API contract for versioned baseline adjustments proposed by Analytics.

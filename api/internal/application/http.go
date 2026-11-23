@@ -9,6 +9,7 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/alerts"
 	authhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/devices"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/machines"
@@ -52,6 +53,10 @@ func (a *Application) Routes() http.Handler {
 		owner.Post("/v1/machines", machines.NewCreate(a.createMachine).ServeHTTP)
 		owner.Get("/v1/machines", machines.NewList(a.listMachines).ServeHTTP)
 		owner.Get("/v1/machines/{id}", machines.NewDetail(a.machineDetail).ServeHTTP)
+		owner.Get("/v1/machines/{id}/baseline", machines.NewGetBaseline(a.getBaseline).ServeHTTP)
+		owner.Put("/v1/machines/{id}/baseline", machines.NewSetBaseline(a.setBaseline).ServeHTTP)
+		owner.Get("/v1/machines/{id}/alerts", alerts.NewList(a.listAlerts).ServeHTTP)
+		owner.Post("/v1/alerts/{id}/acknowledge", alerts.NewAcknowledge(a.acknowledgeAlert).ServeHTTP)
 	})
 
 	router.With(middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter)).
