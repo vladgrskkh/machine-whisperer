@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
+	"time"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
 )
@@ -14,6 +16,11 @@ import (
 const (
 	maxBatchSize = 1000
 	maxBodyBytes = 16 << 20
+)
+
+// time.Parse also accepts single-digit hours, comma fractions and overflowing offsets.
+var timestampPattern = regexp.MustCompile(
+	`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$`,
 )
 
 var errInvalidBatch = errors.New("invalid telemetry batch")
@@ -80,11 +87,12 @@ func decodeBatch(reader io.Reader) ([]domain.Event, error) {
 func decodeEvent(dec *json.Decoder) (domain.Event, error) {
 	var event domain.Event
 	var raw json.RawMessage
+	var receivedAt, observedAt string
 	err := object(dec, map[string]any{
 		"event_id":    &event.EventID,
 		"device_id":   &event.DeviceID,
 		"machine_id":  &event.MachineID,
-		"received_at": &event.ReceivedAt,
+		"received_at": &receivedAt,
 		"payload":     &raw,
 	})
 	if err != nil {
@@ -95,7 +103,7 @@ func decodeEvent(dec *json.Decoder) (domain.Event, error) {
 	err = object(json.NewDecoder(bytes.NewReader(raw)), map[string]any{
 		"schema_version":        &p.SchemaVersion,
 		"event_id":              &p.EventID,
-		"observed_at":           &p.ObservedAt,
+		"observed_at":           &observedAt,
 		"operating_state":       &p.OperatingState,
 		"vibration_rms_g":       &vibration,
 		"dominant_frequency_hz": &p.DominantFrequencyHz,
@@ -104,11 +112,28 @@ func decodeEvent(dec *json.Decoder) (domain.Event, error) {
 	if err != nil || vibration == nil {
 		return domain.Event{}, errInvalidBatch
 	}
+	event.ReceivedAt, err = parseTimestamp(receivedAt)
+	if err != nil {
+		return domain.Event{}, err
+	}
+	p.ObservedAt, err = parseTimestamp(observedAt)
+	if err != nil {
+		return domain.Event{}, err
+	}
 	p.VibrationRMSG = *vibration
 	if !event.Valid() {
 		return domain.Event{}, errInvalidBatch
 	}
+	event.ReceivedAt = event.ReceivedAt.UTC().Truncate(time.Microsecond)
+	p.ObservedAt = p.ObservedAt.UTC().Truncate(time.Microsecond)
 	return event, nil
+}
+
+func parseTimestamp(value string) (time.Time, error) {
+	if !timestampPattern.MatchString(value) {
+		return time.Time{}, errInvalidBatch
+	}
+	return time.Parse(time.RFC3339, value)
 }
 
 // Removing decoded fields rejects duplicate and incorrectly cased keys at each nesting level.

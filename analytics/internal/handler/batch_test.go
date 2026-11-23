@@ -7,11 +7,13 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/handler"
 )
 
@@ -102,4 +104,48 @@ func TestBatchRejectsInvalidRequestsBeforeWriting(t *testing.T) {
 	body := batch(event)
 	status, _ := post(t, srv, body+strings.Repeat(" ", (16<<20)-len(body)+1), bearer)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, status)
+}
+
+func TestBatchTimestamps(t *testing.T) {
+	const received = "2026-10-01T05:04:03.123456Z"
+	const observed = "2026-10-01T08:03:00.112233+03:00"
+	for _, tc := range []struct {
+		name       string
+		received   string
+		observed   string
+		wantStatus int
+	}{
+		{"escaped received", `2026-10-01T05:04:03.123456789\u005a`, observed, http.StatusNoContent},
+		{"escaped observed", received, `2026-10-01T05:03:00.112233789\u005a`, http.StatusNoContent},
+		{"numeric offsets", "2026-10-01T00:04:03.123456999-05:00", "2026-10-01T08:03:00.112233456+03:00", http.StatusNoContent},
+		{"invalid received offset minute", "2026-10-01T05:04:03+00:60", observed, http.StatusBadRequest},
+		{"invalid received offset hour", "2026-10-01T05:04:03-24:00", observed, http.StatusBadRequest},
+		{"invalid observed offset minute", received, "2026-10-01T05:03:00-00:60", http.StatusBadRequest},
+		{"invalid observed offset hour", received, "2026-10-01T05:03:00+24:00", http.StatusBadRequest},
+		{"single-digit hour", received, "2026-10-01T5:03:00Z", http.StatusBadRequest},
+		{"comma fractional separator", received, "2026-10-01T05:03:00,112233Z", http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			writer := NewMockBatchWriter(t)
+			writer.On("WriteBatch", mock.Anything, mock.Anything).Return(nil).Maybe()
+			srv := httptest.NewServer(handler.New(key, writer))
+			defer srv.Close()
+			body := strings.NewReplacer(received, tc.received, observed, tc.observed).Replace(batch(event))
+			status, _ := post(t, srv, body, bearer)
+			require.Equal(t, tc.wantStatus, status)
+			if tc.wantStatus == http.StatusBadRequest {
+				writer.AssertNumberOfCalls(t, "WriteBatch", 0)
+				return
+			}
+			require.Len(t, writer.Calls, 1)
+			events := writer.Calls[0].Arguments.Get(1).([]domain.Event)
+			require.Len(t, events, 1)
+			assert.Equal(t, time.Date(2026, time.October, 1, 5, 4, 3, 123456000, time.UTC), events[0].ReceivedAt)
+			assert.Equal(
+				t,
+				time.Date(2026, time.October, 1, 5, 3, 0, 112233000, time.UTC),
+				events[0].Payload.ObservedAt,
+			)
+		})
+	}
 }
