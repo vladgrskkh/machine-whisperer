@@ -29,7 +29,7 @@ var (
 type Repository interface {
 	LockActiveDeviceForTelemetry(ctx context.Context, deviceID, machineID string) error
 	LockMachineForTelemetry(ctx context.Context, machineID string) (*time.Time, time.Time, error)
-	DeleteExpiredTelemetryEvents(ctx context.Context, dbNow time.Time) error
+	DeleteExpiredTelemetryEvents(ctx context.Context, machineID, deviceID, eventID string, dbNow time.Time) error
 	FindTelemetryEvent(ctx context.Context, deviceID, eventID string) ([32]byte, bool, error)
 	InsertTelemetryEvent(ctx context.Context, event telemetry.Event) error
 	InsertTelemetryOutbox(ctx context.Context, event telemetry.Event) error
@@ -88,7 +88,13 @@ func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
 		return fmt.Errorf("encode normalized telemetry observation: %w", err)
 	}
 	event.PayloadHash = sha256.Sum256(payload)
-	if err = i.repository.DeleteExpiredTelemetryEvents(ctx, dbNow); err != nil {
+	if err = i.repository.DeleteExpiredTelemetryEvents(
+		ctx,
+		event.MachineID,
+		event.DeviceID,
+		event.EventID,
+		dbNow,
+	); err != nil {
 		return err
 	}
 

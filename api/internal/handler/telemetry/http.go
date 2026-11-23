@@ -64,7 +64,7 @@ func NewIngest(usecase Ingester) http.Handler {
 
 func decodeObservation(body io.Reader) (telemetry.Observation, error) {
 	var value telemetry.Observation
-	var observedAt *time.Time
+	var observedAt string
 	var vibrationRMS *float64
 	err := handler.DecodeObjectWithOptional(body, handler.MaxJSONBody, map[string]any{
 		"schema_version":  &value.SchemaVersion,
@@ -76,10 +76,13 @@ func decodeObservation(body io.Reader) (telemetry.Observation, error) {
 		"dominant_frequency_hz": &value.DominantFrequencyHz,
 		"current_rms_a":         &value.CurrentRMSA,
 	})
-	if err != nil || observedAt == nil || vibrationRMS == nil {
+	if err != nil || vibrationRMS == nil {
 		return telemetry.Observation{}, handler.ErrInvalidBody
 	}
-	value.ObservedAt = *observedAt
+	value.ObservedAt, err = time.Parse(time.RFC3339, observedAt)
+	if err != nil {
+		return telemetry.Observation{}, handler.ErrInvalidBody
+	}
 	value.VibrationRMSG = *vibrationRMS
 	return value, nil
 }

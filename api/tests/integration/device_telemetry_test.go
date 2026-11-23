@@ -209,11 +209,7 @@ func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testi
 			completed = true
 			return true
 		default:
-			var blocked bool
-			queryErr := f.pool.QueryRow(ctx, `SELECT EXISTS (
-				SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
-			)`, blockerPID).Scan(&blocked)
-			return queryErr == nil && blocked
+			return telemetryLockHasWaiter(ctx, f.pool, blockerPID)
 		}
 	}, 5*time.Second, 10*time.Millisecond)
 	require.NoError(t, tx.Commit(ctx))
@@ -300,6 +296,9 @@ func TestDeviceTelemetryIdenticalRetryIsIdempotent(t *testing.T) {
 		"operating_state":"running","observed_at":%q,"dominant_frequency_hz":0,"schema_version":1}`,
 		eventID, offset.Format(time.RFC3339Nano))
 	assert.Equal(t, http.StatusAccepted, f.post(t, retry).status)
+	escaped := strings.Replace(observationJSON(eventID, observed), `Z"`, `\u005a"`, 1)
+	escaped = strings.TrimSuffix(escaped, "}") + `,"dominant_frequency_hz":0}`
+	assert.Equal(t, http.StatusAccepted, f.post(t, escaped).status)
 	f.assertStored(t, 2, 2, &latest)
 
 	var payload string
@@ -322,6 +321,60 @@ func TestDeviceTelemetryConflictingEventIDReturnsConflict(t *testing.T) {
 	response := f.post(t, strings.Replace(body, "0.043", "0.044", 1))
 	assert.Equal(t, http.StatusConflict, response.status)
 	f.assertStored(t, 1, 1, &f.observed)
+}
+
+func seedExpiredTelemetryBacklog(t *testing.T, f telemetryFixture, observedAt time.Time) {
+	t.Helper()
+	_, err := f.pool.Exec(t.Context(), `INSERT INTO telemetry_events
+		(device_id,event_id,machine_id,observed_at,payload_hash,expires_at)
+		SELECT $1, gen_random_uuid(), $2, $3, $4, $5 FROM generate_series(1, 105)`,
+		f.device.DeviceID, f.machineID, observedAt, make([]byte, 32), observedAt.Add(30*24*time.Hour))
+	require.NoError(t, err)
+}
+
+func TestDeviceTelemetryCleanupIsBoundedAndMachineScoped(t *testing.T) {
+	t.Parallel()
+	f := setupDeviceTelemetry(t)
+	old := f.observed.Add(-30*24*time.Hour - time.Hour)
+	seedExpiredTelemetryBacklog(t, f, old)
+
+	otherMachine := createEnrollmentMachine(t, f.server, f.factory.AccessToken)
+	otherDevice := provisionEnrollment(t, f.server, f.factory.AccessToken)
+	claim := authHTTPRequest(t, f.server, http.MethodPost, claimPath,
+		claimBody(otherDevice, otherMachine), bearer(f.factory.AccessToken))
+	require.Equal(t, http.StatusOK, claim.status)
+	_, err := f.pool.Exec(t.Context(), insertTelemetryIdentity, otherDevice.DeviceID, uuid.NewString(),
+		otherMachine, old, make([]byte, 32), old.Add(30*24*time.Hour))
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusAccepted, f.post(t, observationJSON(uuid.NewString(), f.observed)).status)
+	var ownExpired, otherExpired int
+	require.NoError(t, f.pool.QueryRow(t.Context(), `SELECT
+		count(*) FILTER (WHERE machine_id=$1), count(*) FILTER (WHERE machine_id=$2)
+		FROM telemetry_events WHERE expires_at <= clock_timestamp()`, f.machineID, otherMachine).
+		Scan(&ownExpired, &otherExpired))
+	assert.Equal(t, 5, ownExpired)
+	assert.Equal(t, 1, otherExpired)
+}
+
+func TestDeviceTelemetryReusesExpiredSubmittedIDOutsideCleanupBatch(t *testing.T) {
+	t.Parallel()
+	f := setupDeviceTelemetry(t)
+	old := f.observed.Add(-30*24*time.Hour - time.Hour)
+	seedExpiredTelemetryBacklog(t, f, old)
+
+	eventID := uuid.NewString()
+	submittedOld := old.Add(time.Minute)
+	_, err := f.pool.Exec(t.Context(), insertTelemetryIdentity, f.device.DeviceID, eventID,
+		f.machineID, submittedOld, make([]byte, 32), submittedOld.Add(30*24*time.Hour))
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusAccepted, f.post(t, observationJSON(eventID, f.observed)).status)
+	var renewedAt time.Time
+	require.NoError(t, f.pool.QueryRow(t.Context(), `SELECT expires_at FROM telemetry_events
+		WHERE device_id=$1 AND event_id=$2`, f.device.DeviceID, eventID).Scan(&renewedAt))
+	assert.WithinDuration(t, f.observed.Add(30*24*time.Hour), renewedAt, 0)
+	f.assertStored(t, 6, 1, &f.observed)
 }
 
 func TestDeviceTelemetryOutboxKeyConflictReturnsConflict(t *testing.T) {

@@ -152,6 +152,59 @@ func TestTelemetryMachineCursor(t *testing.T) {
 	assert.Equal(t, []machine.Machine{owned}, ownedMachines)
 }
 
+func TestTelemetryMachineReceiptTimeIsSampledAfterLockWait(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	target, _ := enrollmentMachines(t, pool)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	blocker, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = blocker.Rollback(t.Context()) }()
+
+	var blockerPID int
+	require.NoError(t, blocker.QueryRow(ctx, "SELECT pg_backend_pid() FROM machines WHERE id=$1 FOR UPDATE",
+		target.ID).Scan(&blockerPID))
+	repository := telemetrypostgres.New()
+	manager := transactionpostgres.New(pool)
+	type result struct {
+		dbNow time.Time
+		err   error
+	}
+	results := make(chan result, 1)
+	go func() {
+		var dbNow time.Time
+		txErr := manager.WithinTransaction(ctx, func(txCtx context.Context) error {
+			_, sampled, lockErr := repository.LockMachineForTelemetry(txCtx, target.ID)
+			dbNow = sampled
+			return lockErr
+		})
+		results <- result{dbNow: dbNow, err: txErr}
+	}()
+	require.Eventually(t, func() bool {
+		return telemetryLockHasWaiter(ctx, pool, blockerPID)
+	}, 5*time.Second, 10*time.Millisecond)
+
+	var beforeRelease time.Time
+	require.NoError(t, blocker.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&beforeRelease))
+	require.NoError(t, blocker.Commit(ctx))
+	select {
+	case actual := <-results:
+		require.NoError(t, actual.err)
+		assert.False(t, actual.dbNow.Before(beforeRelease))
+	case <-ctx.Done():
+		t.Fatal("telemetry waiter did not finish after the machine lock was released")
+	}
+}
+
+func telemetryLockHasWaiter(ctx context.Context, pool *pgxpool.Pool, blockerPID int) bool {
+	var blocked bool
+	err := pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
+	)`, blockerPID).Scan(&blocked)
+	return err == nil && blocked
+}
+
 func TestTelemetryExpiredIdempotencyCleanup(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
@@ -171,14 +224,26 @@ func TestTelemetryExpiredIdempotencyCleanup(t *testing.T) {
 	}))
 
 	require.NoError(t, manager.WithinTransaction(ctx, func(ctx context.Context) error {
-		if err := repository.DeleteExpiredTelemetryEvents(ctx, expiry.Add(-time.Microsecond)); err != nil {
+		if err := repository.DeleteExpiredTelemetryEvents(
+			ctx,
+			active.MachineID,
+			active.DeviceID,
+			active.EventID,
+			expiry.Add(-time.Microsecond),
+		); err != nil {
 			return err
 		}
 		hash, exists, err := repository.FindTelemetryEvent(ctx, event.DeviceID, event.EventID)
 		assert.NoError(t, err)
 		assert.True(t, exists)
 		assert.Equal(t, event.PayloadHash, hash)
-		if err = repository.DeleteExpiredTelemetryEvents(ctx, expiry); err != nil {
+		if err = repository.DeleteExpiredTelemetryEvents(
+			ctx,
+			active.MachineID,
+			active.DeviceID,
+			active.EventID,
+			expiry,
+		); err != nil {
 			return err
 		}
 		_, exists, err = repository.FindTelemetryEvent(ctx, event.DeviceID, event.EventID)

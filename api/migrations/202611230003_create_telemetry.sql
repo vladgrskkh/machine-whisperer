@@ -11,8 +11,7 @@ CREATE TABLE telemetry_events (
     PRIMARY KEY (device_id, event_id)
 );
 
-CREATE INDEX telemetry_events_expiry_idx ON telemetry_events (expires_at);
-CREATE INDEX telemetry_events_machine_idx ON telemetry_events (machine_id);
+CREATE INDEX telemetry_events_machine_expiry_idx ON telemetry_events (machine_id, expires_at);
 
 CREATE TABLE telemetry_outbox (
     device_id uuid NOT NULL,

@@ -106,12 +106,24 @@ func (r *Repository) InsertTelemetryEvent(ctx context.Context, event telemetry.E
 	return nil
 }
 
-func (r *Repository) DeleteExpiredTelemetryEvents(ctx context.Context, dbNow time.Time) error {
+func (r *Repository) DeleteExpiredTelemetryEvents(
+	ctx context.Context,
+	machineID, deviceID, eventID string,
+	dbNow time.Time,
+) error {
 	tx := transaction.FromContext(ctx)
 	if tx == nil {
 		return errTransactionRequired
 	}
-	_, err := tx.Exec(ctx, `DELETE FROM telemetry_events WHERE expires_at <= $1`, dbNow)
+	// Check the submitted key separately so it can expire even when the batch fills up.
+	// Tuple IDs let PostgreSQL delete the selected rows directly.
+	_, err := tx.Exec(ctx, `DELETE FROM telemetry_events WHERE ctid = ANY(ARRAY(
+		SELECT ctid FROM telemetry_events WHERE device_id=$2 AND event_id=$3 AND expires_at <= $4
+		UNION ALL
+		(SELECT ctid FROM telemetry_events
+		 WHERE machine_id=$1 AND expires_at <= $4 AND (device_id,event_id) <> ($2,$3)
+		 ORDER BY expires_at LIMIT 100)
+	))`, machineID, deviceID, eventID, dbNow)
 	if err != nil {
 		return fmt.Errorf("delete expired telemetry events: %w", err)
 	}
