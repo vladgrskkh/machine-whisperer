@@ -37,7 +37,7 @@ Rate limiting runs before password hashing or refresh-token rotation. Configurat
 | --- | --- | --- |
 | `DATABASE_URL` | Required | PostgreSQL connection string |
 | `API_ADDRESS` | `:8080` | HTTP listen address |
-| `AUTH_RATE_LIMIT` | `30` | Attempts per client IP in each window |
+| `AUTH_RATE_LIMIT` | `30` | Auth and enrollment attempts per client IP in each window |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Window duration, using Go duration syntax |
 | `AUTH_RATE_LIMIT_MAX_CLIENTS` | `10000` | Maximum active client windows |
 | `TRUSTED_PROXY_CIDRS` | Empty | Comma-separated proxy network CIDRs |
@@ -113,9 +113,9 @@ Access JWTs use Ed25519 (`EdDSA`), a 15-minute lifetime and 30 seconds of clock
 skew. They require UUID `sub`, `sid`, `jti`, issuer `machine-whisperer`, audience
 `machine-whisperer-api`, issuance time and expiry.
 
-Signup, login and refresh share one IP request budget per API instance. Logout and
-`/me` are outside this budget. Rate-limit responses include `Retry-After` in
-seconds. The shared per-email failed-login limit is
+Signup, login, refresh, device provisioning and device claim share one IP request
+budget per API instance. Logout, `/me` and machine routes are outside this budget.
+Rate-limit responses include `Retry-After` in seconds. The shared per-email failed-login limit is
 tracked in [issue #4](https://github.com/vladgrskkh/machine-whisperer/issues/4).
 Additional configuration:
 
@@ -146,3 +146,57 @@ Retain old public keys until all their access tokens have expired, including the
 30-second skew allowance. Token-supplied paths or URLs never select keys.
 
 Complete client secure-token storage before public deployment.
+
+## Device enrollment
+
+A manufacturing station calls `POST /internal/v1/device-provisioning` over HTTPS
+using a user access JWT with the signed `device_provisioner` role. Restrict this
+route at ingress to the manufacturing network or station gateway. Missing or
+invalid JWTs return `401`. Authenticated users without the role receive `403`.
+
+Signup creates ordinary users. A trusted operator with database administration
+access can grant or revoke the role for a verified station account. The SQL
+below takes that account's UUID from the `provisioner_user_id` psql variable.
+
+```sql
+INSERT INTO user_roles (user_id, role)
+VALUES (:'provisioner_user_id'::uuid, 'device_provisioner')
+ON CONFLICT (user_id, role) DO NOTHING;
+
+DELETE FROM user_roles
+WHERE user_id = :'provisioner_user_id'::uuid AND role = 'device_provisioner';
+```
+
+Login and refresh load current assignments from PostgreSQL. Previously issued
+access tokens retain their signed roles until their 15-minute lifetime and
+30-second skew allowance end.
+
+The provisioning request needs only the bearer header. A successful response
+returns `201` with `device_id`, `api_key` and the QR object `claim_payload`. The
+station programs `api_key` into that unit's secure storage. Its format is
+`device_id.secret`, where the secret is 32 random bytes encoded as unpadded
+base64url. Print only the `claim_payload` JSON object on the QR label. Its three
+fields are `v` (integer `1`), `device_id` and `claim_code`. The independent
+claim code uses the same encoding and expires after `DEVICE_CLAIM_TTL`, a
+positive Go duration that defaults to `24h`.
+
+The API stores SHA-256 verifiers and sets `Cache-Control: no-store` on
+provisioning and claim responses. Exclude authorization headers, claim request
+bodies and provisioning responses from station and ingress logs. Keep the API
+key and QR claim code out of URLs. Discard the provisioning response after
+programming and labeling the unit.
+
+The enrollment and authentication IP counters are held in each API process. Configure a shared store before running multiple replicas. Redis-backed per-email login throttling is tracked separately in issue #4.
+
+Owner routes accept a user access JWT. `POST /v1/machines` takes `{"name":"Pump"}`
+and returns `201`. Names are trimmed and limited to 100 Unicode characters.
+`GET /v1/machines` lists the user's machines, and `GET /v1/machines/{id}` retrieves
+one. Machine objects contain `id`, `name` and `created_at`. A lookup outside the
+user's machines returns `404`.
+
+`POST /v1/devices/claim` takes JSON with `device_id` and `claim_code` from the QR
+object and the selected `machine_id`. A successful claim returns `200` with
+`device_id`, `machine_id` and `status: "claimed"`. The claim binds the device
+to the user's machine and consumes the code atomically. Unknown devices,
+incorrect or expired codes, revoked or already-claimed devices and unavailable
+machines all return `404 claim_unavailable`. Malformed requests return `400`.

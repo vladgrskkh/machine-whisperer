@@ -10,10 +10,15 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/credential"
+	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
+	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/machine"
 )
 
 const authStartupTimeout = 10 * time.Second
@@ -26,6 +31,11 @@ type Application struct {
 	refresh         *auth.Refresh
 	logout          *auth.Logout
 	me              *auth.Me
+	provision       *device.Provision
+	claim           *device.Claim
+	createMachine   *machine.Create
+	listMachines    *machine.List
+	machineDetail   *machine.Detail
 	verifier        *token.JWT
 	rateLimitConfig middleware.RateLimitConfig
 }
@@ -33,6 +43,13 @@ type Application struct {
 type Option func(context.Context, *Application) error
 
 func New(ctx context.Context, config Config, options ...Option) (*Application, error) {
+	claimTTL := config.Device.ClaimTTL
+	if claimTTL < 0 {
+		return nil, errInvalidClaimTTL
+	}
+	if claimTTL == 0 {
+		claimTTL = defaultClaimTTL
+	}
 	startupCtx, cancel := context.WithTimeout(ctx, authStartupTimeout)
 	defer cancel()
 	if startupCtx.Err() != nil {
@@ -84,8 +101,30 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
+	app.setupEnrollment(transactions, now, claimTTL)
 
 	return app, nil
+}
+
+func (a *Application) setupEnrollment(
+	transactions *transactionpostgres.Manager,
+	now func() time.Time,
+	claimTTL time.Duration,
+) {
+	devices := devicepostgres.New(a.pool)
+	machines := machinepostgres.New(a.pool)
+	a.provision = device.NewProvision(
+		devices,
+		token.IDs{},
+		credential.Generator{},
+		credential.Generator{},
+		now,
+		claimTTL,
+	)
+	a.claim = device.NewClaim(devices, transactions, now)
+	a.createMachine = machine.NewCreate(machines, token.IDs{}, now)
+	a.listMachines = machine.NewList(machines)
+	a.machineDetail = machine.NewDetail(machines)
 }
 
 func (a *Application) Close() {

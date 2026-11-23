@@ -25,7 +25,6 @@ type User struct {
 type Credentials struct {
 	UserID       string
 	PasswordHash string
-	Roles        []string
 }
 
 func ValidateCredentials(email, password string) (string, error) {

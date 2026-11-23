@@ -24,6 +24,7 @@ type TokenPair struct {
 
 type LoginRepository interface {
 	FindCredentialsByEmail(ctx context.Context, email string) (user.Credentials, error)
+	ListRoles(ctx context.Context, userID string) ([]string, error)
 }
 
 type PasswordVerifier interface {
@@ -106,10 +107,23 @@ func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, e
 	if unknown || !matches {
 		return TokenPair{}, ErrAuthenticationFailed
 	}
-	return u.createSession(ctx, credentials.UserID, credentials.Roles)
+	issuedAt := u.now().UTC()
+	roles, err := u.repository.ListRoles(ctx, credentials.UserID)
+	if err != nil {
+		return TokenPair{}, fmt.Errorf("load roles for access token: %w", err)
+	}
+	if err = ctx.Err(); err != nil {
+		return TokenPair{}, err
+	}
+	return u.createSession(ctx, credentials.UserID, roles, issuedAt)
 }
 
-func (u *Login) createSession(ctx context.Context, userID string, roles []string) (TokenPair, error) {
+func (u *Login) createSession(
+	ctx context.Context,
+	userID string,
+	roles []string,
+	issuedAt time.Time,
+) (TokenPair, error) {
 	id, err := u.ids.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate session ID: %w", err)
@@ -122,13 +136,12 @@ func (u *Login) createSession(ctx context.Context, userID string, roles []string
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
-	now := u.now().UTC()
 	claims := session.AccessClaims{
 		UserID:    userID,
 		SessionID: id,
 		JTI:       jti,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(accessLifetime),
+		IssuedAt:  issuedAt,
+		ExpiresAt: issuedAt.Add(accessLifetime),
 		Roles:     roles,
 	}
 	access, err := u.signer.Sign(ctx, claims)
@@ -136,11 +149,11 @@ func (u *Login) createSession(ctx context.Context, userID string, roles []string
 		return TokenPair{}, fmt.Errorf("sign access token: %w", err)
 	}
 	err = u.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
-		value := session.Session{ID: id, UserID: userID, CreatedAt: now, ExpiresAt: now.Add(sessionLifetime)}
+		value := session.Session{ID: id, UserID: userID, CreatedAt: issuedAt, ExpiresAt: issuedAt.Add(sessionLifetime)}
 		if insertErr := u.sessions.InsertSession(txCtx, value); insertErr != nil {
 			return fmt.Errorf("insert session: %w", insertErr)
 		}
-		token := session.RefreshToken{Hash: hash, SessionID: id, CreatedAt: now}
+		token := session.RefreshToken{Hash: hash, SessionID: id, CreatedAt: issuedAt}
 		if insertErr := u.sessions.InsertRefresh(txCtx, token); insertErr != nil {
 			return fmt.Errorf("insert refresh token: %w", insertErr)
 		}

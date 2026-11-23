@@ -23,3 +23,7 @@ func JSON(w http.ResponseWriter, status int, value any) {
 	// A disconnected client cannot receive an alternate response.
 	_ = json.NewEncoder(w).Encode(value)
 }
+
+func InternalError(w http.ResponseWriter) {
+	Error(w, http.StatusInternalServerError, "internal_error", "An internal error occurred")
+}

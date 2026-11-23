@@ -51,10 +51,8 @@ func (r *Repository) FindCredentialsByEmail(ctx context.Context, email string) (
 	if tx := transaction.FromContext(ctx); tx != nil {
 		queryRow = tx.QueryRow
 	}
-	err := queryRow(ctx, `SELECT u.id::text,u.password_hash,
-		ARRAY(SELECT role FROM user_roles WHERE user_id=u.id ORDER BY role)
-		FROM users u WHERE u.email=$1`, email).
-		Scan(&credentials.UserID, &credentials.PasswordHash, &credentials.Roles)
+	err := queryRow(ctx, `SELECT id::text,password_hash FROM users WHERE email=$1`, email).
+		Scan(&credentials.UserID, &credentials.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return user.Credentials{}, user.ErrNotFound
 	}

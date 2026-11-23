@@ -266,7 +266,7 @@ func TestLoginRepositoryLookupsJoinTransaction(t *testing.T) {
 		require.NoError(t, lookupErr)
 		assert.Equal(
 			t,
-			user.Credentials{UserID: created.ID, PasswordHash: "PHC fixture", Roles: []string{}},
+			user.Credentials{UserID: created.ID, PasswordHash: "PHC fixture"},
 			credentials,
 		)
 		return expected

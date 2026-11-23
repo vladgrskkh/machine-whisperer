@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
@@ -59,6 +60,88 @@ func (m *loginMocks) validCredentials() {
 		Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).
 		Once()
 	m.verifier.EXPECT().Verify(mock.Anything, loginPassword, "real PHC").Return(true, nil).Once()
+	m.repository.EXPECT().ListRoles(mock.Anything, userID).Return(nil, nil).Once()
+}
+
+func TestLoginSnapshotsRolesAfterVerificationBeforeIssuanceTime(t *testing.T) {
+	t.Parallel()
+	m := newLoginMocks(t)
+	base := m.now
+	revokedAt := base.Add(time.Second)
+	roles := []string{user.RoleDeviceProvisioner}
+	m.repository.EXPECT().
+		FindCredentialsByEmail(mock.Anything, loginEmail).
+		Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).
+		Once()
+	m.verifier.EXPECT().
+		Verify(mock.Anything, loginPassword, "real PHC").
+		RunAndReturn(func(context.Context, string, string) (bool, error) {
+			m.now = revokedAt
+			roles = nil
+			return true, nil
+		}).
+		Once()
+	m.repository.EXPECT().
+		ListRoles(mock.Anything, userID).
+		RunAndReturn(func(context.Context, string) ([]string, error) { return roles, nil }).
+		Once()
+	m.ids.EXPECT().Generate(mock.Anything).Return(sessionID, nil).Once()
+	m.ids.EXPECT().Generate(mock.Anything).Return(tokenID, nil).Once()
+	m.refresh.EXPECT().Generate(mock.Anything).Return("refresh secret", [32]byte{1}, nil).Once()
+	m.signer.EXPECT().
+		Sign(mock.Anything, session.AccessClaims{
+			UserID: userID, SessionID: sessionID, JTI: tokenID,
+			IssuedAt: revokedAt, ExpiresAt: revokedAt.Add(15 * time.Minute),
+			Roles: nil,
+		}).
+		Return("signed access", nil).
+		Once()
+	m.transactions.EXPECT().
+		WithinTransaction(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }).
+		Once()
+	m.sessions.EXPECT().InsertSession(mock.Anything, mock.Anything).Return(nil).Once()
+	m.sessions.EXPECT().InsertRefresh(mock.Anything, mock.Anything).Return(nil).Once()
+
+	pair, err := m.usecase().Login(t.Context(), loginEmail, loginPassword)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
+}
+
+func TestLoginAnchorsRoleLifetimeBeforeRoleRead(t *testing.T) {
+	t.Parallel()
+	m := newLoginMocks(t)
+	roleReadAt := m.now.Add(time.Second)
+	revokedAt := roleReadAt.Add(time.Second)
+	m.repository.EXPECT().FindCredentialsByEmail(mock.Anything, loginEmail).
+		Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).Once()
+	m.verifier.EXPECT().Verify(mock.Anything, loginPassword, "real PHC").
+		RunAndReturn(func(context.Context, string, string) (bool, error) {
+			m.now = roleReadAt
+			return true, nil
+		}).Once()
+	m.repository.EXPECT().ListRoles(mock.Anything, userID).
+		RunAndReturn(func(context.Context, string) ([]string, error) {
+			// The role query sees the grant, then a concurrent revoke commits before it returns.
+			m.now = revokedAt.Add(time.Second)
+			return []string{user.RoleDeviceProvisioner}, nil
+		}).Once()
+	m.ids.EXPECT().Generate(mock.Anything).Return(sessionID, nil).Once()
+	m.ids.EXPECT().Generate(mock.Anything).Return(tokenID, nil).Once()
+	m.refresh.EXPECT().Generate(mock.Anything).Return("refresh secret", [32]byte{1}, nil).Once()
+	m.signer.EXPECT().Sign(mock.Anything, mock.MatchedBy(func(claims session.AccessClaims) bool {
+		return assert.Equal(t, roleReadAt, claims.IssuedAt) &&
+			assert.Equal(t, []string{user.RoleDeviceProvisioner}, claims.Roles) &&
+			!claims.ExpiresAt.Add(30*time.Second).After(revokedAt.Add(15*time.Minute+30*time.Second))
+	})).Return("signed access", nil).Once()
+	m.transactions.EXPECT().WithinTransaction(mock.Anything, mock.Anything).
+		RunAndReturn(func(ctx context.Context, fn func(context.Context) error) error { return fn(ctx) }).Once()
+	m.sessions.EXPECT().InsertSession(mock.Anything, mock.Anything).Return(nil).Once()
+	m.sessions.EXPECT().InsertRefresh(mock.Anything, mock.Anything).Return(nil).Once()
+
+	pair, err := m.usecase().Login(t.Context(), loginEmail, loginPassword)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
 }
 
 func TestLoginCredentialOutcomes(t *testing.T) {
@@ -214,7 +297,9 @@ func TestLoginCancellation(t *testing.T) {
 		defer cancel()
 		m.repository.EXPECT().
 			FindCredentialsByEmail(mock.Anything, loginEmail).
-			Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).
+			Return(user.Credentials{
+				UserID: userID, PasswordHash: "real PHC",
+			}, nil).
 			Once()
 		m.verifier.EXPECT().
 			Verify(mock.Anything, loginPassword, "real PHC").

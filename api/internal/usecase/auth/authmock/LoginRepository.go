@@ -79,6 +79,65 @@ func (_c *LoginRepository_FindCredentialsByEmail_Call) RunAndReturn(run func(con
 	return _c
 }
 
+// ListRoles provides a mock function with given fields: ctx, userID
+func (_m *LoginRepository) ListRoles(ctx context.Context, userID string) ([]string, error) {
+	ret := _m.Called(ctx, userID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListRoles")
+	}
+
+	var r0 []string
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
+		return rf(ctx, userID)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) []string); ok {
+		r0 = rf(ctx, userID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, userID)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LoginRepository_ListRoles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRoles'
+type LoginRepository_ListRoles_Call struct {
+	*mock.Call
+}
+
+// ListRoles is a helper method to define mock.On call
+//   - ctx context.Context
+//   - userID string
+func (_e *LoginRepository_Expecter) ListRoles(ctx interface{}, userID interface{}) *LoginRepository_ListRoles_Call {
+	return &LoginRepository_ListRoles_Call{Call: _e.mock.On("ListRoles", ctx, userID)}
+}
+
+func (_c *LoginRepository_ListRoles_Call) Run(run func(ctx context.Context, userID string)) *LoginRepository_ListRoles_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *LoginRepository_ListRoles_Call) Return(_a0 []string, _a1 error) *LoginRepository_ListRoles_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LoginRepository_ListRoles_Call) RunAndReturn(run func(context.Context, string) ([]string, error)) *LoginRepository_ListRoles_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
 // NewLoginRepository creates a new instance of LoginRepository. It also registers a testing interface on the mock and a cleanup function to assert the mocks expectations.
 // The first argument is typically a *testing.T value.
 func NewLoginRepository(t interface {

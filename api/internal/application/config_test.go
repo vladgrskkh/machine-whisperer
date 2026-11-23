@@ -131,3 +131,25 @@ func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestDeviceClaimTTLConfiguration(t *testing.T) {
+	keyEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://test")
+	t.Setenv("DEVICE_CLAIM_TTL", "")
+	config, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 24*time.Hour, config.Device.ClaimTTL)
+
+	t.Setenv("DEVICE_CLAIM_TTL", "45m")
+	config, err = application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, 45*time.Minute, config.Device.ClaimTTL)
+
+	for _, value := range []string{"0", "-1m", "private-invalid-claim-ttl"} {
+		t.Setenv("DEVICE_CLAIM_TTL", value)
+		config, err = application.LoadConfig()
+		require.Error(t, err)
+		assert.Zero(t, config)
+		assert.NotContains(t, err.Error(), value)
+	}
+}

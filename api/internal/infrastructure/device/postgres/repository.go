@@ -59,6 +59,23 @@ func (r *Repository) FindForClaim(ctx context.Context, id string) (device.Device
 	return value, nil
 }
 
+func (r *Repository) LockMachineOwner(ctx context.Context, machineID, ownerUserID string) error {
+	tx := transaction.FromContext(ctx)
+	if tx == nil {
+		return device.ErrTransactionRequired
+	}
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id::text FROM machines WHERE id=$1 AND owner_user_id=$2 FOR SHARE`,
+		machineID, ownerUserID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return device.ErrClaimUnavailable
+	}
+	if err != nil {
+		return fmt.Errorf("lock machine for claim: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, at time.Time) error {
 	tx := transaction.FromContext(ctx)
 	if tx == nil {
