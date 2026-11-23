@@ -23,7 +23,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
 )
 
 type telemetryFixture struct {
@@ -235,6 +239,26 @@ func TestDeviceKeyCannotAuthenticateUserRoutes(t *testing.T) {
 		assert.JSONEq(t, authFailedJSON, response.body)
 	}
 	assert.Equal(t, http.StatusAccepted, f.post(t, observationJSON(uuid.NewString(), f.observed)).status)
+}
+
+func TestDeviceKeyRoleAuthorization(t *testing.T) {
+	t.Parallel()
+	f := setupDeviceTelemetry(t)
+	authenticate := middleware.DeviceToken(device.NewAuthenticator(devicepostgres.New(f.pool)))
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	routes := http.NewServeMux()
+	routes.Handle("/telemetry", authenticate(middleware.RequireRole("telemetry_writer")(next)))
+	routes.Handle("/provision", authenticate(middleware.RequireRole(user.RoleDeviceProvisioner)(next)))
+	server := httptest.NewServer(routes)
+	t.Cleanup(server.Close)
+
+	headers := bearer(f.device.APIKey)
+	accepted := authHTTPRequest(t, server, http.MethodPost, "/telemetry", "", headers)
+	assert.Equal(t, http.StatusNoContent, accepted.status)
+	forbidden := authHTTPRequest(t, server, http.MethodPost, "/provision", "", headers)
+	assert.Equal(t, http.StatusForbidden, forbidden.status)
 }
 
 func TestDeviceTelemetryValidatesV1Payload(t *testing.T) {

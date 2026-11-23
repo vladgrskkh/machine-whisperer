@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+const RoleTelemetryWriter = "telemetry_writer"
+
 var (
 	ErrInvalidCredentials  = errors.New("invalid device credentials")
 	ErrUnavailable         = errors.New("device unavailable")

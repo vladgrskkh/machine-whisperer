@@ -14,18 +14,6 @@ type DeviceAuthenticator interface {
 	Authenticate(ctx context.Context, deviceID string, secret device.Secret) (string, error)
 }
 
-type deviceIdentityKey struct{}
-
-type deviceIdentity struct {
-	deviceID  string
-	machineID string
-}
-
-func DeviceBinding(ctx context.Context) (string, string, bool) {
-	value, ok := ctx.Value(deviceIdentityKey{}).(deviceIdentity)
-	return value.deviceID, value.machineID, ok
-}
-
 func DeviceToken(authenticator DeviceAuthenticator) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -45,8 +33,13 @@ func DeviceToken(authenticator DeviceAuthenticator) func(http.Handler) http.Hand
 			case err != nil:
 				handler.InternalError(w)
 			default:
-				value := deviceIdentity{deviceID: deviceID, machineID: machineID}
-				next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, deviceIdentityKey{}, value)))
+				principal := Principal{
+					kind:      devicePrincipal,
+					subject:   deviceID,
+					roles:     []string{device.RoleTelemetryWriter},
+					machineID: machineID,
+				}
+				next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, principal)))
 			}
 		})
 	}

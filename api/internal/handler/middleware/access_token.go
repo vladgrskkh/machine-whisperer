@@ -18,35 +18,6 @@ type AccessVerifier interface {
 	Verify(context.Context, string) (session.AccessClaims, error)
 }
 
-type identityKey struct{}
-
-type identity struct {
-	userID string
-	roles  []string
-}
-
-func UserID(ctx context.Context) (string, bool) {
-	value, ok := ctx.Value(identityKey{}).(identity)
-	return value.userID, ok && value.userID != ""
-}
-
-func Roles(ctx context.Context) []string {
-	value, _ := ctx.Value(identityKey{}).(identity)
-	return slices.Clone(value.roles)
-}
-
-func RequireRole(role string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !slices.Contains(Roles(r.Context()), role) {
-				handler.Error(w, http.StatusForbidden, "forbidden", "Access denied")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
 func AccessToken(verifier AccessVerifier) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,8 +39,8 @@ func AccessToken(verifier AccessVerifier) func(http.Handler) http.Handler {
 				Unauthorized(w)
 				return
 			}
-			value := identity{userID: claims.UserID, roles: slices.Clone(claims.Roles)}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, identityKey{}, value)))
+			principal := Principal{kind: userPrincipal, subject: claims.UserID, roles: slices.Clone(claims.Roles)}
+			next.ServeHTTP(w, r.WithContext(withPrincipal(ctx, principal)))
 		})
 	}
 }
