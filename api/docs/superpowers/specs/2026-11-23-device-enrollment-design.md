@@ -34,7 +34,7 @@ The proposed approach separates the secret used for API authentication from the 
 
 1. Manufacturing tooling requests one device identity from an authenticated provisioning endpoint.
 2. The service creates a UUID device ID, generates a random 32-byte API secret and an independent random one-time claim code, and stores only SHA-256 verifiers for both. The unclaimed device row includes creation time and claim-code expiry.
-3. The provisioning station securely writes the API secret and device ID to that physical unit. It prints a QR containing a version, device ID and claim code. The raw API secret is never printed or included in the QR. The returned credential has the form device_id.secret. Provisioning output and logs do not retain either secret after the station completes the operation.
+3. The provisioning station authenticates as a device_provisioner user, requests the record, and securely writes the API secret and device ID to that physical unit. It prints a QR containing a version, device ID and claim code. The raw API secret is never printed or included in the QR. The returned credential has the form device_id.secret. Provisioning output and logs do not retain either secret after the station completes the operation.
 4. An authenticated user scans the QR. The app creates a machine if needed, then sends the device ID, claim code and machine ID to the claim endpoint.
 5. In one PostgreSQL transaction, the API verifies that the device is unclaimed, the claim code matches and remains valid, and the target machine belongs to the authenticated user. It marks the claim code consumed and binds the device to the machine. Repeated, expired or incorrect claims fail without revealing whether an arbitrary device ID exists.
 6. The device sends telemetry over HTTPS with Authorization: Bearer followed by device_id.secret. The device ID is public and selects the credential row. The secret is 32 random bytes encoded as unpadded base64url. The API hashes the decoded secret, compares it in constant time with the stored verifier, confirms the device is active and bound to the machine in the request path, then accepts data. The credential is never placed in a URL. Device API keys are rejected by user routes.
@@ -48,7 +48,7 @@ Proposed user endpoints:
 - POST /v1/machines creates a machine for the authenticated user.
 - POST /v1/devices/claim accepts device_id, claim_code and machine_id, returning only the public device identity and status.
 - GET /v1/machines and GET /v1/machines/{id} list or retrieve only machines owned by the authenticated user.
-- Device-provisioning endpoints are restricted to the manufacturing process and are not public mobile routes. The exact manufacturing authentication mechanism is the main open implementation decision.
+- Device-provisioning endpoints are restricted to the manufacturing process and are not public mobile routes. Provisioning is restricted to users whose database role is device_provisioner.
 
 Keep QR payloads versioned. Reject unknown versions and malformed/oversized input. The QR claim code is single-use, rate-limited, never logged, and never accepted as a telemetry API key. Claim responses do not return either secret. User responses do not expose key or claim verifiers.
 
@@ -80,7 +80,7 @@ Device key rotation creates a replacement credential for that device, updates th
 
 ## Open decisions
 
-- Manufacturing station authentication and network boundary.
+- How device_provisioner accounts are initially granted by trusted operators; role self-assignment is prohibited.
 - Claim-code length and expiration period.
 - Whether a machine must exist before claim or can be created in the same request.
 - Exact ESP32 variant, provisioning interface and flash-encryption/Secure-Boot recovery procedure.
