@@ -12,6 +12,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/devices"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/machines"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 )
 
@@ -51,6 +52,9 @@ func (a *Application) Routes() http.Handler {
 		owner.Get("/v1/machines", machines.NewList(a.listMachines).ServeHTTP)
 		owner.Get("/v1/machines/{id}", machines.NewDetail(a.machineDetail).ServeHTTP)
 	})
+
+	router.With(middleware.NoStore, middleware.DeviceToken(a.deviceAuth)).
+		Post("/v1/machines/{machine_id}/telemetry", telemetry.NewIngest(a.ingestTelemetry).ServeHTTP)
 
 	return router
 }

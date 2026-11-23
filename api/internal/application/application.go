@@ -16,11 +16,13 @@ import (
 	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
+	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/machine"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
 )
 
 const authStartupTimeout = 10 * time.Second
@@ -35,6 +37,8 @@ type Application struct {
 	me              *auth.Me
 	provision       *device.Provision
 	claim           *device.Claim
+	deviceAuth      *device.Authenticator
+	ingestTelemetry *telemetry.Ingest
 	createMachine   *machine.Create
 	listMachines    *machine.List
 	machineDetail   *machine.Detail
@@ -105,16 +109,19 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
-	app.setupEnrollment(transactions, claimTTL)
+	devices := devicepostgres.New(app.pool)
+	app.setupEnrollment(devices, transactions, claimTTL)
+	app.deviceAuth = device.NewAuthenticator(devices)
+	app.ingestTelemetry = telemetry.NewIngest(telemetrypostgres.New(), transactions)
 
 	return app, nil
 }
 
 func (a *Application) setupEnrollment(
+	devices *devicepostgres.Repository,
 	transactions *transactionpostgres.Manager,
 	claimTTL time.Duration,
 ) {
-	devices := devicepostgres.New(a.pool)
 	machines := machinepostgres.New(a.pool)
 	a.provision = device.NewProvision(
 		devices,

@@ -6,6 +6,8 @@ import (
 )
 
 var (
+	ErrInvalidCredentials  = errors.New("invalid device credentials")
+	ErrUnavailable         = errors.New("device unavailable")
 	ErrClaimUnavailable    = errors.New("device claim unavailable")
 	ErrConflict            = errors.New("device conflicts with an existing enrollment")
 	ErrTransactionRequired = errors.New("device claim requires a transaction")

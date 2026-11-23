@@ -200,3 +200,48 @@ object and the selected `machine_id`. A successful claim returns `200` with
 to the user's machine and consumes the code atomically. Unknown devices,
 incorrect or expired codes, revoked or already-claimed devices and unavailable
 machines all return `404 claim_unavailable`. Malformed requests return `400`.
+
+## Device telemetry
+
+A claimed sensor sends `POST /v1/machines/{machine_id}/telemetry` over HTTPS
+with one `Authorization: Bearer <device_id.secret>` header and a JSON body.
+Use the API key issued during provisioning. Keep it in the device's secure
+storage and out of URLs and logs. Exclude authorization headers and telemetry
+bodies from ingress logs. This route uses device credentials and owner routes
+use user access JWTs.
+
+```json
+{
+  "schema_version": 1,
+  "event_id": "a5b96d2a-5cb0-4f3b-9d64-f3f53de41071",
+  "observed_at": "2026-11-23T12:00:00Z",
+  "operating_state": "running",
+  "vibration_rms_g": 0.043,
+  "dominant_frequency_hz": null,
+  "current_rms_a": null
+}
+```
+
+Use a UUID for `event_id`, an RFC 3339 timestamp for `observed_at` and
+`running` or `unknown` for `operating_state`. Vibration RMS is required.
+Frequency and current may be omitted or set to `null`. Supply finite,
+non-negative numbers for all measurement values. The body limit is 8 KiB.
+Unknown keys, duplicate keys and trailing JSON are rejected.
+
+Generate one event ID per observation and reuse it with the same values on
+retry. The API compares timestamps at UTC microsecond precision and queues
+each accepted event once. Send new observations in nondecreasing timestamp
+order for the machine. PostgreSQL supplies the receipt time. The API accepts
+observations at most five minutes ahead of that time and strictly less than
+30 days old.
+
+| Status | Result |
+| --- | --- |
+| `202` | The event is durably queued for export or is an identical retry. The response body is empty. |
+| `400` | The machine ID or request body is invalid. |
+| `401` | Device credentials are missing or invalid. |
+| `404` | The device is unclaimed or revoked, or the machine is unavailable to the device. |
+| `409` | The event ID conflicts with a previous submission, the observation is out of order, or the timestamp is outside the acceptance window. |
+| `500` | An unexpected server error occurred. |
+
+Telemetry responses use `Cache-Control: no-store`.
