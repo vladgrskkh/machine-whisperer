@@ -8,6 +8,8 @@ import (
 	"unicode/utf8"
 )
 
+const RoleDeviceProvisioner = "device_provisioner"
+
 var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrNotFound           = errors.New("user not found")
@@ -18,6 +20,11 @@ type User struct {
 	ID        string
 	Email     string
 	CreatedAt time.Time
+}
+
+type Credentials struct {
+	UserID       string
+	PasswordHash string
 }
 
 func ValidateCredentials(email, password string) (string, error) {

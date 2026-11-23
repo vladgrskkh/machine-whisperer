@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -10,10 +12,15 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/credential"
+	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
+	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/machine"
 )
 
 const authStartupTimeout = 10 * time.Second
@@ -26,13 +33,26 @@ type Application struct {
 	refresh         *auth.Refresh
 	logout          *auth.Logout
 	me              *auth.Me
+	provision       *device.Provision
+	claim           *device.Claim
+	createMachine   *machine.Create
+	listMachines    *machine.List
+	machineDetail   *machine.Detail
 	verifier        *token.JWT
+	logger          *slog.Logger
 	rateLimitConfig middleware.RateLimitConfig
 }
 
 type Option func(context.Context, *Application) error
 
 func New(ctx context.Context, config Config, options ...Option) (*Application, error) {
+	claimTTL := config.Device.ClaimTTL
+	if claimTTL < 0 {
+		return nil, errInvalidClaimTTL
+	}
+	if claimTTL == 0 {
+		claimTTL = defaultClaimTTL
+	}
 	startupCtx, cancel := context.WithTimeout(ctx, authStartupTimeout)
 	defer cancel()
 	if startupCtx.Err() != nil {
@@ -56,7 +76,8 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("auth initialization failed")
 	}
 
-	app := &Application{verifier: signer, rateLimitConfig: config.RateLimits.IP}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	app := &Application{verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP}
 	for _, option := range options {
 		if err = option(ctx, app); err != nil {
 			app.Close()
@@ -81,11 +102,31 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		now,
 		dummy,
 	)
-	app.refresh = auth.NewRefresh(sessions, transactions, signer, token.Refresh{}, token.IDs{}, now)
+	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
+	app.setupEnrollment(transactions, claimTTL)
 
 	return app, nil
+}
+
+func (a *Application) setupEnrollment(
+	transactions *transactionpostgres.Manager,
+	claimTTL time.Duration,
+) {
+	devices := devicepostgres.New(a.pool)
+	machines := machinepostgres.New(a.pool)
+	a.provision = device.NewProvision(
+		devices,
+		token.IDs{},
+		credential.Generator{},
+		credential.Generator{},
+		claimTTL,
+	)
+	a.claim = device.NewClaim(devices, transactions)
+	a.createMachine = machine.NewCreate(machines, token.IDs{})
+	a.listMachines = machine.NewList(machines)
+	a.machineDetail = machine.NewDetail(machines)
 }
 
 func (a *Application) Close() {

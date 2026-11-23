@@ -23,38 +23,31 @@ func (_m *LoginRepository) EXPECT() *LoginRepository_Expecter {
 }
 
 // FindCredentialsByEmail provides a mock function with given fields: ctx, email
-func (_m *LoginRepository) FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error) {
+func (_m *LoginRepository) FindCredentialsByEmail(ctx context.Context, email string) (user.Credentials, error) {
 	ret := _m.Called(ctx, email)
 
 	if len(ret) == 0 {
 		panic("no return value specified for FindCredentialsByEmail")
 	}
 
-	var r0 user.User
-	var r1 string
-	var r2 error
-	if rf, ok := ret.Get(0).(func(context.Context, string) (user.User, string, error)); ok {
+	var r0 user.Credentials
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) (user.Credentials, error)); ok {
 		return rf(ctx, email)
 	}
-	if rf, ok := ret.Get(0).(func(context.Context, string) user.User); ok {
+	if rf, ok := ret.Get(0).(func(context.Context, string) user.Credentials); ok {
 		r0 = rf(ctx, email)
 	} else {
-		r0 = ret.Get(0).(user.User)
+		r0 = ret.Get(0).(user.Credentials)
 	}
 
-	if rf, ok := ret.Get(1).(func(context.Context, string) string); ok {
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
 		r1 = rf(ctx, email)
 	} else {
-		r1 = ret.Get(1).(string)
+		r1 = ret.Error(1)
 	}
 
-	if rf, ok := ret.Get(2).(func(context.Context, string) error); ok {
-		r2 = rf(ctx, email)
-	} else {
-		r2 = ret.Error(2)
-	}
-
-	return r0, r1, r2
+	return r0, r1
 }
 
 // LoginRepository_FindCredentialsByEmail_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'FindCredentialsByEmail'
@@ -76,12 +69,71 @@ func (_c *LoginRepository_FindCredentialsByEmail_Call) Run(run func(ctx context.
 	return _c
 }
 
-func (_c *LoginRepository_FindCredentialsByEmail_Call) Return(_a0 user.User, _a1 string, _a2 error) *LoginRepository_FindCredentialsByEmail_Call {
-	_c.Call.Return(_a0, _a1, _a2)
+func (_c *LoginRepository_FindCredentialsByEmail_Call) Return(_a0 user.Credentials, _a1 error) *LoginRepository_FindCredentialsByEmail_Call {
+	_c.Call.Return(_a0, _a1)
 	return _c
 }
 
-func (_c *LoginRepository_FindCredentialsByEmail_Call) RunAndReturn(run func(context.Context, string) (user.User, string, error)) *LoginRepository_FindCredentialsByEmail_Call {
+func (_c *LoginRepository_FindCredentialsByEmail_Call) RunAndReturn(run func(context.Context, string) (user.Credentials, error)) *LoginRepository_FindCredentialsByEmail_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// ListRoles provides a mock function with given fields: ctx, userID
+func (_m *LoginRepository) ListRoles(ctx context.Context, userID string) ([]string, error) {
+	ret := _m.Called(ctx, userID)
+
+	if len(ret) == 0 {
+		panic("no return value specified for ListRoles")
+	}
+
+	var r0 []string
+	var r1 error
+	if rf, ok := ret.Get(0).(func(context.Context, string) ([]string, error)); ok {
+		return rf(ctx, userID)
+	}
+	if rf, ok := ret.Get(0).(func(context.Context, string) []string); ok {
+		r0 = rf(ctx, userID)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]string)
+		}
+	}
+
+	if rf, ok := ret.Get(1).(func(context.Context, string) error); ok {
+		r1 = rf(ctx, userID)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
+}
+
+// LoginRepository_ListRoles_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ListRoles'
+type LoginRepository_ListRoles_Call struct {
+	*mock.Call
+}
+
+// ListRoles is a helper method to define mock.On call
+//   - ctx context.Context
+//   - userID string
+func (_e *LoginRepository_Expecter) ListRoles(ctx interface{}, userID interface{}) *LoginRepository_ListRoles_Call {
+	return &LoginRepository_ListRoles_Call{Call: _e.mock.On("ListRoles", ctx, userID)}
+}
+
+func (_c *LoginRepository_ListRoles_Call) Run(run func(ctx context.Context, userID string)) *LoginRepository_ListRoles_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(context.Context), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *LoginRepository_ListRoles_Call) Return(_a0 []string, _a1 error) *LoginRepository_ListRoles_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_c *LoginRepository_ListRoles_Call) RunAndReturn(run func(context.Context, string) ([]string, error)) *LoginRepository_ListRoles_Call {
 	_c.Call.Return(run)
 	return _c
 }

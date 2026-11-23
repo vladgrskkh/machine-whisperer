@@ -16,6 +16,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth/authmock"
 )
@@ -35,7 +36,15 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 	t.Run("signer", func(t *testing.T) {
 		signer := authmock.NewAccessSigner(t)
 		signer.EXPECT().Sign(mock.Anything, mock.Anything).Return("", expected).Once()
-		refresh := auth.NewRefresh(repository, manager, signer, token.Refresh{}, token.IDs{}, now)
+		refresh := auth.NewRefresh(
+			repository,
+			userpostgres.New(fixture.pool),
+			manager,
+			signer,
+			token.Refresh{},
+			token.IDs{},
+			now,
+		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
 		assert.Empty(t, pair)
@@ -44,7 +53,15 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 	t.Run("entropy", func(t *testing.T) {
 		entropy := authmock.NewRefreshGenerator(t)
 		entropy.EXPECT().Generate(mock.Anything).Return("", [32]byte{}, expected).Once()
-		refresh := auth.NewRefresh(repository, manager, fixture.signer, entropy, token.IDs{}, now)
+		refresh := auth.NewRefresh(
+			repository,
+			userpostgres.New(fixture.pool),
+			manager,
+			fixture.signer,
+			entropy,
+			token.IDs{},
+			now,
+		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
 		assert.Empty(t, pair)
@@ -53,7 +70,15 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 	t.Run("ID generation", func(t *testing.T) {
 		ids := authmock.NewIDGenerator(t)
 		ids.EXPECT().Generate(mock.Anything).Return("", expected).Once()
-		refresh := auth.NewRefresh(repository, manager, fixture.signer, token.Refresh{}, ids, now)
+		refresh := auth.NewRefresh(
+			repository,
+			userpostgres.New(fixture.pool),
+			manager,
+			fixture.signer,
+			token.Refresh{},
+			ids,
+			now,
+		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
 		assert.Empty(t, pair)
@@ -63,7 +88,15 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 		entropy := authmock.NewRefreshGenerator(t)
 		entropy.EXPECT().Generate(mock.Anything).
 			Return(original.RefreshToken, refreshHash(t, original.RefreshToken), nil).Once()
-		refresh := auth.NewRefresh(repository, manager, fixture.signer, entropy, token.IDs{}, now)
+		refresh := auth.NewRefresh(
+			repository,
+			userpostgres.New(fixture.pool),
+			manager,
+			fixture.signer,
+			entropy,
+			token.IDs{},
+			now,
+		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		requirePGCode(t, err, pgerrcode.UniqueViolation)
 		assert.Empty(t, pair)
@@ -81,7 +114,15 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 					return err
 				})
 			}).Once()
-		refresh := auth.NewRefresh(repository, transactions, fixture.signer, token.Refresh{}, token.IDs{}, now)
+		refresh := auth.NewRefresh(
+			repository,
+			userpostgres.New(fixture.pool),
+			transactions,
+			fixture.signer,
+			token.Refresh{},
+			token.IDs{},
+			now,
+		)
 		pair, err := refresh.Refresh(ctx, original.RefreshToken)
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, pair)
@@ -139,4 +180,20 @@ func TestRefreshAndLogoutLookupFailure(t *testing.T) {
 	requirePGCode(t, err, pgerrcode.UndefinedTable)
 	assert.Empty(t, pair)
 	requirePGCode(t, newLogout(fixture, now).Logout(t.Context(), original.RefreshToken), pgerrcode.UndefinedTable)
+}
+
+func TestRefreshRoleLookupFailureRollsBack(t *testing.T) {
+	t.Parallel()
+	fixture := loginFixture(t)
+	original := startRefreshSession(t, fixture)
+	id := verifyRefreshAccess(t, fixture, original).SessionID
+	before := readRefreshSession(t, fixture.pool, id)
+	_, err := fixture.pool.Exec(t.Context(), "ALTER TABLE user_roles RENAME TO user_roles_unavailable")
+	require.NoError(t, err)
+
+	refresh := newRefresh(fixture, func() time.Time { return fixture.now.Add(time.Second) })
+	pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
+	requirePGCode(t, err, pgerrcode.UndefinedTable)
+	assert.Empty(t, pair)
+	assert.Equal(t, before, readRefreshSession(t, fixture.pool, id))
 }

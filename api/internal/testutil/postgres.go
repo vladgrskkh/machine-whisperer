@@ -59,8 +59,15 @@ func Postgres(t *testing.T) *pgxpool.Pool {
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
-	db := stdlib.OpenDB(*config.ConnConfig)
-	defer db.Close()
+	_, err = PostgresMigrations(t, pool).Up(ctx)
+	require.NoError(t, err)
+	return pool
+}
+
+func PostgresMigrations(t *testing.T, pool *pgxpool.Pool) *goose.Provider {
+	t.Helper()
+	db := stdlib.OpenDBFromPool(pool)
+	t.Cleanup(func() { assertCleanup(t, db.Close()) })
 	_, filename, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 	provider, err := goose.NewProvider(
@@ -69,9 +76,7 @@ func Postgres(t *testing.T) *pgxpool.Pool {
 		os.DirFS(filepath.Join(filepath.Dir(filename), "../../migrations")),
 	)
 	require.NoError(t, err)
-	_, err = provider.Up(ctx)
-	require.NoError(t, err)
-	return pool
+	return provider
 }
 
 func assertCleanup(t *testing.T, err error) {

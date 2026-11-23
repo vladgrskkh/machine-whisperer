@@ -16,6 +16,7 @@ import (
 type Config struct {
 	Database   DatabaseConfig
 	Auth       AuthConfig
+	Device     DeviceConfig
 	RateLimits RateLimitsConfig
 }
 
@@ -30,6 +31,14 @@ type AuthConfig struct {
 	Now            func() time.Time
 }
 
+type DeviceConfig struct {
+	ClaimTTL time.Duration
+}
+
+const defaultClaimTTL = 24 * time.Hour
+
+var errInvalidClaimTTL = errors.New("DEVICE_CLAIM_TTL must be a positive duration")
+
 type RateLimitsConfig struct {
 	IP middleware.RateLimitConfig
 }
@@ -37,6 +46,7 @@ type RateLimitsConfig struct {
 type environmentConfig struct {
 	Database   databaseEnvironmentConfig
 	Auth       authEnvironmentConfig
+	Device     deviceEnvironmentConfig
 	RateLimits rateLimitsEnvironmentConfig
 }
 
@@ -48,6 +58,10 @@ type authEnvironmentConfig struct {
 	SigningKeyID   string `env:"AUTH_SIGNING_KEY_ID"`
 	SigningKeyFile string `env:"AUTH_SIGNING_KEY_FILE"`
 	VerifyKeysFile string `env:"AUTH_VERIFY_KEYS_FILE"`
+}
+
+type deviceEnvironmentConfig struct {
+	ClaimTTL time.Duration `env:"DEVICE_CLAIM_TTL" envDefault:"24h"`
 }
 
 type rateLimitsEnvironmentConfig struct {
@@ -75,6 +89,7 @@ func LoadConfig() (Config, error) {
 			SigningKeyFile: settings.Auth.SigningKeyFile,
 			VerifyKeysFile: settings.Auth.VerifyKeysFile,
 		},
+		Device: DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
 		RateLimits: RateLimitsConfig{
 			IP: middleware.RateLimitConfig{
 				Limit:      settings.RateLimits.IPLimit,
@@ -99,6 +114,9 @@ func LoadConfig() (Config, error) {
 }
 
 func validateConfig(config Config) error {
+	if config.Device.ClaimTTL <= 0 {
+		return errInvalidClaimTTL
+	}
 	if config.Database.URL == "" {
 		return errors.New("DATABASE_URL is required")
 	}

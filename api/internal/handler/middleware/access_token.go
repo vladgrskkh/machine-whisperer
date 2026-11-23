@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -19,9 +20,31 @@ type AccessVerifier interface {
 
 type identityKey struct{}
 
+type identity struct {
+	userID string
+	roles  []string
+}
+
 func UserID(ctx context.Context) (string, bool) {
-	id, ok := ctx.Value(identityKey{}).(string)
-	return id, ok && id != ""
+	value, ok := ctx.Value(identityKey{}).(identity)
+	return value.userID, ok && value.userID != ""
+}
+
+func Roles(ctx context.Context) []string {
+	value, _ := ctx.Value(identityKey{}).(identity)
+	return slices.Clone(value.roles)
+}
+
+func RequireRole(role string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !slices.Contains(Roles(r.Context()), role) {
+				handler.Error(w, http.StatusForbidden, "forbidden", "Access denied")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func AccessToken(verifier AccessVerifier) func(http.Handler) http.Handler {
@@ -29,28 +52,29 @@ func AccessToken(verifier AccessVerifier) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			values := r.Header.Values("Authorization")
 			if len(values) != 1 {
-				unauthorized(w)
+				Unauthorized(w)
 				return
 			}
 			scheme, raw, ok := strings.Cut(values[0], " ")
 			if !ok || !strings.EqualFold(scheme, "Bearer") || len(raw) == 0 || len(raw) > maxBearerBytes ||
 				strings.ContainsAny(raw, " \t\r\n,") {
-				unauthorized(w)
+				Unauthorized(w)
 				return
 			}
 			ctx, cancel := context.WithTimeout(r.Context(), accessTimeout)
 			defer cancel()
 			claims, err := verifier.Verify(ctx, raw)
 			if err != nil {
-				unauthorized(w)
+				Unauthorized(w)
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, identityKey{}, claims.UserID)))
+			value := identity{userID: claims.UserID, roles: slices.Clone(claims.Roles)}
+			next.ServeHTTP(w, r.WithContext(context.WithValue(ctx, identityKey{}, value)))
 		})
 	}
 }
 
-func unauthorized(w http.ResponseWriter) {
+func Unauthorized(w http.ResponseWriter) {
 	w.Header().Set("WWW-Authenticate", "Bearer")
 	handler.Error(w, http.StatusUnauthorized, "authentication_failed", "Authentication failed")
 }

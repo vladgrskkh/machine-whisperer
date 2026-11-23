@@ -262,16 +262,19 @@ func TestLoginRepositoryLookupsJoinTransaction(t *testing.T) {
 		current, lookupErr := repository.FindByID(ctx, created.ID)
 		require.NoError(t, lookupErr)
 		assert.Equal(t, created, current)
-		credentials, hash, lookupErr := repository.FindCredentialsByEmail(ctx, created.Email)
+		credentials, lookupErr := repository.FindCredentialsByEmail(ctx, created.Email)
 		require.NoError(t, lookupErr)
-		assert.Equal(t, created, credentials)
-		assert.Equal(t, "PHC fixture", hash)
+		assert.Equal(
+			t,
+			user.Credentials{UserID: created.ID, PasswordHash: "PHC fixture"},
+			credentials,
+		)
 		return expected
 	})
 	require.ErrorIs(t, err, expected)
 	_, err = repository.FindByID(t.Context(), id)
 	assert.ErrorIs(t, err, user.ErrNotFound)
-	_, hash, err := repository.FindCredentialsByEmail(t.Context(), "pending@example.com")
+	credentials, err := repository.FindCredentialsByEmail(t.Context(), "pending@example.com")
 	assert.ErrorIs(t, err, user.ErrNotFound)
-	assert.Empty(t, hash)
+	assert.Empty(t, credentials)
 }

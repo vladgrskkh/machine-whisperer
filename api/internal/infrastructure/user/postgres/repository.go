@@ -45,23 +45,21 @@ func (r *Repository) Create(ctx context.Context, email, passwordHash string) (us
 	return created, nil
 }
 
-func (r *Repository) FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error) {
-	account := user.User{}
-	var hash string
+func (r *Repository) FindCredentialsByEmail(ctx context.Context, email string) (user.Credentials, error) {
+	var credentials user.Credentials
 	queryRow := r.pool.QueryRow
 	if tx := transaction.FromContext(ctx); tx != nil {
 		queryRow = tx.QueryRow
 	}
-	err := queryRow(ctx, `SELECT id::text,email,created_at,password_hash FROM users WHERE email=$1`, email).
-		Scan(&account.ID, &account.Email, &account.CreatedAt, &hash)
+	err := queryRow(ctx, `SELECT id::text,password_hash FROM users WHERE email=$1`, email).
+		Scan(&credentials.UserID, &credentials.PasswordHash)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return user.User{}, "", user.ErrNotFound
+		return user.Credentials{}, user.ErrNotFound
 	}
 	if err != nil {
-		return user.User{}, "", fmt.Errorf("find user credentials: %w", err)
+		return user.Credentials{}, fmt.Errorf("find user credentials: %w", err)
 	}
-	account.CreatedAt = account.CreatedAt.UTC()
-	return account, hash, nil
+	return credentials, nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, id string) (user.User, error) {

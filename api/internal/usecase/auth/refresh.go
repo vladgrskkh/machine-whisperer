@@ -20,8 +20,13 @@ type RefreshRepository interface {
 	RevokeSession(ctx context.Context, sessionID string, at time.Time) error
 }
 
+type RefreshRoleRepository interface {
+	ListRoles(ctx context.Context, userID string) ([]string, error)
+}
+
 type Refresh struct {
 	repository   RefreshRepository
+	roles        RefreshRoleRepository
 	transactions TransactionManager
 	signer       AccessSigner
 	refresh      RefreshGenerator
@@ -31,6 +36,7 @@ type Refresh struct {
 
 func NewRefresh(
 	repository RefreshRepository,
+	roles RefreshRoleRepository,
 	transactions TransactionManager,
 	signer AccessSigner,
 	refresh RefreshGenerator,
@@ -39,6 +45,7 @@ func NewRefresh(
 ) *Refresh {
 	return &Refresh{
 		repository:   repository,
+		roles:        roles,
 		transactions: transactions,
 		signer:       signer,
 		refresh:      refresh,
@@ -98,14 +105,23 @@ func (u *Refresh) rotate(ctx context.Context, value session.Session, hash [32]by
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate refresh token: %w", err)
 	}
+	if err = u.repository.ConsumeRefresh(ctx, hash, now); err != nil {
+		return TokenPair{}, fmt.Errorf("consume current refresh token: %w", err)
+	}
+	roles, err := u.roles.ListRoles(ctx, value.UserID)
+	if err != nil {
+		return TokenPair{}, fmt.Errorf("load roles for access token: %w", err)
+	}
 	access, err := u.signer.Sign(ctx, session.AccessClaims{
-		UserID: value.UserID, SessionID: value.ID, JTI: jti, IssuedAt: now, ExpiresAt: now.Add(accessLifetime),
+		UserID:    value.UserID,
+		SessionID: value.ID,
+		JTI:       jti,
+		IssuedAt:  now,
+		ExpiresAt: now.Add(accessLifetime),
+		Roles:     roles,
 	})
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("sign access token: %w", err)
-	}
-	if err = u.repository.ConsumeRefresh(ctx, hash, now); err != nil {
-		return TokenPair{}, fmt.Errorf("consume current refresh token: %w", err)
 	}
 	successor := session.RefreshToken{Hash: successorHash, SessionID: value.ID, CreatedAt: now}
 	if err = u.repository.InsertRefresh(ctx, successor); err != nil {
