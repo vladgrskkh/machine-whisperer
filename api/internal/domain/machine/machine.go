@@ -11,8 +11,9 @@ var (
 )
 
 type Machine struct {
-	ID          string
-	OwnerUserID string
-	Name        string
-	CreatedAt   time.Time
+	ID                      string
+	OwnerUserID             string
+	Name                    string
+	CreatedAt               time.Time
+	LastTelemetryObservedAt *time.Time
 }
