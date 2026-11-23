@@ -56,7 +56,7 @@ func (m *loginMocks) usecase() *auth.Login {
 func (m *loginMocks) validCredentials() {
 	m.repository.EXPECT().
 		FindCredentialsByEmail(mock.Anything, loginEmail).
-		Return(user.User{ID: userID, Email: loginEmail}, "real PHC", nil).
+		Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).
 		Once()
 	m.verifier.EXPECT().Verify(mock.Anything, loginPassword, "real PHC").Return(true, nil).Once()
 }
@@ -81,7 +81,7 @@ func TestLoginCredentialOutcomes(t *testing.T) {
 			m := newLoginMocks(t)
 			m.repository.EXPECT().
 				FindCredentialsByEmail(mock.Anything, loginEmail).
-				Return(user.User{ID: userID, Email: loginEmail}, tc.hash, tc.lookupErr).
+				Return(user.Credentials{UserID: userID, PasswordHash: tc.hash}, tc.lookupErr).
 				Once()
 			if tc.lookupErr == nil || errors.Is(tc.lookupErr, user.ErrNotFound) {
 				m.verifier.EXPECT().
@@ -214,7 +214,7 @@ func TestLoginCancellation(t *testing.T) {
 		defer cancel()
 		m.repository.EXPECT().
 			FindCredentialsByEmail(mock.Anything, loginEmail).
-			Return(user.User{ID: userID}, "real PHC", nil).
+			Return(user.Credentials{UserID: userID, PasswordHash: "real PHC"}, nil).
 			Once()
 		m.verifier.EXPECT().
 			Verify(mock.Anything, loginPassword, "real PHC").

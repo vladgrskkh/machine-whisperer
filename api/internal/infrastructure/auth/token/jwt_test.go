@@ -53,11 +53,37 @@ func TestJWTSignAndVerify(t *testing.T) {
 	assert.Equal(t, claims.UserID, values["sub"])
 	assert.Equal(t, claims.SessionID, values["sid"])
 	assert.Equal(t, claims.JTI, values["jti"])
+	assert.Equal(t, []any{}, values["roles"])
 	assert.InDelta(t, now.Unix(), values["iat"], 0)
 	assert.InDelta(t, now.Add(15*time.Minute).Unix(), values["exp"], 0)
 	actual, err := adapter.Verify(t.Context(), raw)
 	require.NoError(t, err)
+	claims.Roles = []string{}
 	assert.Equal(t, claims, actual)
+}
+
+func TestJWTRejectsMalformedRoles(t *testing.T) {
+	t.Parallel()
+	keys, now, claims := fixture(t)
+	adapter, err := token.NewJWT(keys, func() time.Time { return now })
+	require.NoError(t, err)
+	for _, tt := range []struct {
+		name  string
+		roles any
+	}{
+		{"string", "device_provisioner"},
+		{"null", nil},
+		{"null entry", []any{nil}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			values := mapClaims(claims)
+			values["roles"] = tt.roles
+			actual, verifyErr := adapter.Verify(t.Context(), signed(t, keys, values, jwt.SigningMethodEdDSA, "active"))
+			assert.ErrorIs(t, verifyErr, token.ErrInvalidToken)
+			assert.Empty(t, actual)
+		})
+	}
 }
 
 func mapClaims(claims session.AccessClaims) jwt.MapClaims {
@@ -93,6 +119,8 @@ func signed(t *testing.T, keys token.Keys, values jwt.MapClaims, method jwt.Sign
 func TestJWTValidation(t *testing.T) {
 	t.Parallel()
 	keys, now, claims := fixture(t)
+	// mapClaims deliberately omits roles, as access tokens issued before enrollment did.
+	claims.Roles = []string{}
 	tests := []struct {
 		name   string
 		change func(jwt.MapClaims)
