@@ -41,9 +41,18 @@ type telemetryFixture struct {
 
 func setupDeviceTelemetry(t *testing.T, options ...application.Option) telemetryFixture {
 	t.Helper()
+	return setupDeviceTelemetryWithConfig(t, authConfig(t), options...)
+}
+
+func setupDeviceTelemetryWithConfig(
+	t *testing.T,
+	config application.Config,
+	options ...application.Option,
+) telemetryFixture {
+	t.Helper()
 	pool := testutil.Postgres(t)
 	options = append([]application.Option{application.WithPool(pool)}, options...)
-	app, err := application.New(t.Context(), authConfig(t), options...)
+	app, err := application.New(t.Context(), config, options...)
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	server := httptest.NewServer(app.Routes())

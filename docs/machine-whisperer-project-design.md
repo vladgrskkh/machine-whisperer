@@ -94,8 +94,9 @@ thresholds and availability targets after load testing.
 ## 3. Data and delivery
 
 PostgreSQL stores users, organizations, device credential verifiers, machine
-configuration, event IDs, detector state and alerts. An alert is an operational record
-with a machine, severity, time, condition and acknowledgement status.
+configuration, event IDs, detector state and alerts. An alert records the machine,
+trigger observation and baseline snapshot, last and peak z-scores, and
+recovery details and the first acknowledgement timestamp when available.
 
 ClickHouse stores the full telemetry history for charts and analysis. At one
 observation per minute, 100 devices produce around 144,000 records per day,

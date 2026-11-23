@@ -62,7 +62,7 @@ func (d *Detector) Observe(ctx context.Context, event telemetry.Event) error {
 		if state.Active == nil {
 			changedAlert = d.detectAlert(event, baseline, &state, z)
 		} else {
-			changedAlert = d.updateAlert(event, &state, z)
+			changedAlert = d.updateAlert(event, baseline, &state, z)
 		}
 	}
 	if state == previous && changedAlert == nil {
@@ -99,7 +99,9 @@ func (d *Detector) detectAlert(
 	}
 }
 
-func (d *Detector) updateAlert(event telemetry.Event, state *DetectorState, z float64) *alert.Alert {
+func (d *Detector) updateAlert(
+	event telemetry.Event, baseline machine.Baseline, state *DetectorState, z float64,
+) *alert.Alert {
 	last := min(z, math.MaxFloat64)
 	changed := &alert.Alert{
 		ID:         state.Active.ID,
@@ -107,7 +109,9 @@ func (d *Detector) updateAlert(event telemetry.Event, state *DetectorState, z fl
 		LastZScore: last,
 		PeakZScore: max(last, state.Active.PeakZScore),
 	}
-	if z > d.settings.RecoveryZThreshold {
+	// Division can round a nonzero deviation to zero.
+	threshold := d.settings.RecoveryZThreshold
+	if z > threshold || (threshold == 0 && event.VibrationRMSG != baseline.MeanRMSG) {
 		state.PendingRecoveryCount = 0
 		return changed
 	}

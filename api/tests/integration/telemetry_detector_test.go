@@ -14,6 +14,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 )
 
 type alertResponse struct {
@@ -242,6 +244,32 @@ func TestTelemetryDetectorInclusiveThresholds(t *testing.T) {
 	f.readings(t, 8, 14)
 	assert.NotNil(t, f.latestAlert(t).RecoveredAt)
 	assert.InDelta(t, 2.0, f.latestAlert(t).LastZScore, 0)
+}
+
+func TestTelemetryDetectorZeroRecoveryThresholdRequiresExactMean(t *testing.T) {
+	t.Parallel()
+	config := authConfig(t)
+	config.Detector = application.DetectorConfig{
+		AlertZThreshold: 3, RecoveryZThreshold: 0,
+		AlertSustainedObservations: 3, RecoverySustainedObservations: 3,
+	}
+	f := detectorFixture{setupDeviceTelemetryWithConfig(t, config)}
+	readMachineBaseline(t, authHTTPRequest(t, f.server, http.MethodPut, machinesPath+"/"+f.machineID+"/baseline",
+		`{"mean_rms_g":0,"stddev_rms_g":1e300}`, bearer(f.factory.AccessToken)))
+
+	f.readings(t, 0, 4e300, 4e300, 4e300)
+	require.Nil(t, f.latestAlert(t).RecoveredAt)
+	f.readings(t, 3, 0, 0)
+	f.readings(t, 5, 1e-30, 1e-30, 1e-30)
+	require.Nil(t, f.latestAlert(t).RecoveredAt, "nonzero deviation whose score underflows")
+
+	f.readings(t, 8, 0, 0)
+	require.Nil(t, f.latestAlert(t).RecoveredAt)
+	recovery := f.readings(t, 10, 0)
+	recovered := f.latestAlert(t)
+	require.NotNil(t, recovered.RecoveredAt)
+	require.NotNil(t, recovered.RecoveryEventID)
+	assert.Equal(t, recovery, *recovered.RecoveryEventID)
 }
 
 func TestTelemetryDetectorIdenticalBaselinePreservesCounters(t *testing.T) {
