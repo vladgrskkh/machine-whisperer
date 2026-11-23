@@ -44,9 +44,9 @@
 
 Models: Machine{ID,OwnerUserID,Name string; CreatedAt time.Time}; Device{ID string; MachineID *string; KeyVerifier,ClaimVerifier [32]byte; ClaimExpiresAt time.Time; ClaimedAt,RevokedAt *time.Time; CreatedAt time.Time}. Credential and ClaimPayload are transient transport types and never persisted.
 
-- [ ] Write failing real-PostgreSQL tests for required fields, UUID/FK ownership, unique verifier, 32-byte hashes, cascades and consuming the claim verifier.
+- [ ] Write failing tests for JWT roles array, legacy roleless token compatibility and PostgreSQL user_roles defaults/constraints and trusted assignment/revocation. Write failing real-PostgreSQL storage tests for UUID/FK ownership, unique verifier, 32-byte hashes, cascades and consuming claim verifier.
 - [ ] Implement reversible migration for user_roles with user_id, constrained role value device_provisioner, primary key (user_id, role), and user-delete cascade. Ordinary users have no privileged role row. Add the separate reversible machines/devices migration. Devices have nullable machine_id before claim. Add owner/listing and claim-expiry indexes. Never store raw API keys or claim codes.
-- [ ] Implement parameterized, transaction-aware repositories. Claim is a conditional update requiring unclaimed and unexpired state, verifies machine ownership, writes machine_id/claimed_at, clears claim verifier and checks one affected row. Map missing/conflict to domain sentinels.
+- [ ] Implement user role repository and include role assignments in user credential lookup. Update token.AccessClaims/signing/verification to carry the roles array while accepting existing roleless JWTs as an empty array. Ensure login and refresh load current role rows when issuing tokens. Implement machine/device repositories with transaction context. Claim is a conditional update requiring unclaimed and unexpired state, verifies machine ownership, writes machine_id/claimed_at, clears claim verifier and checks one affected row. Map missing/conflict to domain sentinels.
 - [ ] Run focused Testcontainers storage tests and lint. Commit feat: add machine and device storage. Fresh review must approve ownership, constraints and transaction behavior before Task 2.
 
 ## Task 2: Factory provisioning and owner claim

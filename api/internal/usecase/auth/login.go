@@ -23,7 +23,7 @@ type TokenPair struct {
 }
 
 type LoginRepository interface {
-	FindCredentialsByEmail(ctx context.Context, email string) (user.User, string, error)
+	FindCredentialsByEmail(ctx context.Context, email string) (user.Credentials, error)
 }
 
 type PasswordVerifier interface {
@@ -88,15 +88,15 @@ func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, e
 	if err = ctx.Err(); err != nil {
 		return TokenPair{}, err
 	}
-	account, hash, err := u.repository.FindCredentialsByEmail(ctx, canonical)
+	credentials, err := u.repository.FindCredentialsByEmail(ctx, canonical)
 	unknown := errors.Is(err, user.ErrNotFound)
 	if err != nil && !unknown {
 		return TokenPair{}, fmt.Errorf("find login user: %w", err)
 	}
 	if unknown {
-		hash = u.dummyHash
+		credentials.PasswordHash = u.dummyHash
 	}
-	matches, err := u.verifier.Verify(ctx, password, hash)
+	matches, err := u.verifier.Verify(ctx, password, credentials.PasswordHash)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("verify login password: %w", err)
 	}
@@ -106,10 +106,10 @@ func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, e
 	if unknown || !matches {
 		return TokenPair{}, ErrAuthenticationFailed
 	}
-	return u.createSession(ctx, account.ID)
+	return u.createSession(ctx, credentials.UserID, credentials.Roles)
 }
 
-func (u *Login) createSession(ctx context.Context, userID string) (TokenPair, error) {
+func (u *Login) createSession(ctx context.Context, userID string, roles []string) (TokenPair, error) {
 	id, err := u.ids.Generate(ctx)
 	if err != nil {
 		return TokenPair{}, fmt.Errorf("generate session ID: %w", err)
@@ -129,6 +129,7 @@ func (u *Login) createSession(ctx context.Context, userID string) (TokenPair, er
 		JTI:       jti,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(accessLifetime),
+		Roles:     roles,
 	}
 	access, err := u.signer.Sign(ctx, claims)
 	if err != nil {

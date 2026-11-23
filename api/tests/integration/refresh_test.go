@@ -17,6 +17,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
@@ -201,7 +202,7 @@ func nextLoginSession(t *testing.T, fixture loginFixtures) auth.TokenPair {
 
 func newRefresh(fixture loginFixtures, now func() time.Time) *auth.Refresh {
 	return auth.NewRefresh(
-		sessionpostgres.New(fixture.pool), transactionpostgres.New(fixture.pool),
+		sessionpostgres.New(fixture.pool), userpostgres.New(fixture.pool), transactionpostgres.New(fixture.pool),
 		fixture.signer, token.Refresh{}, token.IDs{}, now,
 	)
 }

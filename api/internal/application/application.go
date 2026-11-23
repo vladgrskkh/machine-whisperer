@@ -81,7 +81,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		now,
 		dummy,
 	)
-	app.refresh = auth.NewRefresh(sessions, transactions, signer, token.Refresh{}, token.IDs{}, now)
+	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
 

@@ -3,7 +3,9 @@ package token
 import (
 	"context"
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -39,7 +41,17 @@ type JWT struct {
 type accessClaims struct {
 	jwt.RegisteredClaims
 
-	SessionID string `json:"sid"`
+	SessionID string    `json:"sid"`
+	Roles     roleClaim `json:"roles"`
+}
+
+type roleClaim []string
+
+func (roles *roleClaim) UnmarshalJSON(raw []byte) error {
+	if err := json.Unmarshal(raw, (*[]string)(roles)); err != nil || *roles == nil {
+		return ErrInvalidToken
+	}
+	return nil
 }
 
 func NewJWT(keys Keys, now func() time.Time) (*JWT, error) {
@@ -67,7 +79,7 @@ func (j *JWT) Sign(ctx context.Context, claims session.AccessClaims) (string, er
 	value := accessClaims{RegisteredClaims: jwt.RegisteredClaims{
 		Issuer: issuer, Subject: claims.UserID, Audience: jwt.ClaimStrings{audience},
 		IssuedAt: jwt.NewNumericDate(claims.IssuedAt), ExpiresAt: jwt.NewNumericDate(claims.ExpiresAt), ID: claims.JTI,
-	}, SessionID: claims.SessionID}
+	}, SessionID: claims.SessionID, Roles: append(roleClaim{}, claims.Roles...)}
 	tok := jwt.NewWithClaims(jwt.SigningMethodEdDSA, value)
 	tok.Header["kid"] = j.keys.SigningKeyID
 	raw, err := tok.SignedString(j.keys.SigningKey)
@@ -108,6 +120,7 @@ func (j *JWT) Verify(ctx context.Context, raw string) (session.AccessClaims, err
 		JTI:       value.ID,
 		IssuedAt:  value.IssuedAt.Time.UTC(),
 		ExpiresAt: value.ExpiresAt.Time.UTC(),
+		Roles:     append([]string{}, value.Roles...),
 	}
 	if !validClaims(claims) {
 		return session.AccessClaims{}, ErrInvalidToken
@@ -120,6 +133,7 @@ func (j *JWT) Verify(ctx context.Context, raw string) (session.AccessClaims, err
 
 func validClaims(claims session.AccessClaims) bool {
 	return validUUID(claims.UserID) && validUUID(claims.SessionID) && validUUID(claims.JTI) &&
+		!slices.Contains(claims.Roles, "") &&
 		claims.IssuedAt.Unix() > 0 &&
 		claims.ExpiresAt.Sub(claims.IssuedAt) == accessLifetime
 }

@@ -23,4 +23,5 @@ type RefreshToken struct {
 type AccessClaims struct {
 	UserID, SessionID, JTI string
 	IssuedAt, ExpiresAt    time.Time
+	Roles                  []string
 }

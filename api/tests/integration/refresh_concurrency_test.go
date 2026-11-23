@@ -17,6 +17,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth/authmock"
 )
@@ -162,6 +163,7 @@ func refreshOperation(
 	return func(ctx context.Context, transactions auth.TransactionManager) (auth.TokenPair, error) {
 		refresh := auth.NewRefresh(
 			sessionpostgres.New(fixture.pool),
+			userpostgres.New(fixture.pool),
 			transactions,
 			signer,
 			token.Refresh{},
