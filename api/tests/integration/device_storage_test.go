@@ -74,9 +74,8 @@ func TestEnrollmentMigrationsCanBeReapplied(t *testing.T) {
 	pool := testutil.Postgres(t)
 	ctx := t.Context()
 	provider := testutil.PostgresMigrations(t, pool)
-	_, err := provider.Down(ctx)
-	require.NoError(t, err)
-	_, err = provider.Down(ctx)
+	const sessionsMigration = 202611100002
+	_, err := provider.DownTo(ctx, sessionsMigration)
 	require.NoError(t, err)
 
 	const tables = `SELECT to_regclass('users') IS NOT NULL,to_regclass('sessions') IS NOT NULL,

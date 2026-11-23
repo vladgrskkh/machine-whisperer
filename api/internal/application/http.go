@@ -7,11 +7,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/httplog/v3"
 
+	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	authhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/devices"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/machines"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 )
 
@@ -51,6 +53,9 @@ func (a *Application) Routes() http.Handler {
 		owner.Get("/v1/machines", machines.NewList(a.listMachines).ServeHTTP)
 		owner.Get("/v1/machines/{id}", machines.NewDetail(a.machineDetail).ServeHTTP)
 	})
+
+	router.With(middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter)).
+		Post("/v1/machines/{machine_id}/telemetry", telemetry.NewIngest(a.ingestTelemetry).ServeHTTP)
 
 	return router
 }

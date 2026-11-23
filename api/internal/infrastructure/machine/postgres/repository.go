@@ -44,7 +44,7 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerUserID string) ([]mac
 	if tx := transaction.FromContext(ctx); tx != nil {
 		query = tx.Query
 	}
-	rows, err := query(ctx, `SELECT id::text,owner_user_id::text,name,created_at
+	rows, err := query(ctx, `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
 		FROM machines WHERE owner_user_id=$1 ORDER BY created_at DESC,id DESC`, ownerUserID)
 	if err != nil {
 		return nil, fmt.Errorf("list owner machines: %w", err)
@@ -63,8 +63,10 @@ func (r *Repository) FindByOwner(ctx context.Context, ownerUserID, machineID str
 	if tx := transaction.FromContext(ctx); tx != nil {
 		queryRow = tx.QueryRow
 	}
-	value, err := scanMachine(queryRow(ctx, `SELECT id::text,owner_user_id::text,name,created_at
-		FROM machines WHERE owner_user_id=$1 AND id=$2`, ownerUserID, machineID))
+	value, err := scanMachine(
+		queryRow(ctx, `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
+		FROM machines WHERE owner_user_id=$1 AND id=$2`, ownerUserID, machineID),
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return machine.Machine{}, machine.ErrNotFound
 	}
@@ -76,9 +78,18 @@ func (r *Repository) FindByOwner(ctx context.Context, ownerUserID, machineID str
 
 func scanMachine(row pgx.Row) (machine.Machine, error) {
 	var value machine.Machine
-	if err := row.Scan(&value.ID, &value.OwnerUserID, &value.Name, &value.CreatedAt); err != nil {
+	if err := row.Scan(
+		&value.ID,
+		&value.OwnerUserID,
+		&value.Name,
+		&value.CreatedAt,
+		&value.LastTelemetryObservedAt,
+	); err != nil {
 		return machine.Machine{}, err
 	}
 	value.CreatedAt = value.CreatedAt.UTC()
+	if value.LastTelemetryObservedAt != nil {
+		*value.LastTelemetryObservedAt = value.LastTelemetryObservedAt.UTC()
+	}
 	return value, nil
 }

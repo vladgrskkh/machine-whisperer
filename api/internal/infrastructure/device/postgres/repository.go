@@ -35,6 +35,22 @@ func (r *Repository) Create(ctx context.Context, value device.Device) error {
 	return nil
 }
 
+func (r *Repository) FindForAuthentication(ctx context.Context, deviceID string) (device.Device, error) {
+	var value device.Device
+	var keyVerifier []byte
+	err := r.pool.QueryRow(ctx, `SELECT machine_id::text,key_verifier,revoked_at FROM devices WHERE id=$1`, deviceID).
+		Scan(&value.MachineID, &keyVerifier, &value.RevokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return device.Device{}, device.ErrInvalidCredentials
+	}
+	if err != nil {
+		return device.Device{}, fmt.Errorf("find device for authentication: %w", err)
+	}
+	value.ID = deviceID
+	copy(value.KeyVerifier[:], keyVerifier)
+	return value, nil
+}
+
 // FindForClaim locks the verifier until its use case commits or rolls back the claim.
 func (r *Repository) FindForClaim(ctx context.Context, id string) (device.Device, error) {
 	tx := transaction.FromContext(ctx)
