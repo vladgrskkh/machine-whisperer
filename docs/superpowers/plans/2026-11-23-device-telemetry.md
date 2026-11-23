@@ -91,7 +91,7 @@ The migration adds `machines.last_telemetry_observed_at`; `telemetry_events` sto
 
 ### Final review fix wave
 
-- [x] Add real-HTTP/Testcontainers coverage `TestDeviceTelemetryExpiryCleanupIsMachineScopedAndBounded` and `TestDeviceTelemetryEscapedObservedAtIsAccepted`, plus a storage lock-wait test proving `LockMachineForTelemetry` samples database time after obtaining the lock.
+- [x] Add real-HTTP/Testcontainers coverage `TestDeviceTelemetryCleanupIsBoundedAndMachineScoped`; verify escaped timestamp retry behavior in `TestDeviceTelemetryIdenticalRetryIsIdempotent`; and add `TestTelemetryMachineReceiptTimeIsSampledAfterLockWait` proving `LockMachineForTelemetry` samples database time after obtaining the lock.
 - [x] Reproduce the cross-machine cleanup, escaped-string timestamp and post-lock-clock gaps before fixing them.
 - [x] Scope idempotency cleanup to the locked machine, cap each batch at 100 rows, return/handle the submitted identity's `expires_at` explicitly, and decode `observed_at` as a JSON string before RFC3339 parsing.
 - [x] Run the focused regressions, full serial Testcontainers suite, unit tests, build and lint; obtain a scoped re-review.
