@@ -11,9 +11,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
-	"github.com/vladgrskkh/machine-whisperer/analytics/internal/handler"
-	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
 )
 
 const (
@@ -29,14 +28,14 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	conn, err := clickhouse.Open(ctx, cfg.ClickHouse)
+	app, err := application.New(ctx, cfg, application.WithClickHouse(cfg.ClickHouse))
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
+	defer app.Close()
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           handler.New(cfg.IngestKey, clickhouse.NewWriter(conn)),
+		Handler:           app.Routes(),
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 		ReadHeaderTimeout: headerTimeout,
 		ReadTimeout:       readTimeout,

@@ -1,4 +1,4 @@
-package handler
+package telemetry
 
 import (
 	"bytes"
@@ -25,13 +25,12 @@ var timestampPattern = regexp.MustCompile(
 
 var errInvalidBatch = errors.New("invalid telemetry batch")
 
-type BatchWriter interface {
-	WriteBatch(ctx context.Context, events []domain.Event) error
+type BatchIngester interface {
+	Execute(ctx context.Context, events []domain.Event) error
 }
 
-func New(key string, writer BatchWriter) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /internal/v1/telemetry-batches", requireKey(key, func(w http.ResponseWriter, r *http.Request) {
+func NewBatch(ingest BatchIngester) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reader := http.MaxBytesReader(w, r.Body, maxBodyBytes)
 		events, err := decodeBatch(reader)
 		_, oversized := errors.AsType[*http.MaxBytesError](err)
@@ -40,13 +39,12 @@ func New(key string, writer BatchWriter) http.Handler {
 			http.Error(w, "batch too large", http.StatusRequestEntityTooLarge)
 		case err != nil:
 			http.Error(w, "invalid telemetry batch", http.StatusBadRequest)
-		case writer.WriteBatch(r.Context(), events) != nil:
+		case ingest.Execute(r.Context(), events) != nil:
 			http.Error(w, "telemetry storage unavailable", http.StatusServiceUnavailable)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
-	return mux
+	})
 }
 
 func decodeBatch(reader io.Reader) ([]domain.Event, error) {

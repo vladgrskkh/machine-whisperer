@@ -6,6 +6,11 @@ one synchronous ClickHouse insert per batch, and returns HTTP 204 after
 ClickHouse acknowledges it. A storage failure returns HTTP 503 so the relay
 can retry.
 
+The application registers the batch route with bearer authentication and wires
+the telemetry handler to the batch-ingest use case and ClickHouse repository.
+The application opens the runtime ClickHouse connection at startup and closes
+it at shutdown. The standalone migration command uses its own connection.
+
 ## Run the service
 
 Run these commands from `analytics/`. Provide credentials through the

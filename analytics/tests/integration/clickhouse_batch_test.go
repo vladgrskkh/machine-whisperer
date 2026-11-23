@@ -16,8 +16,8 @@ import (
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
-	"github.com/vladgrskkh/machine-whisperer/analytics/internal/handler"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
 )
 
@@ -58,7 +58,10 @@ func TestClickHouseBatch(t *testing.T) {
 	conn, err := clickhouse.Open(ctx, cfg)
 	require.NoError(t, err)
 	defer conn.Close()
-	srv := httptest.NewServer(handler.New("fixture-key", clickhouse.NewWriter(conn)))
+	app, err := application.New(ctx, config.Config{IngestKey: "fixture-key"}, application.WithClickHouse(cfg))
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+	srv := httptest.NewServer(app.Routes())
 	defer srv.Close()
 	const body = `{"events":[` + firstEvent + "," + secondEvent + `]}`
 	status, reply := post(t, srv, body)
@@ -124,6 +127,11 @@ func TestClickHouseBatch(t *testing.T) {
 	status, reply = post(t, srv, body)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "fixture_reject")
+
+	app.Close()
+	// This event satisfies the constraint, so a failure here verifies that the runtime connection was closed.
+	status, _ = post(t, srv, `{"events":[`+secondEvent+`]}`)
+	assert.Equal(t, http.StatusServiceUnavailable, status)
 }
 
 func post(t *testing.T, srv *httptest.Server, body string) (int, string) {
