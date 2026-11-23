@@ -36,10 +36,11 @@ across API replicas.
 2. **Authenticate, store the event and its outbox item atomically in
    PostgreSQL.** ClickHouse delivery can retry independently after acceptance.
    This follows the proposed data-delivery architecture and is recommended.
-3. **Add detector updates to the ingestion transaction.** This keeps the
-   project design's initial transaction boundary, but introduces an unvalidated
-   detector before firmware and machine data exist. Defer detector state until
-   a separate design validates its input and thresholds.
+3. **Detector scope.** Keep the telemetry endpoint limited to accepting and
+   storing measurements. The MVP detector is a separate feature using
+   operator-configured baselines; specify whether the API or Analytics compares
+   observations and persists alert state in its own design. Automatic baseline
+   learning or adjustment from history is post-MVP.
 
 ## Proposed behavior
 
@@ -129,13 +130,12 @@ failures.
 
 ### Detector scope
 
-The project design's detector update means using each accepted RMS observation
-to update the machine's baseline and sustained-deviation state, and creating or
-updating an alert when the threshold remains crossed. The project design puts
-that update in the same transaction as event acceptance and outbox insertion.
-Per the user's direction, detector state and alerts are deferred until the
-telemetry feed and thresholds can be validated against real equipment. This PR
-records accepted telemetry but does not produce anomaly alerts.
+This telemetry-ingestion PR only accepts and stores telemetry; detector state
+and alerts are a separate MVP feature. The MVP uses operator-configured
+per-machine baselines for comparison. Whether the API compares measurements
+during ingestion or Analytics compares after ClickHouse storage remains a
+separate design decision. Automatic per-machine baseline learning or adjustment
+from accumulated history is post-MVP.
 
 ### Logging
 
@@ -145,7 +145,8 @@ device keys, claim codes or telemetry values.
 
 ## Proposed defaults for review
 
-The user chose to defer detector updates. Other proposed defaults are a five
-minute future-clock allowance, equal timestamps as valid, a 30-day event retry
-window, semantic retry equality after normalization, and v1 operating states
-`running` and `unknown`. Review this design before implementation.
+This telemetry-ingestion PR defers detector updates. Other proposed defaults
+are a five-minute future-clock allowance, equal timestamps as valid, a 30-day
+event retry window, semantic retry equality after normalization, and v1
+operating states `running` and `unknown`. Review this design before
+implementation.

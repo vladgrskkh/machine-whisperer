@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,31 +22,28 @@ const (
 	shutdownTimeout   = 10 * time.Second
 )
 
-func run(ctx context.Context, address string, handler http.Handler) error {
+func run(ctx context.Context, address string, handler http.Handler, runWorkers func(context.Context)) error {
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout}
-	done := make(chan struct{})
-	shutdownDone := make(chan struct{})
-	defer close(done)
-	go func() {
-		defer close(shutdownDone)
-		select {
-		case <-ctx.Done():
-			shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-			defer cancel()
-			if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
-				slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("shutdown failed", "error", shutdownErr)
-				_ = server.Close()
-			}
-		case <-done:
+	ctx, cancel := context.WithCancel(ctx)
+	var background sync.WaitGroup
+	background.Go(func() { runWorkers(ctx) })
+	background.Go(func() {
+		<-ctx.Done()
+		shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+		defer stop()
+		if shutdownErr := server.Shutdown(shutdownCtx); shutdownErr != nil {
+			slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("shutdown failed", "error", shutdownErr)
+			_ = server.Close()
 		}
-	}()
+	})
 	err = server.Serve(listener)
+	cancel()
+	background.Wait()
 	if errors.Is(err, http.ErrServerClosed) {
-		<-shutdownDone
 		return nil
 	}
 	if err != nil {
@@ -65,7 +63,7 @@ func serve(ctx context.Context, address string) error {
 		return err
 	}
 	defer app.Close()
-	return run(ctx, address, app.Routes())
+	return run(ctx, address, app.Routes(), app.RunWorkers)
 }
 
 func main() {

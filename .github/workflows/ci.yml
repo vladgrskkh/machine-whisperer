@@ -57,3 +57,21 @@ jobs:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
       - run: make test-integration
+
+  analytics:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: analytics
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: analytics/go.mod
+          cache-dependency-path: analytics/go.sum
+      - run: make build test test-integration
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.12.2
+          working-directory: analytics
+          args: --config ../api/.golangci.yml --build-tags=integration --timeout=5m

@@ -3,6 +3,7 @@ package application
 import (
 	"errors"
 	"net/netip"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type Config struct {
 	Auth       AuthConfig
 	Device     DeviceConfig
 	RateLimits RateLimitsConfig
+	Relay      RelayConfig
 }
 
 type DatabaseConfig struct {
@@ -43,11 +45,26 @@ type RateLimitsConfig struct {
 	IP middleware.RateLimitConfig
 }
 
+type RelayConfig struct {
+	AnalyticsURL    string        `env:"ANALYTICS_URL"`
+	AnalyticsAPIKey string        `env:"ANALYTICS_INGEST_API_KEY"`
+	HTTPTimeout     time.Duration `env:"OUTBOX_HTTP_TIMEOUT"      envDefault:"30s"`
+	BatchSize       int           `env:"OUTBOX_BATCH_SIZE"        envDefault:"1000"`
+	PollInterval    time.Duration `env:"OUTBOX_POLL_INTERVAL"     envDefault:"1s"`
+	Lease           time.Duration `env:"OUTBOX_LEASE"             envDefault:"2m"`
+	RetryBase       time.Duration `env:"OUTBOX_RETRY_BASE"        envDefault:"1s"`
+	RetryMax        time.Duration `env:"OUTBOX_RETRY_MAX"         envDefault:"5m"`
+	Retention       time.Duration `env:"OUTBOX_RETENTION"         envDefault:"720h"`
+}
+
+const day = 24 * time.Hour
+
 type environmentConfig struct {
 	Database   databaseEnvironmentConfig
 	Auth       authEnvironmentConfig
 	Device     deviceEnvironmentConfig
 	RateLimits rateLimitsEnvironmentConfig
+	Relay      RelayConfig
 }
 
 type databaseEnvironmentConfig struct {
@@ -90,6 +107,7 @@ func LoadConfig() (Config, error) {
 			VerifyKeysFile: settings.Auth.VerifyKeysFile,
 		},
 		Device: DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
+		Relay:  settings.Relay,
 		RateLimits: RateLimitsConfig{
 			IP: middleware.RateLimitConfig{
 				Limit:      settings.RateLimits.IPLimit,
@@ -117,7 +135,7 @@ func validateConfig(config Config) error {
 	if config.Device.ClaimTTL <= 0 {
 		return errInvalidClaimTTL
 	}
-	if config.Database.URL == "" {
+	if strings.TrimSpace(config.Database.URL) == "" {
 		return errors.New("DATABASE_URL is required")
 	}
 	if config.RateLimits.IP.Limit <= 0 {
@@ -137,6 +155,39 @@ func validateConfig(config Config) error {
 	}
 	if config.Auth.VerifyKeysFile == "" {
 		return errors.New("AUTH_VERIFY_KEYS_FILE is required")
+	}
+	return config.Relay.validate()
+}
+
+func (c RelayConfig) validate() error {
+	parsed, err := url.Parse(c.AnalyticsURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" ||
+		parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(c.AnalyticsURL, "#") {
+		return errors.New("ANALYTICS_URL must be an absolute HTTP or HTTPS base URL")
+	}
+	if c.AnalyticsAPIKey == "" || strings.ContainsFunc(c.AnalyticsAPIKey, func(r rune) bool {
+		return r <= ' ' || r > '~'
+	}) {
+		return errors.New("ANALYTICS_INGEST_API_KEY must be a nonempty token")
+	}
+	if c.HTTPTimeout < time.Millisecond || c.HTTPTimeout >= c.Lease {
+		return errors.New("OUTBOX_HTTP_TIMEOUT must be at least 1ms and shorter than OUTBOX_LEASE")
+	}
+	const maxBatchSize = 1000
+	if c.BatchSize < 1 || c.BatchSize > maxBatchSize {
+		return errors.New("OUTBOX_BATCH_SIZE must be between 1 and 1000")
+	}
+	if c.PollInterval < time.Millisecond || c.PollInterval > day {
+		return errors.New("OUTBOX_POLL_INTERVAL must be between 1ms and 24h")
+	}
+	if c.Lease < time.Millisecond || c.Lease > day {
+		return errors.New("OUTBOX_LEASE must be between 1ms and 24h")
+	}
+	if c.RetryBase < time.Millisecond || c.RetryMax < c.RetryBase || c.RetryMax > day {
+		return errors.New("OUTBOX_RETRY_BASE and OUTBOX_RETRY_MAX must be ordered and between 1ms and 24h")
+	}
+	if c.Retention < time.Millisecond {
+		return errors.New("OUTBOX_RETENTION must be at least 1ms")
 	}
 	return nil
 }
