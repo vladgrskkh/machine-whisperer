@@ -32,32 +32,36 @@ operating modes and learning separate baselines.
           │             users, organizations, devices,
           │             baseline state, alerts, outbox
           │
-          └── outbox exporter ──► ClickHouse
-                                  telemetry and analytics
+          └── API outbox relay ──HTTPS──► Analytics service ──► ClickHouse
+                                            export and analysis  telemetry history
 ```
 
 The load balancer terminates external TLS and routes requests to REST API
-instances. The API authenticates callers, receives telemetry, evaluates machine
-state and serves the app. A background exporter delivers accepted observations
-to ClickHouse. The app never connects directly to a database.
+instances. The API authenticates callers, receives telemetry, commits the
+event and outbox record to PostgreSQL, and serves the app. An API-side relay
+posts outbox batches to an internal Analytics endpoint. Analytics stores the
+history in ClickHouse and owns future baseline analysis and anomaly detection.
+The app never connects directly to a database.
 
-| Component           | Proposed technology                              |
-| ------------------- | ------------------------------------------------ |
-| Sensor node         | ESP32, ADXL345, Arduino framework and PlatformIO |
-| API and exporter    | Go                                               |
-| Operational data    | PostgreSQL                                       |
-| Telemetry analytics | ClickHouse                                       |
-| Mobile app          | React Native                                     |
+| Component            | Proposed technology                              |
+| -------------------- | ------------------------------------------------ |
+| Sensor node          | ESP32, ADXL345, Arduino framework and PlatformIO |
+| API and outbox relay | Go                                               |
+| Analytics service    | Go                                               |
+| Operational data     | PostgreSQL                                       |
+| Telemetry analytics  | ClickHouse                                       |
+| Mobile app           | React Native                                     |
 | Edge                | TLS reverse proxy / load balancer                     |
 
 The API uses chi for routing, pgx for PostgreSQL, Goose for migrations and slog
 for structured logging.
 
-At launch, run the reverse proxy, API, exporter, PostgreSQL and ClickHouse as
-containers on one cloud VM with approximately 4 vCPUs and 16 GiB RAM. This is
-a starting assumption to benchmark, not a verified capacity or highly available
-deployment. The reverse proxy terminates TLS and balances API instances; one
-VM remains a single point of failure. A separate API gateway is not required.
+At launch, run the reverse proxy, API, API outbox relay, Analytics service,
+PostgreSQL and ClickHouse as containers on one cloud VM with approximately 4
+vCPUs and 16 GiB RAM. This is a starting assumption to benchmark, not a
+verified capacity or highly available deployment. The reverse proxy terminates
+TLS and balances API instances; one VM remains a single point of failure. A
+separate API gateway is not required.
 
 For a price reference, DigitalOcean lists a 4-vCPU, 16-GiB general-purpose VM
 at $126/month with 50 GiB SSD. This is the VM price, not a full project bill:
@@ -68,13 +72,14 @@ All-history storage may exceed the included disk; measure growth before launch.
 ### Scaling
 
 Start with stateless API instances behind the proxy. As demand grows, move the
-proxy and API to separate hosts and add API instances. Keep detector updates
-serialized per machine in PostgreSQL and use transactional outbox claiming so
-multiple workers do not process the same work concurrently. Scale exporters
-independently. Move PostgreSQL and ClickHouse to dedicated or managed resources
-when CPU, memory, disk, ingest lag or query latency requires it; add replicas or
-sharding only after workload measurements justify the added complexity. Define
-capacity thresholds and availability targets after load testing.
+proxy and API to separate hosts and add API instances. Keep future detector
+state updates serialized per machine in PostgreSQL. Use transactional outbox
+claiming so multiple relay workers do not process the same work concurrently.
+Scale API relays and Analytics instances independently. Move PostgreSQL and
+ClickHouse to dedicated or managed resources when CPU, memory, disk, ingest lag
+or query latency requires it; add replicas or sharding only after workload
+measurements justify the added complexity. Define capacity thresholds and
+availability targets after load testing.
 
 ## 3. Data and delivery
 
@@ -89,20 +94,32 @@ queries and indexing, but ClickHouse is the proposed analytics store because the
 product aims to analyze large histories across devices. Capacity and query
 performance must be measured using representative data.
 
-On ingestion, a PostgreSQL transaction stores the accepted event, updates the
-detector and creates an outbox entry. The exporter batches entries to
-ClickHouse and retries failures. A successful API response means the event is
-committed in PostgreSQL; it may take longer to appear in ClickHouse. Current
-status and alerts come from PostgreSQL, so charts may temporarily lag.
+On ingestion, a PostgreSQL transaction stores the accepted event and creates an
+outbox entry. The API relay leases batches and posts them to Analytics, which
+bulk-inserts them into ClickHouse and acknowledges only after success. A
+successful API response means the event is committed in PostgreSQL; it may take
+longer to appear in ClickHouse. Current status and alerts come from PostgreSQL,
+so charts may temporarily lag.
 
-Delivery is at least once. Stable event IDs allow ClickHouse queries or ingestion
-to deduplicate retries; the exact strategy must be specified and tested. The
+The Analytics service owns baseline analysis and anomaly detection over the
+ClickHouse history. It learns a per-machine baseline from accumulated, valid
+observations collected while the machine is known healthy and running; receiving
+an individual telemetry batch does not synchronously tune the baseline. Once
+enough suitable history exists, Analytics compares later observations against
+that baseline and persists operational baseline/alert state in PostgreSQL. The
+contract used by Analytics to update that PostgreSQL state remains a separate
+design decision; the outbox table is only for telemetry delivery.
+
+Delivery is at least once. ClickHouse uses `ReplacingMergeTree` keyed by
+`(machine_id, observed_at, device_id, event_id)`; queries that need immediate
+logical deduplication use `FINAL` or equivalent event-key aggregation. The
 outbox retains delivered entries for a limited, configurable period and retains
 undelivered entries until delivery succeeds. ClickHouse is intended to retain
-all telemetry for analysis, subject to available capacity. The outbox is not the long-term telemetry store. Event IDs
-remain in PostgreSQL for a defined retry window; retries outside that window
-must be rejected rather than silently processed again. The retry window and
-device queue lifetime must be specified together.
+all telemetry for analysis, subject to available capacity. The outbox is not the
+long-term telemetry store. Event IDs remain in PostgreSQL for a defined retry
+window; retries outside that window must be rejected rather than silently
+processed again. The retry window and device queue lifetime must be specified
+together.
 
 ## 4. Device hardware and firmware
 
@@ -199,7 +216,7 @@ pagination, registration and errors remain to be specified.
 
 ## 7. Detection and operations
 
-The service learns a baseline from valid RMS observations collected while the
+Analytics learns a baseline from valid RMS observations collected while the
 machine is known to be healthy and running at its normal steady speed and load.
 It compares later observations taken under the same conditions against that
 baseline and opens an alert for sustained deviation. Recovery and
@@ -244,3 +261,4 @@ balancer. ClickHouse is the long-term telemetry store.
 - Secure provisioning, credential rotation and device enrollment.
 - User identity provider and organization roles.
 - Baseline calibration, operating modes and alert thresholds.
+- How Analytics writes baseline and alert state back to PostgreSQL.
