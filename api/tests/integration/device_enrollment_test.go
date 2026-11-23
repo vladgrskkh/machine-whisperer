@@ -14,7 +14,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"testing/iotest"
 	"time"
@@ -268,6 +267,9 @@ func TestClaimHTTPIsAtomicAndUniform(t *testing.T) {
 	assertClaimUnavailable(t, server, owner.AccessToken, claimBody(device, mine))
 	assertEnrollmentBound(t, pool, device.DeviceID, mine)
 
+	_, err = pool.Exec(t.Context(), `UPDATE devices SET claim_expires_at = clock_timestamp() - interval '1 second'
+		WHERE id=$1`, expiring.DeviceID)
+	require.NoError(t, err)
 	setElapsed(24 * time.Hour)
 	owner = readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, owner.RefreshToken))
 	assertClaimUnavailable(t, server, owner.AccessToken, claimBody(expiring, mine))
@@ -286,11 +288,9 @@ func TestClaimHTTPChecksExpiryAfterWaitingForMachineLock(t *testing.T) {
 func assertClaimExpiryAfterLock(t *testing.T, lockMachine bool) {
 	t.Helper()
 	pool := testutil.Postgres(t)
-	const claimTTL = 2 * time.Minute
-	start := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
-	var elapsed atomic.Int64
+	// Keep time to observe expiry before the access-token middleware deadline.
+	const claimTTL = 8 * time.Second
 	server := newAuthServer(t, pool, application.Config{
-		Auth:   application.AuthConfig{Now: func() time.Time { return start.Add(time.Duration(elapsed.Load())) }},
 		Device: application.DeviceConfig{ClaimTTL: claimTTL},
 	})
 	t.Cleanup(server.Close)
@@ -326,8 +326,18 @@ func assertClaimExpiryAfterLock(t *testing.T, lockMachine bool) {
 		)`, int64(tx.Conn().PgConn().PID())).Scan(&waiting)
 		require.NoError(collect, err)
 		assert.True(collect, waiting)
-	}, 5*time.Second, 10*time.Millisecond)
-	elapsed.Store(int64(claimTTL))
+	}, 3*time.Second, 10*time.Millisecond)
+	var expired bool
+	require.NoError(t, pool.QueryRow(t.Context(), `SELECT claim_expires_at <= clock_timestamp()
+		FROM devices WHERE id=$1`, value.DeviceID).Scan(&expired))
+	assert.False(t, expired)
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var hasExpired bool
+		err := pool.QueryRow(t.Context(), `SELECT claim_expires_at <= clock_timestamp()
+			FROM devices WHERE id=$1`, value.DeviceID).Scan(&hasExpired)
+		require.NoError(collect, err)
+		assert.True(collect, hasExpired)
+	}, claimTTL+2*time.Second, 10*time.Millisecond)
 	require.NoError(t, tx.Commit(t.Context()))
 
 	attempt := <-completed

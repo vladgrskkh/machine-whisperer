@@ -59,7 +59,7 @@ func serve(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	app, err := application.New(ctx, config, application.WithDatabase(config.Database), application.WithLogger(logger))
 	if err != nil {
 		return err

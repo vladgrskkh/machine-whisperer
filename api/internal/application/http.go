@@ -1,9 +1,11 @@
 package application
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/httplog/v3"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	authhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
@@ -15,7 +17,18 @@ import (
 
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
-	router.Use(middleware.NewRequestLogger(a.logger).Middleware)
+	schema := *httplog.SchemaECS
+	schema.RequestURL = ""
+	schema.RequestReferer = ""
+	router.Use(httplog.RequestLogger(a.logger, &httplog.Options{
+		Level:              slog.LevelDebug,
+		Schema:             &schema,
+		LogRequestHeaders:  []string{"Content-Type"},
+		LogResponseHeaders: []string{},
+		LogFormat: func(r *http.Request, _ *httplog.LogFormatArgs) string {
+			return r.Method + " " + r.URL.Path
+		},
+	}))
 	limit := middleware.RateLimit(a.rateLimitConfig)
 	access := middleware.AccessToken(a.verifier)
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)

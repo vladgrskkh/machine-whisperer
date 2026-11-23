@@ -76,7 +76,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("auth initialization failed")
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	app := &Application{verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP}
 	for _, option := range options {
 		if err = option(ctx, app); err != nil {
