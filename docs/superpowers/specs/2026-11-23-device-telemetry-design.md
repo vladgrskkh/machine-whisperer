@@ -53,6 +53,16 @@ in constant time. Reject unclaimed and revoked devices. The path machine ID
 must equal the device's assigned machine ID. User JWTs do not authenticate this
 route, and device keys remain invalid on user routes.
 
+Both JWT and device-key authentication middleware create a common request
+principal with subject, principal kind and roles. JWT roles come from the
+validated access-token claims. Every successfully verified device key receives
+the server-defined `telemetry_writer` role; this is a fixed capability of the
+current device credential, not a user role or a caller-supplied claim. A shared
+role middleware checks that principal after either authentication middleware.
+The telemetry use case still checks the device's machine binding, since a role
+does not authorize a device for another machine. No separate device-role table
+is needed while all device keys have the same single capability.
+
 ### Payload
 
 Accept the existing v1 fields: `schema_version`, `event_id`, `observed_at`,

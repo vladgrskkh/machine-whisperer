@@ -15,6 +15,7 @@
 - The device sends `Authorization: Bearer device_id.secret`; the secret is 32 random bytes encoded as unpadded base64url.
 - Verify the secret against the stored SHA-256 verifier using constant-time comparison. Never log the credential or request body.
 - Device keys never authenticate user routes. A device may write only for its claimed, active machine.
+- Authentication middleware populates one shared principal; JWT roles come from signed access claims and device-key auth supplies the server-defined `telemetry_writer` role.
 - Telemetry v1 has exactly `schema_version`, `event_id`, `observed_at`, `operating_state`, `vibration_rms_g`, `dominant_frequency_hz` and `current_rms_a`; operating states are `running` and `unknown`.
 - Normalize timestamps to UTC and PostgreSQL microsecond precision before comparison, hashing, ordering or persistence.
 - Event ID scope is `(device_id, event_id)`. Identical normalized retries create no second event/outbox item; conflicting reuse returns 409.
@@ -89,9 +90,29 @@ The migration adds `machines.last_telemetry_observed_at`; `telemetry_events` sto
 - [x] Rerun `go test -tags=integration ./tests/integration -run '^TestDeviceTelemetry|^TestDeviceKeyCannot' -count=1` and confirm all new HTTP cases pass. Then run the full unit suite, full `make test-integration`, `make build`, pinned lint and `git diff --check`.
 - [x] Commit `feat: accept authenticated device telemetry`; obtain task and whole-branch reviews before opening a PR.
 
-### Final review fix wave
+### Final review fix wave for Task 2
 
 - [x] Add real-HTTP/Testcontainers coverage `TestDeviceTelemetryCleanupIsBoundedAndMachineScoped`; verify escaped timestamp retry behavior in `TestDeviceTelemetryIdenticalRetryIsIdempotent`; and add `TestTelemetryMachineReceiptTimeIsSampledAfterLockWait` proving `LockMachineForTelemetry` samples database time after obtaining the lock.
 - [x] Reproduce the cross-machine cleanup, escaped-string timestamp and post-lock-clock gaps before fixing them.
 - [x] Scope idempotency cleanup to the locked machine, cap each batch at 100 rows, return/handle the submitted identity's `expires_at` explicitly, and decode `observed_at` as a JSON string before RFC3339 parsing.
 - [x] Run the focused regressions, full serial Testcontainers suite, unit tests, build and lint; obtain a scoped re-review.
+
+### Task 3: Shared principal and role middleware
+
+**Files:**
+- Create: `internal/handler/middleware/principal.go`
+- Modify: `internal/handler/middleware/access_token.go`
+- Modify: `internal/handler/middleware/device_token.go`
+- Modify: `internal/application/http.go`
+- Modify: `internal/domain/device/device.go`
+- Test: `tests/integration/device_telemetry_test.go`
+
+**Interfaces:**
+- `middleware.Principal` carries principal kind, subject, roles and the device's assigned machine ID when the principal is a device.
+- `UserID`, `DeviceBinding` and `Roles` read the common principal; `RequireRole(role)` checks roles without depending on the credential type.
+- JWT authentication sets the principal from verified access claims. Device API-key authentication sets a device principal with the server-defined `device.RoleTelemetryWriter` role after verifying the key.
+
+- [x] Write a real-HTTP integration test proving a verified API key passes `RequireRole(device.RoleTelemetryWriter)` and is rejected by `RequireRole` for a different role. Confirm the test fails because device auth currently uses a separate context without roles.
+- [x] Implement the common principal context and migrate both credential middleware and the principal accessor functions to it.
+- [x] Apply `RequireRole(device.RoleTelemetryWriter)` after device-key authentication on telemetry; retain user JWT-only and JWT-plus-user-role route compositions.
+- [x] Run focused user-role/device-role integration tests, the full unit suite, full serial Testcontainers suite, build, pinned lint and diff check; commit `refactor: share auth principal and role middleware` and obtain a task review.
