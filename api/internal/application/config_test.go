@@ -16,10 +16,6 @@ import (
 func TestLoadConfig(t *testing.T) {
 	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
-	t.Setenv("AUTH_RATE_LIMIT", "")
-	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
-	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "")
-	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, 30, config.RateLimits.IP.Limit)
@@ -51,10 +47,6 @@ func TestLoadConfigRejectsInvalidSettings(t *testing.T) {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
 			configEnvironment(t)
 			t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
-			t.Setenv("AUTH_RATE_LIMIT", "")
-			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
-			t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "")
-			t.Setenv("TRUSTED_PROXY_CIDRS", "")
 			t.Setenv(tc.key, tc.value)
 			_, err := application.LoadConfig()
 			assert.Error(t, err)
@@ -70,10 +62,6 @@ func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
 		t.Run(key, func(t *testing.T) {
 			configEnvironment(t)
 			t.Setenv("DATABASE_URL", databaseURL)
-			t.Setenv("AUTH_RATE_LIMIT", "")
-			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
-			t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "")
-			t.Setenv("TRUSTED_PROXY_CIDRS", "")
 			t.Setenv(key, "private-invalid-value")
 			config, err := application.LoadConfig()
 			require.Error(t, err)
@@ -89,9 +77,7 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 	t.Setenv("AUTH_RATE_LIMIT", strconv.Itoa(math.MaxInt))
-	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
 	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", strconv.Itoa(math.MaxInt))
-	t.Setenv("TRUSTED_PROXY_CIDRS", "")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, math.MaxInt, config.RateLimits.IP.Limit)
@@ -103,6 +89,11 @@ func configEnvironment(t *testing.T) {
 	t.Setenv("AUTH_SIGNING_KEY_ID", "active")
 	t.Setenv("AUTH_SIGNING_KEY_FILE", "/test/private.pem")
 	t.Setenv("AUTH_VERIFY_KEYS_FILE", "/test/public.json")
+	t.Setenv("AUTH_RATE_LIMIT", "")
+	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
+	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "")
+	t.Setenv("TRUSTED_PROXY_CIDRS", "")
+	t.Setenv("DEVICE_CLAIM_TTL", "")
 	t.Setenv("ANALYTICS_URL", "http://localhost:8081")
 	t.Setenv("ANALYTICS_INGEST_API_KEY", "test-key")
 	t.Setenv("OUTBOX_HTTP_TIMEOUT", "")
@@ -144,7 +135,6 @@ func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
 func TestDeviceClaimTTLConfiguration(t *testing.T) {
 	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://test")
-	t.Setenv("DEVICE_CLAIM_TTL", "")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, 24*time.Hour, config.Device.ClaimTTL)
@@ -164,6 +154,12 @@ func TestDeviceClaimTTLConfiguration(t *testing.T) {
 }
 
 func TestRelayConfigDefaults(t *testing.T) {
+	for _, key := range []string{
+		"DEVICE_CLAIM_TTL", "AUTH_RATE_LIMIT", "AUTH_RATE_LIMIT_WINDOW", "AUTH_RATE_LIMIT_MAX_CLIENTS",
+		"TRUSTED_PROXY_CIDRS",
+	} {
+		t.Setenv(key, "invalid")
+	}
 	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://test")
 	config, err := application.LoadConfig()

@@ -216,6 +216,11 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	event := insertOutboxRow(t, pool, nil)
+	var storedPayload string
+	require.NoError(t, pool.QueryRow(t.Context(),
+		"SELECT payload::text FROM telemetry_outbox WHERE device_id=$1 AND event_id=$2", event.DeviceID, event.EventID).
+		Scan(&storedPayload))
+
 	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodPost, r.Method)
@@ -235,7 +240,7 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 		assert.JSONEq(t, `"`+event.DeviceID+`"`, string(got["device_id"]))
 		assert.JSONEq(t, `"`+event.MachineID+`"`, string(got["machine_id"]))
 		assert.JSONEq(t, `"`+event.ReceivedAt.Format(time.RFC3339Nano)+`"`, string(got["received_at"]))
-		assert.JSONEq(t, `{"vibration_rms_g":0.043}`, string(got["payload"]))
+		assert.JSONEq(t, storedPayload, string(got["payload"]))
 		if requests.Add(1) < 4 {
 			http.Error(w, "sensitive analytics response", http.StatusServiceUnavailable)
 			return
@@ -289,16 +294,25 @@ func assertOutboxRetry(t *testing.T, pool *pgxpool.Pool, eventID string, backoff
 
 func insertOutboxRow(t *testing.T, pool *pgxpool.Pool, deliveredAt *time.Time) telemetry.Event {
 	t.Helper()
+	receivedAt := time.Now().UTC().Truncate(time.Microsecond)
 	event := telemetry.Event{
-		Observation: telemetry.Observation{EventID: uuid.NewString()},
-		DeviceID:    uuid.NewString(),
-		MachineID:   uuid.NewString(),
-		ReceivedAt:  time.Now().UTC().Truncate(time.Microsecond),
+		Observation: telemetry.Observation{
+			SchemaVersion:  1,
+			EventID:        uuid.NewString(),
+			ObservedAt:     receivedAt.Add(-time.Second),
+			OperatingState: "running",
+			VibrationRMSG:  0.043,
+		},
+		DeviceID:   uuid.NewString(),
+		MachineID:  uuid.NewString(),
+		ReceivedAt: receivedAt,
 	}
-	_, err := pool.Exec(t.Context(), `INSERT INTO telemetry_outbox
+	payload, err := json.Marshal(event.Observation)
+	require.NoError(t, err)
+	_, err = pool.Exec(t.Context(), `INSERT INTO telemetry_outbox
 		(device_id,event_id,machine_id,payload,created_at,delivered_at)
-		VALUES ($1,$2,$3,'{"vibration_rms_g":0.043}',$4,$5)`,
-		event.DeviceID, event.EventID, event.MachineID, event.ReceivedAt, deliveredAt)
+		VALUES ($1,$2,$3,$4,$5,$6)`,
+		event.DeviceID, event.EventID, event.MachineID, payload, event.ReceivedAt, deliveredAt)
 	require.NoError(t, err)
 	return event
 }
