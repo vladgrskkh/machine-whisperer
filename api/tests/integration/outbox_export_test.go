@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
@@ -164,6 +166,52 @@ func TestOutboxDeliveredRetentionIsBounded(t *testing.T) {
 	assert.Equal(t, 1, undelivered)
 }
 
+func TestApplicationRunsOutboxRelay(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	old := time.Now().AddDate(0, 0, -40)
+	insertOutboxRow(t, pool, &old)
+	insertOutboxRow(t, pool, nil)
+	analytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(analytics.Close)
+
+	config := authConfig(t)
+	config.Relay = application.RelayConfig{
+		AnalyticsURL: analytics.URL, AnalyticsAPIKey: "test-key",
+		HTTPTimeout: time.Second, BatchSize: 1000, PollInterval: time.Hour,
+		Lease: outboxTestLease, RetryBase: time.Second, RetryMax: time.Minute, Retention: 30 * 24 * time.Hour,
+	}
+	app, err := application.New(t.Context(), config, application.WithPool(pool))
+	require.NoError(t, err)
+	t.Cleanup(app.Close)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		app.RunWorkers(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-stopped:
+		case <-time.After(2 * time.Second):
+			t.Error("application worker did not stop after cancellation")
+		}
+	})
+
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		var delivered, total int
+		err := pool.QueryRow(ctx, "SELECT count(delivered_at), count(*) FROM telemetry_outbox").Scan(&delivered, &total)
+		require.NoError(c, err)
+		assert.Equal(c, 1, delivered)
+		assert.Equal(c, 1, total)
+	}, 3*time.Second, 20*time.Millisecond)
+}
+
 func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
@@ -196,7 +244,7 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second)
-	worker := telemetryusecase.NewExportWorker(
+	export := telemetryusecase.NewExport(
 		telemetrypostgres.NewOutbox(pool),
 		sender,
 		telemetryusecase.ExportSettings{
@@ -205,16 +253,16 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 		slog.New(slog.DiscardHandler),
 	)
 	for _, backoff := range []time.Duration{time.Minute, 2 * time.Minute, 2 * time.Minute} {
-		claimed, err := worker.ProcessOnce(t.Context())
+		claimed, err := export.ProcessOnce(t.Context())
 		require.Error(t, err)
 		assert.Equal(t, 1, claimed)
 		assertOutboxRetry(t, pool, event.EventID, backoff)
-		claimed, err = worker.ProcessOnce(t.Context())
+		claimed, err = export.ProcessOnce(t.Context())
 		require.NoError(t, err)
 		assert.Zero(t, claimed)
 		makeOutboxDue(t, pool, event.EventID)
 	}
-	claimed, err := worker.ProcessOnce(t.Context())
+	claimed, err := export.ProcessOnce(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, claimed)
 	assert.EqualValues(t, 4, requests.Load())

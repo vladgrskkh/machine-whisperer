@@ -14,7 +14,7 @@ import (
 )
 
 func TestLoadConfig(t *testing.T) {
-	keyEnvironment(t)
+	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 	t.Setenv("AUTH_RATE_LIMIT", "")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -49,7 +49,7 @@ func TestLoadConfigRejectsInvalidSettings(t *testing.T) {
 		{"AUTH_RATE_LIMIT_MAX_CLIENTS", "-1"}, {"TRUSTED_PROXY_CIDRS", "127.0.0.1"},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
-			keyEnvironment(t)
+			configEnvironment(t)
 			t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 			t.Setenv("AUTH_RATE_LIMIT", "")
 			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -68,7 +68,7 @@ func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
 		"AUTH_RATE_LIMIT", "AUTH_RATE_LIMIT_WINDOW", "AUTH_RATE_LIMIT_MAX_CLIENTS", "TRUSTED_PROXY_CIDRS",
 	} {
 		t.Run(key, func(t *testing.T) {
-			keyEnvironment(t)
+			configEnvironment(t)
 			t.Setenv("DATABASE_URL", databaseURL)
 			t.Setenv("AUTH_RATE_LIMIT", "")
 			t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -86,7 +86,7 @@ func TestLoadConfigErrorsDoNotExposeEnvironmentValues(t *testing.T) {
 }
 
 func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
-	keyEnvironment(t)
+	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
 	t.Setenv("AUTH_RATE_LIMIT", strconv.Itoa(math.MaxInt))
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "")
@@ -98,15 +98,24 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 	assert.Equal(t, math.MaxInt, config.RateLimits.IP.MaxClients)
 }
 
-func keyEnvironment(t *testing.T) {
+func configEnvironment(t *testing.T) {
 	t.Helper()
 	t.Setenv("AUTH_SIGNING_KEY_ID", "active")
 	t.Setenv("AUTH_SIGNING_KEY_FILE", "/test/private.pem")
 	t.Setenv("AUTH_VERIFY_KEYS_FILE", "/test/public.json")
+	t.Setenv("ANALYTICS_URL", "http://localhost:8081")
+	t.Setenv("ANALYTICS_INGEST_API_KEY", "test-key")
+	t.Setenv("OUTBOX_HTTP_TIMEOUT", "")
+	t.Setenv("OUTBOX_BATCH_SIZE", "")
+	t.Setenv("OUTBOX_POLL_INTERVAL", "")
+	t.Setenv("OUTBOX_LEASE", "")
+	t.Setenv("OUTBOX_RETRY_BASE", "")
+	t.Setenv("OUTBOX_RETRY_MAX", "")
+	t.Setenv("OUTBOX_RETENTION", "")
 }
 
 func TestAuthConfig(t *testing.T) {
-	keyEnvironment(t)
+	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://test")
 	config, err := application.LoadConfig()
 	require.NoError(t, err)
@@ -120,7 +129,7 @@ func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
 		{"AUTH_SIGNING_KEY_ID", ""}, {"AUTH_SIGNING_KEY_FILE", ""}, {"AUTH_VERIFY_KEYS_FILE", ""},
 	} {
 		t.Run(tc.key+tc.value, func(t *testing.T) {
-			keyEnvironment(t)
+			configEnvironment(t)
 			t.Setenv("DATABASE_URL", "postgres://secret")
 			t.Setenv(tc.key, tc.value)
 			config, err := application.LoadConfig()
@@ -133,7 +142,7 @@ func TestAuthConfigRejectsInvalidSettings(t *testing.T) {
 }
 
 func TestDeviceClaimTTLConfiguration(t *testing.T) {
-	keyEnvironment(t)
+	configEnvironment(t)
 	t.Setenv("DATABASE_URL", "postgres://test")
 	t.Setenv("DEVICE_CLAIM_TTL", "")
 	config, err := application.LoadConfig()
@@ -151,5 +160,46 @@ func TestDeviceClaimTTLConfiguration(t *testing.T) {
 		require.Error(t, err)
 		assert.Zero(t, config)
 		assert.NotContains(t, err.Error(), value)
+	}
+}
+
+func TestRelayConfigDefaults(t *testing.T) {
+	configEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://test")
+	config, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, application.RelayConfig{
+		AnalyticsURL: "http://localhost:8081", AnalyticsAPIKey: "test-key",
+		HTTPTimeout: 30 * time.Second, BatchSize: 1000, PollInterval: time.Second,
+		Lease: 2 * time.Minute, RetryBase: time.Second, RetryMax: 5 * time.Minute,
+		Retention: 30 * 24 * time.Hour,
+	}, config.Relay)
+}
+
+func TestRelayConfigRejectsInvalidSettings(t *testing.T) {
+	for _, tc := range []struct{ key, value string }{
+		{"ANALYTICS_URL", ""},
+		{"ANALYTICS_URL", "http://user:password@example.com"},
+		{"ANALYTICS_INGEST_API_KEY", ""},
+		{"ANALYTICS_INGEST_API_KEY", "private invalid token"},
+		{"OUTBOX_HTTP_TIMEOUT", "2m"},
+		{"OUTBOX_BATCH_SIZE", "1001"},
+		{"OUTBOX_POLL_INTERVAL", "0s"},
+		{"OUTBOX_LEASE", "25h"},
+		{"OUTBOX_RETRY_BASE", "6m"},
+		{"OUTBOX_RETRY_MAX", "0s"},
+		{"OUTBOX_RETENTION", "999us"},
+	} {
+		t.Run(tc.key+"/"+tc.value, func(t *testing.T) {
+			configEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://test")
+			t.Setenv(tc.key, tc.value)
+			config, err := application.LoadConfig()
+			require.Error(t, err)
+			assert.Zero(t, config)
+			if tc.key == "ANALYTICS_URL" && tc.value != "" || tc.key == "ANALYTICS_INGEST_API_KEY" && tc.value != "" {
+				assert.NotContains(t, err.Error(), tc.value)
+			}
+		})
 	}
 }

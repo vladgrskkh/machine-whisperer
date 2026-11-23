@@ -38,9 +38,9 @@ operating modes and learning separate baselines.
 
 The load balancer terminates external TLS and routes requests to REST API
 instances. The API authenticates callers, receives telemetry, commits the
-event and outbox record to PostgreSQL, and serves the app. An API-side relay
-posts outbox batches to an internal Analytics endpoint. Analytics stores the
-history in ClickHouse and owns future baseline analysis and anomaly detection.
+event and outbox record to PostgreSQL, and serves the app. A worker in the API
+process posts outbox batches to an internal Analytics endpoint. Analytics stores
+the history in ClickHouse and owns future baseline analysis and anomaly detection.
 The app never connects directly to a database.
 
 | Component            | Proposed technology                              |
@@ -56,9 +56,9 @@ The app never connects directly to a database.
 The API uses chi for routing, pgx for PostgreSQL, Goose for migrations and slog
 for structured logging.
 
-At launch, run the reverse proxy, API, API outbox relay, Analytics service,
-PostgreSQL and ClickHouse as containers on one cloud VM with approximately 4
-vCPUs and 16 GiB RAM. This is a starting assumption to benchmark, not a
+At launch, run the reverse proxy, API, Analytics service, PostgreSQL and
+ClickHouse as containers on one cloud VM with approximately 4 vCPUs and 16 GiB
+RAM. This is a starting assumption to benchmark, not a
 verified capacity or highly available deployment. The reverse proxy terminates
 TLS and balances API instances; one VM remains a single point of failure. A
 separate API gateway is not required.
@@ -75,11 +75,11 @@ Start with stateless API instances behind the proxy. As demand grows, move the
 proxy and API to separate hosts and add API instances. Keep future detector
 state updates serialized per machine in PostgreSQL. Use transactional outbox
 claiming so multiple relay workers do not process the same work concurrently.
-Scale API relays and Analytics instances independently. Move PostgreSQL and
-ClickHouse to dedicated or managed resources when CPU, memory, disk, ingest lag
-or query latency requires it; add replicas or sharding only after workload
-measurements justify the added complexity. Define capacity thresholds and
-availability targets after load testing.
+Relay workers scale with API replicas. Scale Analytics instances independently.
+Move PostgreSQL and ClickHouse to dedicated or managed resources when CPU,
+memory, disk, ingest lag or query latency requires it. Add replicas or sharding
+only after workload measurements justify the added complexity. Define capacity
+thresholds and availability targets after load testing.
 
 ## 3. Data and delivery
 

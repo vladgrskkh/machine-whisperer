@@ -26,11 +26,11 @@ the migration.
    [table migration](migrations/001_create_telemetry_events.sql).
 2. Run `make run` with a ClickHouse account that can insert into
    `telemetry_events`. Startup pings the configured database.
-3. In the API module, set `DATABASE_URL` for the outbox,
-   `ANALYTICS_URL` to this service's base URL, and
-   `ANALYTICS_INGEST_API_KEY` to the matching token. Start the relay with
-   `go run ./cmd/outbox-relay`. For cross-host deployments, terminate HTTPS
-   on the internal endpoint to protect the bearer credential in transit.
+3. Set `ANALYTICS_URL` to this service's base URL and
+   `ANALYTICS_INGEST_API_KEY` to the matching token in the API environment.
+   Follow the [API setup](../api/README.md) to start the API and its outbox
+   worker. For cross-host deployments, terminate HTTPS on the internal
+   endpoint to protect the bearer credential in transit.
 
 The relay sends one `Authorization: Bearer <token>` header and a JSON object
 containing an `events` array of 1–1,000 envelopes within a 16 MiB body.

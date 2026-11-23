@@ -9,6 +9,8 @@ export AUTH_SIGNING_KEY_ID='key-2026-11'
 export AUTH_SIGNING_KEY_FILE='/run/secrets/auth-signing.pem'
 export AUTH_VERIFY_KEYS_FILE='/run/secrets/auth-public-keys.json'
 export DATABASE_URL='postgres://postgres:postgres@localhost:5432/machine_whisperer?sslmode=disable'
+export ANALYTICS_URL='http://localhost:8081'
+export ANALYTICS_INGEST_API_KEY='<matching analytics ingest token>'
 make migrate-up
 make run
 ```
@@ -20,8 +22,8 @@ migration state; `make migrate-down` rolls back the latest migration and may
 remove stored data.
 
 The API listens on `API_ADDRESS` (default `:8080`). Startup checks the database
-with a 10-second deadline; cancellation drains HTTP requests before closing the
-pool.
+with a 10-second deadline. On shutdown, it drains HTTP requests and waits for
+the outbox worker before closing the pool.
 
 `POST /v1/auth/signup` accepts JSON `email` and `password`. It returns `201` with
 `id`, canonical `email` and `created_at`; it does not create a login session.
@@ -245,3 +247,22 @@ observations at most five minutes ahead of that time and strictly less than
 | `500` | An unexpected server error occurred. |
 
 Telemetry responses use `Cache-Control: no-store`.
+
+## Telemetry export
+
+The API process runs an outbox worker alongside HTTP. It sends pending events
+to the [Analytics service](../analytics/README.md), retries failed deliveries
+and periodically prunes delivered rows. Configure the same ingest token in both
+services and use HTTPS for traffic between hosts.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ANALYTICS_URL` | Required | Analytics HTTP or HTTPS base URL |
+| `ANALYTICS_INGEST_API_KEY` | Required | Dedicated token shared with Analytics |
+| `OUTBOX_HTTP_TIMEOUT` | `30s` | Analytics request timeout, shorter than the lease |
+| `OUTBOX_BATCH_SIZE` | `1000` | Maximum events per send and delivered rows per prune |
+| `OUTBOX_POLL_INTERVAL` | `1s` | Wait after a partial or failed batch and interval between prune attempts |
+| `OUTBOX_LEASE` | `2m` | Time before another worker can reclaim an unfinished batch |
+| `OUTBOX_RETRY_BASE` | `1s` | Initial retry delay |
+| `OUTBOX_RETRY_MAX` | `5m` | Maximum retry delay |
+| `OUTBOX_RETENTION` | `720h` | How long PostgreSQL keeps delivered rows |

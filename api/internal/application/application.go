@@ -16,6 +16,7 @@ import (
 	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
+	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
@@ -23,6 +24,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
+	telemetryworker "github.com/vladgrskkh/machine-whisperer/api/internal/worker/telemetry"
 )
 
 const authStartupTimeout = 10 * time.Second
@@ -39,6 +41,7 @@ type Application struct {
 	claim           *device.Claim
 	deviceAuth      *device.Authenticator
 	ingestTelemetry *telemetry.Ingest
+	telemetryWorker *telemetryworker.Worker
 	createMachine   *machine.Create
 	listMachines    *machine.List
 	machineDetail   *machine.Detail
@@ -50,6 +53,13 @@ type Application struct {
 type Option func(context.Context, *Application) error
 
 func New(ctx context.Context, config Config, options ...Option) (*Application, error) {
+	// Route-only callers can omit relay settings. LoadConfig always requires them.
+	relayConfigured := config.Relay != (RelayConfig{})
+	if relayConfigured {
+		if err := config.Relay.validate(); err != nil {
+			return nil, err
+		}
+	}
 	claimTTL := config.Device.ClaimTTL
 	if claimTTL < 0 {
 		return nil, errInvalidClaimTTL
@@ -113,6 +123,9 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.setupEnrollment(devices, transactions, claimTTL)
 	app.deviceAuth = device.NewAuthenticator(devices)
 	app.ingestTelemetry = telemetry.NewIngest(telemetrypostgres.New(), transactions)
+	if relayConfigured {
+		app.setupRelay(config.Relay)
+	}
 
 	return app, nil
 }
@@ -134,6 +147,28 @@ func (a *Application) setupEnrollment(
 	a.createMachine = machine.NewCreate(machines, token.IDs{})
 	a.listMachines = machine.NewList(machines)
 	a.machineDetail = machine.NewDetail(machines)
+}
+
+func (a *Application) setupRelay(config RelayConfig) {
+	export := telemetry.NewExport(
+		telemetrypostgres.NewOutbox(a.pool),
+		analyticshttp.NewHTTPClient(config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout),
+		telemetry.ExportSettings{
+			BatchSize: config.BatchSize,
+			Lease:     config.Lease,
+			RetryBase: config.RetryBase,
+			RetryMax:  config.RetryMax,
+			Retention: config.Retention,
+		},
+		a.logger,
+	)
+	a.telemetryWorker = telemetryworker.New(export, config.BatchSize, config.PollInterval, a.logger)
+}
+
+func (a *Application) RunWorkers(ctx context.Context) {
+	if a.telemetryWorker != nil {
+		a.telemetryWorker.Run(ctx)
+	}
 }
 
 func (a *Application) Close() {
