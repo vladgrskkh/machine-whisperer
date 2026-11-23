@@ -16,6 +16,7 @@ import (
 const (
 	maxBatchSize = 1000
 	maxBodyBytes = 16 << 20
+	eventIDField = "event_id"
 )
 
 // time.Parse also accepts single-digit hours, comma fractions and overflowing offsets.
@@ -87,7 +88,7 @@ func decodeEvent(dec *json.Decoder) (domain.Event, error) {
 	var raw json.RawMessage
 	var receivedAt, observedAt string
 	err := object(dec, map[string]any{
-		"event_id":    &event.EventID,
+		eventIDField:  &event.EventID,
 		"device_id":   &event.DeviceID,
 		"machine_id":  &event.MachineID,
 		"received_at": &receivedAt,
@@ -100,7 +101,7 @@ func decodeEvent(dec *json.Decoder) (domain.Event, error) {
 	p := &event.Payload
 	err = object(json.NewDecoder(bytes.NewReader(raw)), map[string]any{
 		"schema_version":        &p.SchemaVersion,
-		"event_id":              &p.EventID,
+		eventIDField:            &p.EventID,
 		"observed_at":           &observedAt,
 		"operating_state":       &p.OperatingState,
 		"vibration_rms_g":       &vibration,

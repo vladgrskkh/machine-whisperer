@@ -6,8 +6,8 @@ one synchronous ClickHouse insert per batch, and returns HTTP 204 after
 ClickHouse acknowledges it. A storage failure returns HTTP 503 so the relay
 can retry.
 
-The application registers the batch route with bearer authentication and wires
-the telemetry handler to the batch-ingest use case and ClickHouse repository.
+The application protects the batch and history routes with the same internal
+bearer credential and uses a shared ClickHouse repository.
 The application opens the runtime ClickHouse connection at startup and closes
 it at shutdown. The standalone migration command uses its own connection.
 
@@ -23,13 +23,13 @@ the migration.
 | `CLICKHOUSE_DATABASE` | Existing database for telemetry history |
 | `CLICKHOUSE_USER` | ClickHouse account |
 | `CLICKHOUSE_PASSWORD` | Password for that account |
-| `ANALYTICS_INGEST_API_KEY` | Dedicated service token shared with the API relay |
+| `ANALYTICS_INGEST_API_KEY` | Dedicated service token shared with the API |
 | `ANALYTICS_ADDRESS` | HTTP listen address, defaults to `:8081` |
 
 1. Run `make migrate` with a ClickHouse account that can create the table.
    The command applies the embedded, idempotent
    [table migration](migrations/001_create_telemetry_events.sql).
-2. Run `make run` with a ClickHouse account that can insert into
+2. Run `make run` with a ClickHouse account that can insert into and read from
    `telemetry_events`. Startup pings the configured database.
 3. Set `ANALYTICS_URL` to this service's base URL and
    `ANALYTICS_INGEST_API_KEY` to the matching token in the API environment.
@@ -44,24 +44,28 @@ and the original v1 observation as `payload`.
 
 ## Read telemetry history
 
-A relay that loses the acknowledgement after an insert can send the same events
-again. The table uses `ReplacingMergeTree(received_at)`, partitions by month of
-observation, and replaces rows with the same
-`(machine_id, observed_at, device_id, event_id)` sorting key during background
-merges. Use `FINAL` for a deduplicated view immediately after retries.
+The API reads observations through
+`GET /internal/v1/machines/{machine_id}/telemetry` with the same bearer token
+used for ingestion. The response contains an `items` array and a `next_cursor`
+field. Each item contains the device and event IDs, the receive and observation
+timestamps in UTC, and the v1 observation fields. Missing frequency or current
+readings appear as JSON `null`.
 
-```sql
-SELECT observed_at, vibration_rms_g, dominant_frequency_hz, current_rms_a
-FROM telemetry_events FINAL
-WHERE machine_id = {machine_id:UUID}
-  AND observed_at >= {since:DateTime64(6, 'UTC')}
-ORDER BY observed_at;
-```
+The service returns the newest observations first, ordered by observation time,
+device ID and event ID. The `limit` query parameter defaults to 100 and accepts
+values from 1 through 1,000. Pass `next_cursor` back unchanged as the `cursor`
+query parameter for the same machine. A null cursor means the end of history.
+Invalid limits, machine IDs or cursors return HTTP 400.
+
+The query uses ClickHouse `FINAL` so observations retried by the relay appear
+once before background merges. ClickHouse query failures return HTTP 503
+without storage details.
 
 ## Checks
 
 `make build` compiles both commands. `make test` runs unit and HTTP tests.
 `make test-integration` requires Docker and starts
 `clickhouse/clickhouse-server:26.9.36.3`. It runs the migration command and
-exercises inserts, retries and storage failures through the HTTP endpoint.
+exercises inserts, retries, history pagination, and storage failures through
+the HTTP routes.
 Install the pinned linter with `make tools`, then run `make lint`.
