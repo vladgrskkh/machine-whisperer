@@ -222,6 +222,49 @@ the timestamp. Repeating the same values preserves both.
 owner. `PUT` returns `404 machine_not_found` when the machine is missing or
 belongs to another user. Malformed IDs, bodies and values return `400`.
 
+## Machine alerts
+
+Machine owners use a user access JWT for both alert routes.
+
+| Method and path | Success |
+| --- | --- |
+| `GET /v1/machines/{id}/alerts` | `200` with the machine's alerts, newest trigger time first. An empty history returns `[]`. |
+| `POST /v1/alerts/{id}/acknowledge` | `204` with no body. Accepts both active and recovered alerts. |
+
+An alert lists its ID, machine ID, trigger device and event IDs, observation
+time, z-score, and the baseline version, mean and standard deviation used at
+the trigger. It also reports the last and peak z-scores and the recovery
+device ID, event ID, observation time and baseline version. An alert is active
+while `recovered_at` is `null`. `acknowledged_at` is `null` until the first
+acknowledgement. Acknowledging again preserves that timestamp. Acknowledgement
+leaves an active alert open. An unknown or another user's machine or alert
+returns `404`. A malformed ID returns `400`.
+
+For each newly accepted `running` observation with a baseline, the API computes
+`abs(vibration_rms_g - mean_rms_g) / stddev_rms_g`. A score at or above the alert
+threshold advances the opening count when there is no active alert. A score at
+or below the recovery threshold advances the recovery count when there is an
+active alert. Any other score breaks that streak. `unknown` observations reset
+both pending counts and leave active alerts unchanged. Changing the baseline
+resets pending counts on the next accepted observation and leaves active alerts
+open. Identical baseline writes and exact telemetry retries preserve detector
+state. Telemetry is accepted normally before a baseline is set.
+
+The following environment settings apply to all machines. Thresholds must be
+finite, with the alert threshold greater than the nonnegative recovery
+threshold. Counts must be positive integers.
+
+| Setting | Default |
+| --- | --- |
+| `DETECTOR_ALERT_Z_THRESHOLD` | `3` |
+| `DETECTOR_RECOVERY_Z_THRESHOLD` | `2` |
+| `DETECTOR_ALERT_SUSTAINED_OBSERVATIONS` | `3` |
+| `DETECTOR_RECOVERY_SUSTAINED_OBSERVATIONS` | `3` |
+
+These defaults are starting values for field validation. Scores beyond the
+finite float64 range are evaluated as above the thresholds and stored as the
+maximum finite value.
+
 ## Device telemetry
 
 A claimed sensor sends `POST /v1/machines/{machine_id}/telemetry` over HTTPS

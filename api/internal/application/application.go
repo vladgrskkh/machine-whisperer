@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	alertpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/alert/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/credential"
@@ -20,6 +21,7 @@ import (
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/alert"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/machine"
@@ -30,26 +32,28 @@ import (
 const authStartupTimeout = 10 * time.Second
 
 type Application struct {
-	pool            *pgxpool.Pool
-	ownsPool        bool
-	signup          *auth.Signup
-	login           *auth.Login
-	refresh         *auth.Refresh
-	logout          *auth.Logout
-	me              *auth.Me
-	provision       *device.Provision
-	claim           *device.Claim
-	deviceAuth      *device.Authenticator
-	ingestTelemetry *telemetry.Ingest
-	telemetryWorker *telemetryworker.Worker
-	createMachine   *machine.Create
-	listMachines    *machine.List
-	machineDetail   *machine.Detail
-	getBaseline     *machine.GetBaseline
-	setBaseline     *machine.SetBaseline
-	verifier        *token.JWT
-	logger          *slog.Logger
-	rateLimitConfig middleware.RateLimitConfig
+	pool             *pgxpool.Pool
+	ownsPool         bool
+	signup           *auth.Signup
+	login            *auth.Login
+	refresh          *auth.Refresh
+	logout           *auth.Logout
+	me               *auth.Me
+	provision        *device.Provision
+	claim            *device.Claim
+	deviceAuth       *device.Authenticator
+	ingestTelemetry  *telemetry.Ingest
+	telemetryWorker  *telemetryworker.Worker
+	createMachine    *machine.Create
+	listMachines     *machine.List
+	machineDetail    *machine.Detail
+	getBaseline      *machine.GetBaseline
+	setBaseline      *machine.SetBaseline
+	listAlerts       *alert.List
+	acknowledgeAlert *alert.Acknowledge
+	verifier         *token.JWT
+	logger           *slog.Logger
+	rateLimitConfig  middleware.RateLimitConfig
 }
 
 type Option func(context.Context, *Application) error
@@ -62,6 +66,11 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 			return nil, err
 		}
 	}
+	detectorConfig := config.Detector.withDefaults()
+	if err := detectorConfig.validate(); err != nil {
+		return nil, err
+	}
+
 	claimTTL := config.Device.ClaimTTL
 	if claimTTL < 0 {
 		return nil, errInvalidClaimTTL
@@ -121,10 +130,8 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
-	devices := devicepostgres.New(app.pool)
-	app.setupEnrollment(devices, transactions, claimTTL)
-	app.deviceAuth = device.NewAuthenticator(devices)
-	app.ingestTelemetry = telemetry.NewIngest(telemetrypostgres.New(), transactions)
+	app.setupEnrollment(transactions, claimTTL)
+	app.setupDetection(transactions, detectorConfig)
 	if relayConfigured {
 		app.setupRelay(config.Relay)
 	}
@@ -133,11 +140,12 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 }
 
 func (a *Application) setupEnrollment(
-	devices *devicepostgres.Repository,
 	transactions *transactionpostgres.Manager,
 	claimTTL time.Duration,
 ) {
 	machines := machinepostgres.New(a.pool)
+	devices := devicepostgres.New(a.pool)
+	a.deviceAuth = device.NewAuthenticator(devices)
 	a.provision = device.NewProvision(
 		devices,
 		token.IDs{},
@@ -151,6 +159,15 @@ func (a *Application) setupEnrollment(
 	a.machineDetail = machine.NewDetail(machines)
 	a.getBaseline = machine.NewGetBaseline(machines)
 	a.setBaseline = machine.NewSetBaseline(machines, transactions)
+}
+
+func (a *Application) setupDetection(transactions *transactionpostgres.Manager, config DetectorConfig) {
+	repository := telemetrypostgres.New()
+	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(config))
+	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector)
+	alerts := alertpostgres.New(a.pool)
+	a.listAlerts = alert.NewList(alerts)
+	a.acknowledgeAlert = alert.NewAcknowledge(alerts)
 }
 
 func (a *Application) setupRelay(config RelayConfig) {

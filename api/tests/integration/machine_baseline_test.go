@@ -86,6 +86,13 @@ func TestMachineBaselineHTTP(t *testing.T) {
 			t, server, http.MethodPut, path, changedBody, ownerAuth,
 		))
 		assert.Equal(t, changed, identical)
+		stddevOnly := readMachineBaseline(t, authHTTPRequest(
+			t, server, http.MethodPut, path, `{"mean_rms_g":0.4,"stddev_rms_g":0.1}`, ownerAuth,
+		))
+		assert.EqualValues(t, 3, stddevOnly.Version)
+		assert.InDelta(t, 0.4, stddevOnly.MeanRMSG, 0)
+		assert.InDelta(t, 0.1, stddevOnly.StddevRMSG, 0)
+		assert.True(t, stddevOnly.UpdatedAt.After(changed.UpdatedAt))
 	})
 
 	t.Run("write_waits_for_machine_lock", func(t *testing.T) {
