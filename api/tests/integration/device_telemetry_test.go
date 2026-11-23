@@ -4,12 +4,14 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strings"
 	"sync"
 	"testing"
@@ -158,6 +160,76 @@ func TestDeviceTelemetryRejectsUnclaimedRevokedAndWrongMachine(t *testing.T) {
 	f.assertStored(t, 0, 0, nil)
 }
 
+func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testing.T) {
+	t.Parallel()
+	f := setupDeviceTelemetry(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	tx, err := f.pool.Begin(ctx)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback(t.Context()) }()
+
+	var blockerPID int
+	require.NoError(t, tx.QueryRow(ctx, "SELECT pg_backend_pid() FROM devices WHERE id=$1 FOR NO KEY UPDATE",
+		f.device.DeviceID).Scan(&blockerPID))
+
+	// The server sends 100 Continue when the handler first reads the body, after device authentication.
+	continued := make(chan struct{})
+	requestCtx := httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		Got100Continue: func() { close(continued) },
+	})
+	headers := bearer(f.device.APIKey)
+	headers.Set("Expect", "100-continue")
+	body := observationJSON(uuid.NewString(), f.observed)
+	type result struct {
+		response authHTTPResponse
+		err      error
+	}
+	results := make(chan result, 1)
+	go func() {
+		response, sendErr := sendAuthHTTPRequest(requestCtx, f.server.Client(), http.MethodPost,
+			f.server.URL+telemetryPath(f.machineID), body, headers)
+		results <- result{response: response, err: sendErr}
+	}()
+
+	select {
+	case <-continued:
+	case <-ctx.Done():
+		t.Fatal("telemetry handler did not start reading the authenticated request body")
+	}
+	_, err = tx.Exec(ctx, "UPDATE devices SET revoked_at=clock_timestamp() WHERE id=$1", f.device.DeviceID)
+	require.NoError(t, err)
+
+	// Keep the revocation uncommitted until ingestion waits for the lock or finishes without waiting.
+	var completed bool
+	var attempt result
+	require.Eventually(t, func() bool {
+		select {
+		case attempt = <-results:
+			completed = true
+			return true
+		default:
+			var blocked bool
+			queryErr := f.pool.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
+			)`, blockerPID).Scan(&blocked)
+			return queryErr == nil && blocked
+		}
+	}, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, tx.Commit(ctx))
+	if !completed {
+		select {
+		case attempt = <-results:
+		case <-ctx.Done():
+			t.Fatal("telemetry handler did not respond after revocation committed")
+		}
+	}
+	require.NoError(t, attempt.err)
+	assert.Equal(t, http.StatusNotFound, attempt.response.status)
+	assert.Equal(t, "no-store", attempt.response.header.Get("Cache-Control"))
+	f.assertStored(t, 0, 0, nil)
+}
+
 func TestDeviceKeyCannotAuthenticateUserRoutes(t *testing.T) {
 	t.Parallel()
 	f := setupDeviceTelemetry(t)
@@ -297,6 +369,17 @@ func TestDeviceTelemetryRejectsFutureStaleAndOutOfOrderEvents(t *testing.T) {
 	f.assertStored(t, 0, 0, &latest)
 	assert.Equal(t, http.StatusAccepted, f.post(t, observationJSON(uuid.NewString(), latest)).status)
 	f.assertStored(t, 1, 1, &latest)
+}
+
+func TestDeviceTelemetryRejectsFutureUTCYearOverflow(t *testing.T) {
+	t.Parallel()
+	f := setupDeviceTelemetry(t)
+	at, err := time.Parse(time.RFC3339, "9999-12-31T23:59:59-01:00")
+	require.NoError(t, err)
+
+	response := f.post(t, observationJSON(uuid.NewString(), at))
+	assert.Equal(t, http.StatusConflict, response.status)
+	f.assertStored(t, 0, 0, nil)
 }
 
 func TestDeviceTelemetryConcurrentEventsPreserveOrder(t *testing.T) {

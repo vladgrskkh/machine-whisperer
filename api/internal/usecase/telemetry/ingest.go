@@ -27,6 +27,7 @@ var (
 )
 
 type Repository interface {
+	LockActiveDeviceForTelemetry(ctx context.Context, deviceID, machineID string) error
 	LockMachineForTelemetry(ctx context.Context, machineID string) (*time.Time, time.Time, error)
 	DeleteExpiredTelemetryEvents(ctx context.Context, dbNow time.Time) error
 	FindTelemetryEvent(ctx context.Context, deviceID, eventID string) ([32]byte, bool, error)
@@ -60,15 +61,10 @@ func (i *Ingest) Ingest(
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(normalized)
-	if err != nil {
-		return fmt.Errorf("encode normalized telemetry observation: %w", err)
-	}
 	event := telemetry.Event{
 		Observation: normalized,
 		DeviceID:    deviceID,
 		MachineID:   requestedMachineID,
-		PayloadHash: sha256.Sum256(payload),
 	}
 	return i.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		return i.store(txCtx, event)
@@ -76,6 +72,9 @@ func (i *Ingest) Ingest(
 }
 
 func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
+	if err := i.repository.LockActiveDeviceForTelemetry(ctx, event.DeviceID, event.MachineID); err != nil {
+		return err
+	}
 	cursor, dbNow, err := i.repository.LockMachineForTelemetry(ctx, event.MachineID)
 	if err != nil {
 		return err
@@ -84,6 +83,11 @@ func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
 	if !event.ObservedAt.After(dbNow.Add(-telemetry.RetryWindow)) || event.ObservedAt.After(dbNow.Add(maxFutureSkew)) {
 		return ErrObservationWindow
 	}
+	payload, err := json.Marshal(event.Observation)
+	if err != nil {
+		return fmt.Errorf("encode normalized telemetry observation: %w", err)
+	}
+	event.PayloadHash = sha256.Sum256(payload)
 	if err = i.repository.DeleteExpiredTelemetryEvents(ctx, dbNow); err != nil {
 		return err
 	}

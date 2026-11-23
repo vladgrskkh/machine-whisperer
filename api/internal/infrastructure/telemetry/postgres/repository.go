@@ -22,6 +22,25 @@ type Repository struct{}
 
 func New() *Repository { return &Repository{} }
 
+func (r *Repository) LockActiveDeviceForTelemetry(ctx context.Context, deviceID, machineID string) error {
+	tx := transaction.FromContext(ctx)
+	if tx == nil {
+		return errTransactionRequired
+	}
+
+	// Revocation updates non-key fields, so this must conflict with non-key row updates.
+	var id string
+	err := tx.QueryRow(ctx, `SELECT id::text FROM devices
+		WHERE id=$1 AND machine_id=$2 AND revoked_at IS NULL FOR SHARE`, deviceID, machineID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return machine.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("lock active device for telemetry: %w", err)
+	}
+	return nil
+}
+
 func (r *Repository) LockMachineForTelemetry(ctx context.Context, machineID string) (*time.Time, time.Time, error) {
 	tx := transaction.FromContext(ctx)
 	if tx == nil {
