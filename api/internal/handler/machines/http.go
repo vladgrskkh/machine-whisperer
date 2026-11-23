@@ -3,6 +3,7 @@ package machines
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -52,6 +53,7 @@ func NewCreate(usecase Creator) http.Handler {
 		case errors.Is(err, machine.ErrNotFound):
 			middleware.Unauthorized(w)
 		case err != nil:
+			slog.ErrorContext(r.Context(), "machine creation failed", "error", err)
 			handler.InternalError(w)
 		default:
 			handler.JSON(w, http.StatusCreated, publicMachine(value))
@@ -68,6 +70,7 @@ func NewList(usecase Lister) http.Handler {
 		}
 		values, err := usecase.List(r.Context(), owner)
 		if err != nil {
+			slog.ErrorContext(r.Context(), "machine listing failed", "error", err)
 			handler.InternalError(w)
 			return
 		}
@@ -96,6 +99,7 @@ func NewDetail(usecase Detailer) http.Handler {
 		case errors.Is(err, machine.ErrNotFound):
 			handler.Error(w, http.StatusNotFound, "machine_not_found", "Machine not found")
 		case err != nil:
+			slog.ErrorContext(r.Context(), "machine lookup failed", "error", err)
 			handler.InternalError(w)
 		default:
 			handler.JSON(w, http.StatusOK, publicMachine(value))
