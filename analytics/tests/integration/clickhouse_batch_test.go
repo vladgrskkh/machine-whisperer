@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -18,10 +19,11 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
-	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
 )
 
 const (
+	ingestKey   = "fixture-key"
+	bearer      = "Bearer " + ingestKey
 	image       = "clickhouse/clickhouse-server:26.9.36.3"
 	device      = "89ce1f51-d524-4ea5-93d1-281d5f6a3873"
 	machine     = "05584bee-bfb0-4521-9281-ad359b2236cb"
@@ -55,16 +57,21 @@ func TestClickHouseBatch(t *testing.T) {
 	t.Setenv("CLICKHOUSE_PASSWORD", env["CLICKHOUSE_PASSWORD"])
 	cfg, err := config.LoadClickHouse()
 	require.NoError(t, err)
-	conn, err := clickhouse.Open(ctx, cfg)
+	conn, err := clickhouse.Open(&clickhouse.Options{
+		Addr:        []string{cfg.Address},
+		Auth:        clickhouse.Auth{Database: cfg.Database, Username: cfg.User, Password: cfg.Password},
+		DialTimeout: 10 * time.Second,
+	})
 	require.NoError(t, err)
 	defer conn.Close()
-	app, err := application.New(ctx, config.Config{IngestKey: "fixture-key"}, application.WithClickHouse(cfg))
+	app, err := application.New(ctx, config.Config{IngestKey: ingestKey}, application.WithClickHouse(cfg))
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	srv := httptest.NewServer(app.Routes())
 	defer srv.Close()
 	const body = `{"events":[` + firstEvent + "," + secondEvent + `]}`
-	status, reply := post(t, srv, body)
+	assertRejectedBatches(t, srv, body)
+	status, reply := post(t, srv, body, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "telemetry_events")
 
@@ -82,7 +89,7 @@ func TestClickHouseBatch(t *testing.T) {
 		conn.Exec(ctx, "ALTER TABLE telemetry_events MODIFY SETTING non_replicated_deduplication_window = 0"),
 	)
 	for range 2 {
-		status, reply = post(t, srv, body)
+		status, reply = post(t, srv, body, bearer)
 		require.Equal(t, http.StatusNoContent, status, reply)
 	}
 	var n uint64
@@ -124,17 +131,39 @@ func TestClickHouseBatch(t *testing.T) {
 		t,
 		conn.Exec(ctx, "ALTER TABLE telemetry_events ADD CONSTRAINT fixture_reject CHECK vibration_rms_g < 0.5"),
 	)
-	status, reply = post(t, srv, body)
+	status, reply = post(t, srv, body, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "fixture_reject")
 
 	app.Close()
 	// This event satisfies the constraint, so a failure here verifies that the runtime connection was closed.
-	status, _ = post(t, srv, `{"events":[`+secondEvent+`]}`)
+	status, _ = post(t, srv, `{"events":[`+secondEvent+`]}`, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 }
 
-func post(t *testing.T, srv *httptest.Server, body string) (int, string) {
+func assertRejectedBatches(t *testing.T, srv *httptest.Server, validBatch string) {
+	t.Helper()
+	for _, tc := range []struct {
+		name    string
+		headers []string
+	}{
+		{name: "missing credentials"},
+		{name: "wrong token", headers: []string{"Bearer wrong"}},
+		{name: "wrong scheme", headers: []string{"Basic " + ingestKey}},
+		{name: "duplicate headers", headers: []string{bearer, bearer}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, _ := post(t, srv, validBatch, tc.headers...)
+			assert.Equal(t, http.StatusUnauthorized, status)
+		})
+	}
+	t.Run("invalid batch", func(t *testing.T) {
+		status, _ := post(t, srv, `{"events":[]}`, bearer)
+		assert.Equal(t, http.StatusBadRequest, status)
+	})
+}
+
+func post(t *testing.T, srv *httptest.Server, body string, headers ...string) (int, string) {
 	t.Helper()
 	req, err := http.NewRequestWithContext(
 		t.Context(),
@@ -143,7 +172,9 @@ func post(t *testing.T, srv *httptest.Server, body string) (int, string) {
 		strings.NewReader(body),
 	)
 	require.NoError(t, err)
-	req.Header.Set("Authorization", "Bearer fixture-key")
+	for _, value := range headers {
+		req.Header.Add("Authorization", value)
+	}
 	resp, err := srv.Client().Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()

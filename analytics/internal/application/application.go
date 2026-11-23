@@ -3,16 +3,21 @@ package application
 import (
 	"context"
 	"errors"
+	"time"
+
+	ch "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/usecase/telemetry"
 )
 
+const connectTimeout = 10 * time.Second
+
 type Application struct {
-	ingestKey       string
-	repository      telemetry.TelemetryRepository
-	ingest          *telemetry.IngestBatch
-	closeClickHouse func() error
+	ingestKey  string
+	clickHouse ch.Conn
+	ingest     *telemetry.IngestBatch
 }
 
 type Option func(context.Context, *Application) error
@@ -25,25 +30,39 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 			return nil, err
 		}
 	}
-	if app.repository == nil {
+	if app.clickHouse == nil {
 		return nil, errors.New("telemetry repository is required")
 	}
-	app.ingest = telemetry.NewIngestBatch(app.repository)
+	app.ingest = telemetry.NewIngestBatch(clickhouse.NewRepository(app.clickHouse))
 	return app, nil
 }
 
-func WithTelemetryRepository(repository telemetry.TelemetryRepository) Option {
-	return func(_ context.Context, app *Application) error {
-		if repository == nil || app.repository != nil {
-			return errors.New("invalid telemetry repository configuration")
+func WithClickHouse(cfg config.ClickHouse) Option {
+	return func(ctx context.Context, app *Application) error {
+		if app.clickHouse != nil {
+			return errors.New("telemetry repository is already configured")
 		}
-		app.repository = repository
+		conn, err := ch.Open(&ch.Options{
+			Addr:        []string{cfg.Address},
+			Auth:        ch.Auth{Database: cfg.Database, Username: cfg.User, Password: cfg.Password},
+			DialTimeout: connectTimeout,
+		})
+		if err != nil {
+			return errors.New("invalid ClickHouse configuration")
+		}
+		startup, cancel := context.WithTimeout(ctx, connectTimeout)
+		defer cancel()
+		if err = conn.Ping(startup); err != nil {
+			_ = conn.Close()
+			return errors.New("ClickHouse connection failed")
+		}
+		app.clickHouse = conn
 		return nil
 	}
 }
 
 func (a *Application) Close() {
-	if a.closeClickHouse != nil {
-		_ = a.closeClickHouse()
+	if a.clickHouse != nil {
+		_ = a.clickHouse.Close()
 	}
 }
