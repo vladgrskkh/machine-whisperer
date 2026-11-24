@@ -52,8 +52,8 @@ The directory is mode `0700` and mounted files are mode `0444` so non-root
 container users can read them. The internal CA
 private key stays on the host at mode `0600`. Nginx uses the CA certificate
 to verify the API's internal TLS certificate for hostname `api`. The generated
-API certificate is valid for 365 days. Track its expiration and renew it using
-the existing CA before expiry.
+API certificate is valid for 365 days. Track its expiration and [renew it
+using the existing CA](#renew-the-internal-api-certificate) before expiry.
 
 Define this Bash function in each operator shell.
 
@@ -149,6 +149,58 @@ To run a renewal check manually:
 ```bash
 COMPOSE_PROJECT_NAME="$project" deploy/scripts/renew-certificates.sh
 ```
+
+## Renew the internal API certificate
+
+Run the following from the monorepo root on the Docker host. Set `secrets_dir`
+to the directory used by this deployment. A relative `MW_SECRETS_DIR` in
+Compose is relative to `deploy/`. Sign the replacement leaf with the existing
+`internal-ca.crt` and `internal-ca.key` so Nginx continues to trust the API.
+
+```bash
+secrets_dir=deploy/secrets
+(
+    set -euo pipefail
+    umask 077
+    stage=$(mktemp -d "$secrets_dir/.api-tls.XXXXXXXX")
+    trap 'rm -rf -- "$stage"' EXIT
+
+    openssl req -new -newkey rsa:2048 -nodes -subj '/CN=api' \
+        -out "$stage/api.csr" -keyout "$stage/api.key"
+    cat >"$stage/extensions" <<'EXT'
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectAltName=DNS:api
+EXT
+    serial=$(openssl rand -hex 16)
+    openssl x509 -req -sha256 -days 365 -in "$stage/api.csr" \
+        -CA "$secrets_dir/internal-ca.crt" -CAkey "$secrets_dir/internal-ca.key" \
+        -set_serial "0x$serial" -extfile "$stage/extensions" -out "$stage/api.crt"
+
+    openssl x509 -in "$stage/api.crt" -noout -ext subjectAltName | \
+        grep -Eq '^[[:space:]]*DNS:api[[:space:]]*$'
+    openssl verify -purpose sslserver -verify_hostname api \
+        -CAfile "$secrets_dir/internal-ca.crt" "$stage/api.crt"
+    openssl x509 -in "$stage/api.crt" -noout -pubkey -out "$stage/cert.pub"
+    openssl pkey -in "$stage/api.key" -pubout -out "$stage/key.pub"
+    cmp "$stage/cert.pub" "$stage/key.pub"
+
+    chmod 0444 "$stage/api.crt" "$stage/api.key"
+    mv -f -- "$stage/api.crt" "$stage/api.key" "$secrets_dir/"
+)
+```
+
+For a running deployment, schedule a brief API interruption. After the block
+succeeds, use the `mw` function and `project` for that deployment to recreate
+the API container and remount both secret files. If installation was
+interrupted, rerun the block successfully before recreating the container.
+
+```bash
+mw up -d --no-deps --force-recreate --wait api
+```
+
+Repeat the public HTTPS request from [First startup](#first-startup).
 
 ## Back up the volumes
 
@@ -251,7 +303,24 @@ creates the three volumes with the names and labels Compose expects.
 )
 ```
 
-After the volumes and all TLS files are in place, launch the restored project.
+Before starting the restored stack, check the API leaf's expiration in the
+restored worktree. Use its restored secret directory if the env file customizes
+`MW_SECRETS_DIR`.
+
+```bash
+secrets_dir=deploy/secrets
+cd -- "$restore_checkout" &&
+    openssl x509 -in "$secrets_dir/api.crt" -noout -enddate &&
+    openssl verify -purpose sslserver -verify_hostname api \
+        -CAfile "$secrets_dir/internal-ca.crt" "$secrets_dir/api.crt"
+```
+
+If verification reports an expired leaf, run the [internal API certificate renewal
+block](#renew-the-internal-api-certificate) from that worktree with the restored
+secret directory and its existing CA. Once the verified pair is installed,
+continue with the full launch below, which creates the API container with the
+renewed files.
+
 Record the worktree path and project name that succeeded, including any
 changes made to resolve a collision. In a fresh Bash shell, set
 `restore_checkout` to that exact worktree path and `project` to the exact
