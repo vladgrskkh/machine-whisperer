@@ -8,13 +8,15 @@ monorepo root on the Docker host. The operator account needs Docker access and
 access to the secret files. Docker Engine 28 or newer keeps localhost-published
 ports off the local network. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 
-Point the public DNS name at the host and allow inbound TCP 80 and 443 for
-Nginx. Leave host port 9090 available for Prometheus on loopback. PostgreSQL,
-ClickHouse, and Analytics are on the private Compose network.
+Publish a public DNS A record pointing to the host's public IPv4 address and
+allow inbound TCP 80 and 443 for Nginx. Do not publish an AAAA record until
+the service has a verified dual-stack path that preserves client source
+addresses for Nginx. Leave host port 9090 available for Prometheus on loopback.
+PostgreSQL, ClickHouse, and Analytics are on the private Compose network.
 
-Certbot uses HTTP-01 validation. Check the public DNS A record and any AAAA
-records from outside the host network. Each published address must reach
-Nginx on port 80 during both issuance and renewal.
+Certbot uses HTTP-01 validation. From outside the host network, check that the
+A record resolves to the host's public IPv4 address and that Nginx is reachable
+on port 80 during both issuance and renewal.
 
 ## First startup
 
@@ -75,7 +77,8 @@ mw ps -a
 After changing `MW_PROVISIONING_CIDR`, apply the new value with `mw up -d nginx`.
 
 PostgreSQL and ClickHouse must pass their health checks before their respective
-migration jobs can run. The API and Analytics wait for successful migrations.
+migration jobs can run. The API and Analytics each wait for a healthy database
+and a successful migration.
 Nginx starts after the API becomes healthy. In `mw ps -a`, both migration jobs
 should show exit code 0. Before issuance, Nginx serves the challenge path on
 port 80 and returns HTTP 503 for application routes. To obtain the first

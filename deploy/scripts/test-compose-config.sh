@@ -25,7 +25,7 @@ for name, expected in networks.items():
     assert not svc[name].get("network_mode"), name
 ports = {(name, p.get("host_ip", ""), str(p["published"]), p["target"])
          for name, service in svc.items() for p in service.get("ports", [])}
-assert ports == {("nginx", "", "80", 80), ("nginx", "", "443", 443),
+assert ports == {("nginx", "0.0.0.0", "80", 80), ("nginx", "0.0.0.0", "443", 443),
                  ("prometheus", "127.0.0.1", "9090", 9090)}, ports
 for name, image in {"certbot": "certbot/certbot:v5.10.0", "postgres": "postgres:18.7-alpine3.23",
                     "clickhouse": "clickhouse/clickhouse-server:26.9.36.3",
@@ -50,6 +50,8 @@ for job, db in [("api-migrate", "postgres"), ("analytics-migrate", "clickhouse")
     assert svc[job]["depends_on"][db]["condition"] == "service_healthy"
     app = job.removesuffix("-migrate")
     assert svc[app]["depends_on"][job]["condition"] == "service_completed_successfully"
+    gate = svc[app]["depends_on"].get(db, {})
+    assert gate.get("condition") == "service_healthy" and gate.get("required", True), (app, db, gate)
 for name, dep in [("api", "analytics"), ("nginx", "api")]:
     assert svc[name]["depends_on"][dep]["condition"] == "service_healthy"
 for name, target in [("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
@@ -61,13 +63,33 @@ grants = {"api": {"database_url", "analytics_token", "signing_key", "verify_keys
           "analytics-migrate": {"clickhouse_password"}, "clickhouse": {"clickhouse_password"},
           "postgres": {"postgres_password"}, "nginx": {"internal_ca"}, "certbot": set(),
           "prometheus": set()}
+secret_files = {
+    "api": {
+        "API_TLS_CERT_FILE": "/run/secrets/api_cert",
+        "API_TLS_KEY_FILE": "/run/secrets/api_key",
+        "DATABASE_URL_FILE": "/run/secrets/database_url",
+        "AUTH_SIGNING_KEY_FILE": "/run/secrets/signing_key",
+        "AUTH_VERIFY_KEYS_FILE": "/run/secrets/verify_keys",
+        "ANALYTICS_INGEST_API_KEY_FILE": "/run/secrets/analytics_token",
+    },
+    "api-migrate": {"DATABASE_URL_FILE": "/run/secrets/database_url"},
+    "analytics": {
+        "ANALYTICS_INGEST_API_KEY_FILE": "/run/secrets/analytics_token",
+        "CLICKHOUSE_PASSWORD_FILE": "/run/secrets/clickhouse_password",
+    },
+    "analytics-migrate": {"CLICKHOUSE_PASSWORD_FILE": "/run/secrets/clickhouse_password"},
+    "clickhouse": {"CLICKHOUSE_PASSWORD_FILE": "/run/secrets/clickhouse_password"},
+    "postgres": {"POSTGRES_PASSWORD_FILE": "/run/secrets/postgres_password"},
+}
+secrets_dir = pathlib.PurePosixPath("/run/secrets")
 for name, expected in grants.items():
-    assert {s["source"] for s in svc[name].get("secrets", [])} == expected, name
+    mounts = {(s["source"], secrets_dir / (s.get("target") or s["source"]))
+              for s in svc[name].get("secrets", [])}
+    assert mounts == {(source, secrets_dir / source) for source in expected}, (name, mounts)
     env = svc[name].get("environment", {})
     assert set(env).isdisjoint({"DATABASE_URL", "ANALYTICS_INGEST_API_KEY", "CLICKHOUSE_PASSWORD", "POSTGRES_PASSWORD"}), name
-    for key, value in env.items():
-        if key.endswith("_FILE"):
-            assert value == "/run/secrets/" + value.rsplit("/", 1)[-1] and value.split("/")[-1] in expected, key
+    actual_files = {key: value for key, value in env.items() if key.endswith("_FILE")}
+    assert actual_files == secret_files.get(name, {}), (name, actual_files)
 for secret in cfg["secrets"].values():
     assert "file" in secret and not secret.get("external")
 assert svc["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == svc["nginx"]["networks"]["edge"]["ipv4_address"] + "/32"

@@ -18,8 +18,8 @@ services:
       DOMAIN: ${DOMAIN:-onerep.mooo.com}
       MW_PROVISIONING_CIDR: ${MW_PROVISIONING_CIDR:-127.0.0.1/32}
     ports:
-      - "80:80"
-      - "443:443"
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
     networks:
       edge:
         ipv4_address: ${MW_PROXY_IP:-172.30.48.2}
