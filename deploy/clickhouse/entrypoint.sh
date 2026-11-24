@@ -1,13 +1,21 @@
 #!/bin/bash
-set -eu
+set -euo pipefail
 
 if [[ -z "${CLICKHOUSE_PASSWORD_FILE:-}" ]]; then
     echo 'CLICKHOUSE_PASSWORD_FILE is required' >&2
     exit 1
 fi
 
-if ! CLICKHOUSE_PASSWORD=$(cat -- "$CLICKHOUSE_PASSWORD_FILE" 2>/dev/null); then
-    echo 'cannot read CLICKHOUSE_PASSWORD_FILE' >&2
+if ! CLICKHOUSE_PASSWORD=$(
+    cat -- "$CLICKHOUSE_PASSWORD_FILE" 2>/dev/null | {
+        # read succeeds when it finds the NUL delimiter.
+        if IFS= read -r -d '' password; then
+            exit 1
+        fi
+        printf '%s' "$password"
+    }
+); then
+    echo 'CLICKHOUSE_PASSWORD_FILE must be readable and must not contain NUL bytes' >&2
     exit 1
 fi
 

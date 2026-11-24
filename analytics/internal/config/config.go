@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"strings"
@@ -65,6 +66,9 @@ func loadSecret(variable string) (string, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // The deployment operator configures the secret path.
 	if err != nil {
 		return "", errors.New("cannot read " + fileVariable)
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return "", errors.New(fileVariable + " must not contain NUL bytes")
 	}
 	return strings.TrimRight(string(data), "\r\n"), nil
 }
