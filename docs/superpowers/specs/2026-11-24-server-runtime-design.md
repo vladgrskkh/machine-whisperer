@@ -1,6 +1,6 @@
 # Machine Whisperer Single-Server Runtime
 
-**Status:** Approved by the user
+**Status:** Approved by the user; Certbot added per follow-up request
 
 **Date:** 2026-11-24
 
@@ -34,6 +34,9 @@ mobile app is a native client and is not a server container.
   future application metrics; this change will not add product instrumentation.
 - The deployment target is one Linux server with Docker Engine and the Compose
   plugin. It is not a high-availability or multi-host deployment.
+- The user supplied `onerep.mooo.com` as the SSH hostname and requested
+  Certbot-managed public TLS. Use this as the initial API domain, but keep
+  `DOMAIN` configurable.
 - The mobile client is already implemented on Expo SDK 57. The user requested
   upgrading it to Expo SDK 58 as part of making the system ready to run. SDK 58
   uses React Native 0.88; use the [official SDK 58 release notes](https://expo.dev/changelog/sdk-58)
@@ -53,11 +56,15 @@ mobile app is a native client and is not a server container.
 3. **Local-development Compose.** This would be simpler and could use HTTP and
    development credentials, but would not satisfy the server deployment goal.
 
-The user chose the server deployment target. The public domain and certificate
-issuer are not yet specified, so this design assumes public TLS certificate
-files are provisioned and renewed by the server operator and mounted read-only
-for Nginx. The stack will parameterize the domain and certificate paths rather
-than hard-code a hostname.
+Use the official `certbot/certbot:v5.10.0` image as a Compose service for
+Let's Encrypt HTTP-01 issuance and renewal. HTTP-01 requires inbound port 80;
+normal public API traffic also needs port 443. Nginx starts with a bootstrap
+HTTP-only configuration that serves the ACME webroot and returns 503 for
+application routes while the certificate is absent. After issuance, restart
+Nginx with its HTTPS configuration. Certbot and Nginx share a persistent host
+certificate directory; Nginx mounts it read-only. A host systemd timer runs a
+Compose renewal helper that reloads Nginx after Certbot renews. The Certbot
+container never receives the Docker socket. ([Let's Encrypt challenge docs](https://letsencrypt.org/docs/challenge-types/), [Certbot user guide](https://eff-certbot.readthedocs.io/en/stable/using.html))
 
 ## Runtime layout
 
@@ -65,6 +72,9 @@ than hard-code a hostname.
 flowchart LR
   client[Mobile app / sensor] -->|HTTPS| nginx[Nginx]
   nginx -->|verified internal TLS| api[API + outbox worker]
+  certbot[Certbot] -->|HTTP-01 webroot| nginx
+  certbot --> certs[(Persistent certificates)]
+  nginx --> certs
   api --> pg[(PostgreSQL)]
   api -->|private bearer-auth HTTP| analytics[Analytics]
   analytics --> ch[(ClickHouse)]
@@ -74,10 +84,16 @@ flowchart LR
 
 Compose runs these services:
 
-- **nginx** publishes ports 80 and 443. Port 80 serves the ACME challenge path
-  and redirects other requests to HTTPS. Port 443 terminates public TLS and
-  proxies the API over TLS, verifying the API certificate against a mounted
-  internal CA. Analytics, databases, and Prometheus are not public routes.
+- **nginx** publishes ports 80 and 443. Before the public certificate exists,
+  the bootstrap configuration serves only the ACME challenge and returns 503
+  for application routes. After issuance, Nginx restarts with HTTP-to-HTTPS
+  redirect and TLS termination. It proxies the API over TLS, verifying the API
+  certificate against a mounted internal CA. Analytics, databases, and
+  Prometheus are not public routes.
+- **certbot** is an opt-in Compose service using `certbot/certbot:v5.10.0`. It
+  uses HTTP-01 through the shared webroot and stores certificates in a
+  persistent host directory mounted read/write by Certbot and read-only by
+  Nginx. A systemd timer invokes the renewal helper and reloads Nginx.
 - **api** listens with TLS on its internal edge network and joins the private
   data network for PostgreSQL and Analytics. Nginx overwrites forwarding
   headers; the API trusts only the Nginx edge-network CIDR.
@@ -98,10 +114,16 @@ Compose runs these services:
 
 ## TLS and secrets
 
-- Nginx uses operator-provided public certificate and key files. The operator
-  supplies `DOMAIN` and the certificate paths. Automatic ACME issuance and
-  renewal are outside this change until the server domain and certificate
-  workflow are known.
+- `DOMAIN` defaults to `onerep.mooo.com`; the operator supplies `ACME_EMAIL`
+  and may override `DOMAIN`. The operator must configure public DNS and allow
+  inbound TCP ports 80 and 443. Certbot obtains and renews the public
+  certificate using HTTP-01 webroot validation. Certificates persist in the
+  configured host directory.
+- `deploy/scripts/bootstrap-certificates.sh` starts Nginx in bootstrap mode,
+  obtains the certificate through the webroot, and restarts Nginx with TLS.
+  `deploy/scripts/renew-certificates.sh` runs Certbot renewal and reloads
+  Nginx. A provided systemd unit/timer schedules renewal; Certbot never
+  receives the Docker socket.
 - A deployment helper generates a private internal CA and an API server
   certificate with the Compose service name as its SAN. The API key is mounted
   only in the API container; Nginx receives only the CA certificate needed to
@@ -132,8 +154,9 @@ Compose runs these services:
   publish database ports by default. Document backup and restore commands for
   the named volumes; do not claim these local volumes provide off-host backup.
 - Provide `.env.server.example` with non-secret settings only, a secrets setup
-  script, `.dockerignore` files, and a runbook with prerequisites, startup,
-  status/log, upgrade, backup, restore, and shutdown commands.
+  script, certificate bootstrap/renewal scripts, `.dockerignore` files, and a
+  runbook with prerequisites, startup, status/log, upgrade, backup, restore,
+  certificate renewal, and shutdown commands.
 - Add health endpoints or equivalent container checks where required for
   startup ordering. Do not expose health or metrics routes publicly through
   Nginx.
@@ -142,7 +165,7 @@ Compose runs these services:
 
 - Start all server-side components and apply migrations using Docker Compose.
 - Serve authenticated API traffic through public HTTPS and verified internal
-  TLS to the API.
+  TLS to the API, with Certbot-managed public certificate issuance and renewal.
 - Keep stateful services private and persistent, and credentials out of
   tracked configuration.
 - Include a Prometheus service and secure local access, without inventing
@@ -152,8 +175,9 @@ Compose runs these services:
 
 ## Non-goals
 
-- Deploying to or logging into a specific server; no hostname, SSH access,
-  certificate files, or server credentials have been provided.
+- Installing Docker on the target server or changing its firewall; the
+  operator must perform these using interactive sudo and the host provider's
+  network controls.
 - Multi-host scaling, high availability, managed databases, Kubernetes, or
   automated secret rotation.
 - Adding application metrics, dashboards, alert rules, node exporters, or
@@ -168,5 +192,6 @@ Compose runs these services:
 - Keep the Compose configuration safe by default: no public database ports,
   no public Prometheus port, non-root app containers, health-gated startup, and
   persistent named volumes.
-- The operator must provide a routable DNS name and public certificate before
-  remote HTTPS access works.
+- The operator must confirm `onerep.mooo.com` (or the configured `DOMAIN`)
+  resolves to the host and inbound port 80 reaches Nginx before Certbot can
+  issue the initial certificate.
