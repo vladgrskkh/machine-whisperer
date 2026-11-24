@@ -24,7 +24,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	key := os.Getenv("ANALYTICS_INGEST_API_KEY")
+	key, err := loadSecret("ANALYTICS_INGEST_API_KEY")
+	if err != nil {
+		return Config{}, err
+	}
 	if key == "" || strings.ContainsFunc(key, func(r rune) bool { return r <= ' ' || r > '~' }) {
 		return Config{}, errors.New("ANALYTICS_INGEST_API_KEY must be a nonempty token")
 	}
@@ -36,15 +39,32 @@ func Load() (Config, error) {
 }
 
 func LoadClickHouse() (ClickHouse, error) {
+	password, err := loadSecret("CLICKHOUSE_PASSWORD")
+	if err != nil {
+		return ClickHouse{}, err
+	}
 	c := ClickHouse{
 		Address:  os.Getenv("CLICKHOUSE_ADDRESS"),
 		Database: os.Getenv("CLICKHOUSE_DATABASE"),
 		User:     os.Getenv("CLICKHOUSE_USER"),
-		Password: os.Getenv("CLICKHOUSE_PASSWORD"),
+		Password: password,
 	}
 	if strings.TrimSpace(c.Address) == "" || strings.TrimSpace(c.Database) == "" || strings.TrimSpace(c.User) == "" ||
 		c.Password == "" {
 		return ClickHouse{}, errors.New("ClickHouse address, database, user and password are required")
 	}
 	return c, nil
+}
+
+func loadSecret(variable string) (string, error) {
+	fileVariable := variable + "_FILE"
+	path := os.Getenv(fileVariable)
+	if path == "" {
+		return os.Getenv(variable), nil
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // The deployment operator configures the secret path.
+	if err != nil {
+		return "", errors.New("cannot read " + fileVariable)
+	}
+	return strings.TrimRight(string(data), "\r\n"), nil
 }

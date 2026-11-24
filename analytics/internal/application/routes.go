@@ -11,6 +11,9 @@ import (
 
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	router.With(middleware.Bearer(a.ingestKey)).
 		Post("/internal/v1/telemetry-batches", telemetry.NewBatch(a.ingest).ServeHTTP)
 	router.With(middleware.Bearer(a.ingestKey)).
