@@ -83,3 +83,40 @@ it.each([
   await expect(api.claimDevice({ device_id: deviceId, machine_id: machine.id, claim_code: claimCode }))
     .rejects.toMatchObject({ code: 'invalid_response' });
 });
+
+const profile = {
+  id: '31766072-1cfc-4798-ac7e-340151697e3c',
+  email: 'operator@example.com',
+  created_at: '2026-11-24T00:00:00.123456Z',
+};
+
+it.each([
+  null,
+  { ...profile, id: undefined },
+  { ...profile, id: 'invalid' },
+  { ...profile, email: null },
+  { ...profile, email: '' },
+  { ...profile, email: 'invalid' },
+  { ...profile, created_at: 1795478400000 },
+  { ...profile, created_at: 'invalid' },
+  { ...profile, created_at: '123' },
+  { ...profile, created_at: '2026-02-29T14:30:59+03:30' },
+])('rejects malformed account responses (%j)', async (body) => {
+  const api = new ApiClient({
+    baseUrl: 'https://example.test',
+    fetch: async () => new Response(JSON.stringify(body)),
+    session: { getAccess: () => ({ token: 'access', generation: 1 }), refreshAccess: jest.fn() },
+  });
+
+  await expect(api.me()).rejects.toMatchObject({ code: 'invalid_response' });
+});
+
+it('accepts valid account responses with fractional seconds', async () => {
+  const api = new ApiClient({
+    baseUrl: 'https://example.test',
+    fetch: async () => new Response(JSON.stringify(profile)),
+    session: { getAccess: () => ({ token: 'access', generation: 1 }), refreshAccess: jest.fn() },
+  });
+
+  await expect(api.me()).resolves.toEqual(profile);
+});

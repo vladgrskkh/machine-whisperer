@@ -25,7 +25,7 @@ jest.mock('expo-secure-store', () => ({
 jest.mock('expo-camera', () => {
   const { Pressable } = jest.requireActual('react-native');
   return {
-    CameraView: jest.fn(({ onBarcodeScanned }) => (
+    CameraView: jest.fn(({ onBarcodeScanned, onMountError }) => (
       <>
         <Pressable accessibilityRole="button" accessibilityLabel="Read sample QR"
           onPress={() => onBarcodeScanned({ data: JSON.stringify({
@@ -33,6 +33,8 @@ jest.mock('expo-camera', () => {
           }) })} />
         <Pressable accessibilityRole="button" accessibilityLabel="Read invalid QR"
           onPress={() => onBarcodeScanned({ data: 'unrelated content' })} />
+        <Pressable accessibilityRole="button" accessibilityLabel="Simulate camera mount error"
+          onPress={() => onMountError({ message: 'The camera could not initialize' })} />
       </>
     )),
     useCameraPermissions: jest.fn(),
@@ -216,6 +218,39 @@ it('keeps manual entry available after camera denial and binds the request to th
   press('Back to machines');
   await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
   expect(screen.getByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
+});
+
+it('keeps manual claims usable when the camera permission request rejects', async () => {
+  requestPermission.mockRejectedValueOnce(new Error('Permission request failed'));
+  network();
+  renderRouter(routes, { initialUrl: claimPath });
+
+  await screen.findByRole('button', { name: 'Scan device QR' });
+  press('Scan device QR');
+  expect(await screen.findByRole('alert')).toHaveTextContent(/could not open the camera.*manually/i);
+  press('Enter claim code');
+  enterClaim(deviceId, claimCode);
+  press('Claim device');
+
+  expect(await screen.findByText('Sensor device connected.')).toBeOnTheScreen();
+});
+
+it('closes a failed camera preview and lets the operator claim manually', async () => {
+  jest.mocked(Camera.useCameraPermissions).mockReturnValue([permission(true), requestPermission, getPermission]);
+  network();
+  renderRouter(routes, { initialUrl: claimPath });
+
+  await screen.findByRole('button', { name: 'Scan device QR' });
+  press('Scan device QR');
+  await screen.findByRole('button', { name: 'Simulate camera mount error' });
+  press('Simulate camera mount error');
+  expect(await screen.findByRole('alert')).toHaveTextContent(/could not open the camera.*manually/i);
+  expect(screen.queryByRole('button', { name: 'Read sample QR' })).toBeNull();
+  press('Enter claim code');
+  enterClaim(deviceId, claimCode);
+  press('Claim device');
+
+  expect(await screen.findByText('Sensor device connected.')).toBeOnTheScreen();
 });
 
 it('recovers after scanning an invalid QR and uses a valid QR for the selected machine', async () => {

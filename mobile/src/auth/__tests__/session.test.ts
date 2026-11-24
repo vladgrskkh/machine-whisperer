@@ -18,7 +18,7 @@ const initial: TokenPair = {
 const rotated: TokenPair = {
   access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'Bearer', expires_in: 900,
 };
-const user = { id: 'operator-id', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
+const user = { id: '31766072-1cfc-4798-ac7e-340151697e3c', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status });

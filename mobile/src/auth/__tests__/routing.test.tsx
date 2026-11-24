@@ -37,7 +37,7 @@ const routes = {
   'machines/[id]/index': MachineDetail,
   'machines/[id]/baseline': Baseline,
 };
-const user = { id: 'operator-id', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
+const user = { id: '31766072-1cfc-4798-ac7e-340151697e3c', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
 const pair = { access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 };
 const originalBaseUrl = process.env.EXPO_PUBLIC_API_URL;
 
@@ -138,4 +138,18 @@ it('hides the protected screen while signing out and offers a retry if secure de
 
   expect(await screen.findByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
   expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(2);
+});
+
+it('shows a retryable error if the account response is malformed', async () => {
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValue(JSON.stringify(pair));
+  jest.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({ ...user, created_at: 'invalid' })))
+    .mockResolvedValueOnce(new Response(JSON.stringify(user)));
+  renderRouter(routes, { initialUrl: '/account' });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(/unreadable account response/i);
+  expect(screen.queryByText('Invalid Date', { exact: false })).toBeNull();
+  fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByText(user.email)).toBeOnTheScreen();
 });

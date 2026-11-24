@@ -1,6 +1,6 @@
 import { ApiError, decodeApiError, sessionRequired } from './errors';
 import {
-  isTokenPair, type BaselineValues, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
+  isTokenPair, isUser, type BaselineValues, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
   type Credentials, type Machine, type MachineAlert, type MachineBaseline, type TelemetryPage, type TokenPair, type User,
 } from './types';
 
@@ -62,8 +62,10 @@ export class ApiClient {
     return this.send('/v1/auth/logout', { method: 'POST', body: { refresh_token: refreshToken } });
   }
 
-  me(): Promise<User> {
-    return this.authenticated('/v1/users/me');
+  async me(): Promise<User> {
+    const profile = await this.authenticated<unknown>('/v1/users/me');
+    if (!isUser(profile)) throw new ApiError(0, 'invalid_response', 'The server returned an unreadable account response.');
+    return profile;
   }
 
   listMachines(): Promise<Machine[]> {
