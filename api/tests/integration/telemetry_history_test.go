@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -67,6 +68,9 @@ func TestTelemetryHistoryRejectsInvalidQuery(t *testing.T) {
 	t.Cleanup(analytics.Close)
 	server, owner, machineID := startHistoryServer(t, analytics.URL)
 	path := historyPath(machineID)
+	const eventID = "88888888-8888-4888-8888-888888888888"
+	const observedAt = "2026-11-24T12:00:00.123456Z"
+	cursorBody := strings.TrimSuffix(historyCursorJSON(machineID, observedAt, eventID), "}")
 
 	for _, target := range []string{
 		historyPath("not-a-uuid"),
@@ -75,6 +79,11 @@ func TestTelemetryHistoryRejectsInvalidQuery(t *testing.T) {
 		path + "?limit=%", path + "?cursor=", path + "?cursor=not%2Fbase64",
 		path + "?cursor=e30", path + "?cursor=e30&cursor=e30",
 		path + "?cursor=" + historyCursor(uuid.NewString()),
+		path + "?cursor=" + historyCursorAt(machineID, "1899-12-31T23:59:59.999999Z", eventID),
+		path + "?cursor=" + historyCursorAt(machineID, "2263-01-01T00:00:00Z", eventID),
+		path + "?cursor=" + historyCursorAt(machineID, observedAt, "ABCDEFAB-8888-4888-8888-888888888888"),
+		path + "?cursor=" + base64.RawURLEncoding.EncodeToString([]byte(cursorBody+`,"event_id":"`+eventID+`"}`)),
+		path + "?cursor=" + base64.RawURLEncoding.EncodeToString([]byte(cursorBody+`,"unexpected":true}`)),
 		path + "?cursor=" + strings.Repeat("A", 513),
 	} {
 		response := authHTTPRequest(t, server, http.MethodGet, target, "", owner)
@@ -130,6 +139,57 @@ func TestTelemetryHistoryAnalyticsFailureIsSanitized(t *testing.T) {
 		}
 	}
 	assert.Zero(t, redirects.Load())
+}
+
+func TestTelemetryHistoryRejectsMalformedAnalyticsPage(t *testing.T) {
+	t.Parallel()
+	const valid = `{"device_id":"77777777-7777-4777-8777-777777777777",
+		"event_id":"88888888-8888-4888-8888-888888888888","received_at":"2026-11-24T12:01:00.987654Z",
+		"schema_version":1,"observed_at":"2026-11-24T12:00:00.123456Z","operating_state":"running",
+		"vibration_rms_g":0,"dominant_frequency_hz":null,"current_rms_a":null}`
+	cases := []struct {
+		name   string
+		items  string
+		status int
+	}{
+		{"null_item", "null", http.StatusServiceUnavailable},
+		{"empty_item", "{}", http.StatusServiceUnavailable},
+		{"missing_rms", strings.Replace(valid, `"vibration_rms_g":0,`, "", 1), http.StatusServiceUnavailable},
+		{"null_rms", strings.Replace(valid, `"vibration_rms_g":0`, `"vibration_rms_g":null`, 1),
+			http.StatusServiceUnavailable},
+		{"invalid_id", strings.Replace(valid, "77777777-7777-4777-8777-777777777777", "private invalid ID", 1),
+			http.StatusServiceUnavailable},
+		{"invalid_version", strings.Replace(valid, `"schema_version":1`, `"schema_version":2`, 1),
+			http.StatusServiceUnavailable},
+		{"invalid_state", strings.Replace(valid, `"operating_state":"running"`, `"operating_state":"idle"`, 1),
+			http.StatusServiceUnavailable},
+		{"null_timestamp", strings.Replace(valid, `"2026-11-24T12:00:00.123456Z"`, "null", 1),
+			http.StatusServiceUnavailable},
+		{"zero_rms_null_optional_readings", valid, http.StatusOK},
+	}
+	responses := make(map[string]string, len(cases))
+	for index, tc := range cases {
+		responses[strconv.Itoa(index+1)] = fmt.Sprintf(`{"items":[%s],"next_cursor":null}`, tc.items)
+	}
+	analytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, responses[r.URL.Query().Get("limit")])
+	}))
+	t.Cleanup(analytics.Close)
+	server, owner, machineID := startHistoryServer(t, analytics.URL)
+	for index, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			limit := strconv.Itoa(index + 1)
+			response := authHTTPRequest(t, server, http.MethodGet, historyPath(machineID)+"?limit="+limit, "", owner)
+			assert.Equal(t, tc.status, response.status)
+			if tc.status == http.StatusOK {
+				assert.JSONEq(t, responses[limit], response.body)
+				return
+			}
+			assert.Contains(t, response.body, `"telemetry_unavailable"`)
+			assert.NotContains(t, response.body, "private invalid ID")
+		})
+	}
 }
 
 func TestTelemetryHistoryCursorForwarding(t *testing.T) {
@@ -205,6 +265,10 @@ func historyCursor(machineID string) string {
 }
 
 func historyCursorAt(machineID, observedAt, eventID string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(historyCursorJSON(machineID, observedAt, eventID)))
+}
+
+func historyCursorJSON(machineID, observedAt, eventID string) string {
 	const cursor = `{"machine_id":%q,"observed_at":%q,"device_id":"77777777-7777-4777-8777-777777777777","event_id":%q}`
-	return base64.RawURLEncoding.EncodeToString(fmt.Appendf(nil, cursor, machineID, observedAt, eventID))
+	return fmt.Sprintf(cursor, machineID, observedAt, eventID)
 }

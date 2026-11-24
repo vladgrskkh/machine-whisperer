@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 )
@@ -76,9 +79,50 @@ func readHistoryPage(body io.Reader, limit int) (telemetry.HistoryPage, error) {
 	if err != nil || len(raw) > maxHistoryPageBytes {
 		return telemetry.HistoryPage{}, telemetry.ErrHistoryUnavailable
 	}
-	var page telemetry.HistoryPage
-	if err = json.Unmarshal(raw, &page); err != nil || page.Items == nil || len(page.Items) > limit {
+	var wire struct {
+		Items      []historyItem `json:"items"`
+		NextCursor *string       `json:"next_cursor"`
+	}
+	if err = json.Unmarshal(raw, &wire); err != nil || wire.Items == nil || len(wire.Items) > limit {
 		return telemetry.HistoryPage{}, telemetry.ErrHistoryUnavailable
 	}
+	page := telemetry.HistoryPage{
+		Items:      make([]telemetry.HistoryItem, 0, len(wire.Items)),
+		NextCursor: wire.NextCursor,
+	}
+	for _, item := range wire.Items {
+		if !item.valid() {
+			return telemetry.HistoryPage{}, telemetry.ErrHistoryUnavailable
+		}
+		item.HistoryItem.VibrationRMSG = *item.VibrationRMS
+		page.Items = append(page.Items, item.HistoryItem)
+	}
 	return page, nil
+}
+
+type historyItem struct {
+	telemetry.HistoryItem
+
+	// A valid zero vibration reading must be distinguishable from a missing or null field.
+	VibrationRMS *float64 `json:"vibration_rms_g"`
+}
+
+func (i historyItem) valid() bool {
+	return i.SchemaVersion == 1 && (i.OperatingState == "running" || i.OperatingState == "unknown") &&
+		canonicalHistoryID(i.DeviceID) && canonicalHistoryID(i.EventID) &&
+		validHistoryTimestamp(i.ReceivedAt) && validHistoryTimestamp(i.ObservedAt) &&
+		i.VibrationRMS != nil && *i.VibrationRMS >= 0 &&
+		(i.DominantFrequencyHz == nil || *i.DominantFrequencyHz >= 0) &&
+		(i.CurrentRMSA == nil || *i.CurrentRMSA >= 0)
+}
+
+func canonicalHistoryID(value string) bool {
+	id, err := uuid.Parse(value)
+	return err == nil && id.String() == value
+}
+
+func validHistoryTimestamp(stamp time.Time) bool {
+	// Analytics stores timestamps in DateTime64 and uses the driver's UnixNano conversion.
+	const firstHistoryYear = 1900
+	return stamp.UTC().Year() >= firstHistoryYear && !stamp.After(time.Unix(0, math.MaxInt64))
 }

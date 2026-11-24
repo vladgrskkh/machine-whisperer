@@ -347,7 +347,7 @@ An exhausted page has a null `next_cursor`.
 | `400` | The machine ID, limit or cursor is invalid. |
 | `401` | User credentials are missing or invalid. |
 | `404` | The machine is missing or belongs to another user. |
-| `503` | Analytics is unavailable. Retry the request later. |
+| `503` | The PostgreSQL ownership lookup failed, or Analytics could not serve history due to a transport, storage, or service error. Retry the request later. |
 
 History responses use `Cache-Control: no-store`. The API uses
 `ANALYTICS_URL` and `ANALYTICS_INGEST_API_KEY` for history requests. These
