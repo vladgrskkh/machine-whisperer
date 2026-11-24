@@ -19,16 +19,29 @@ grep -Fq "ssl_certificate /etc/letsencrypt/live/$DOMAIN/fullchain.pem;" "$work/d
 grep -Fq 'proxy_ssl_verify on;' "$work/default.conf"
 
 export PATH="$work:$PATH" CALLS="$work/calls" COMPOSE_PROJECT_NAME=fixture-project
+export FIXTURE_WEBROOT="$work/custom webroot"
 cat >"$work/docker" <<'SH'
 #!/bin/sh
 set -eu
 [ "$1 $2 $3 $4 $5 $6 $7" = "compose --env-file .env.server -p fixture-project -f compose.yaml" ]
 shift 7
+if [ "$*" = 'config --format json nginx' ]; then
+    python3 -c 'import json, os; print(json.dumps({"services": {"nginx": {"volumes": [{"type": "bind", "target": "/var/www/acme", "source": os.environ["FIXTURE_WEBROOT"]}]}}}))'
+    exit
+fi
 printf '%s\n' "$*" >>"$CALLS"
 if [ "${FAIL_RENEW:-}" = yes ] && [ "$1" = run ]; then exit 1; fi
 SH
 chmod +x "$work/docker"
-scripts/bootstrap-certificates.sh
+(umask 077; mkdir "$FIXTURE_WEBROOT"; scripts/bootstrap-certificates.sh)
+python3 - "$FIXTURE_WEBROOT" <<'PYTHON'
+import os
+import stat
+import sys
+
+mode = stat.S_IMODE(os.stat(sys.argv[1]).st_mode)
+assert mode == 0o755, oct(mode)
+PYTHON
 diff - "$CALLS" <<'EXPECTED'
 up -d nginx
 run --rm certbot

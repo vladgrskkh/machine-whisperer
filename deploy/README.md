@@ -3,7 +3,7 @@
 ## Prerequisites
 
 Use a Linux host with Docker Engine 28 or newer, the Docker Compose v2 plugin,
-Git, Bash, and OpenSSL with Ed25519 support. Run the commands from the
+Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands from the
 monorepo root on the Docker host. The operator account needs Docker access and
 access to the secret files. Docker Engine 28 or newer keeps localhost-published
 ports off the local network. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
@@ -22,7 +22,7 @@ Nginx on port 80 during both issuance and renewal.
 (umask 077; cp -n deploy/.env.server.example deploy/.env.server)
 chmod 0600 deploy/.env.server
 deploy/scripts/prepare-secrets.sh --output-dir deploy/secrets
-mkdir -p deploy/acme-webroot
+install -d -m 0755 deploy/acme-webroot
 ```
 
 Set `ACME_EMAIL` in `deploy/.env.server` to the operator's email address for
@@ -208,7 +208,7 @@ project=machine-whisperer-restored
     install -m 0600 "$backup/env.server" deploy/.env.server
     tar -C deploy -xpf "$backup/secrets.tar"
     sudo tar -C deploy -xpf "$backup/letsencrypt.tar"
-    mkdir -p deploy/acme-webroot
+    install -d -m 0755 deploy/acme-webroot
 )
 ```
 
