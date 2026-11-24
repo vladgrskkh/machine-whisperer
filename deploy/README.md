@@ -47,15 +47,20 @@ to verify the API's internal TLS certificate for hostname `api`. The generated
 API certificate is valid for 365 days. Track its expiration and renew it using
 the existing CA before expiry.
 
-Define this Bash function in each operator shell. The project name determines
-the names of the three persistent volumes. Keep it stable across restarts and
-upgrades.
+Define this Bash function in each operator shell.
+
+```bash
+mw() {
+    docker compose --env-file deploy/.env.server -p "${project:?set a Compose project name}" -f deploy/compose.yaml "$@"
+}
+```
+
+Use the following project name for the initial deployment. The project name
+determines the names of the three persistent volumes. Keep it stable across
+restarts and upgrades.
 
 ```bash
 project=machine-whisperer
-mw() {
-    docker compose --env-file deploy/.env.server -p "$project" -f deploy/compose.yaml "$@"
-}
 mw config --quiet
 mw up --build -d
 mw ps -a
@@ -150,17 +155,31 @@ archives. Check that the backup completed before relying on it.
 
 Restore using the recorded repository revision and its image versions. Shut
 down the original project if restoring on the same host because both projects
-use the same published ports and may use the same edge subnet. Restore the env
-file and matching secrets on a clean checkout. Restore any externally stored
-certificate files and recreate the ACME webroot. For the example layout, use
-the commands below after setting `backup` to the full path to the backup.
+use the same published ports and may use the same edge subnet. From the
+monorepo root, restore the env file and matching secrets in a separate detached
+worktree. For the example layout, set `backup` to the full path to the backup
+and use a new path for `restore_checkout`. If the env file uses custom secret,
+ACME, or certificate paths, prepare separate destinations for the restore and
+update the restored env file accordingly.
 
 ```bash
 backup=/path/to/mw-backup
-git checkout --detach "$(cat "$backup/revision")"
-install -m 0600 "$backup/env.server" deploy/.env.server
-tar -C deploy -xpf "$backup/secrets.tar"
-mkdir -p deploy/acme-webroot
+restore_checkout="$HOME/machine-whisperer-restore"
+(
+    set -eu
+    revision=$(cat "$backup/revision")
+    git worktree add --detach "$restore_checkout" "$revision"
+    cd -- "$restore_checkout"
+    for path in deploy/.env.server deploy/secrets; do
+        if [[ -e "$path" || -L "$path" ]]; then
+            printf 'Restore destination already exists: %s\n' "$path" >&2
+            exit 1
+        fi
+    done
+    install -m 0600 "$backup/env.server" deploy/.env.server
+    tar -C deploy -xpf "$backup/secrets.tar"
+    mkdir -p deploy/acme-webroot
+)
 ```
 
 Use a fresh Compose project to preserve the original volumes. The restore
@@ -189,10 +208,24 @@ project=machine-whisperer-restored
 )
 ```
 
-Once the copy finishes successfully, run `mw up --build -d`, verify migration
-and container status, and confirm that the expected data is available through
-the API. Define `mw` as shown under First startup if needed, and use the
-restored project name when setting `project` in future operator shells.
+After the volumes and all TLS files are in place, launch the restored project.
+This block also works in a fresh Bash shell. Use the same worktree path and
+project name for future operations on this deployment.
+
+```bash
+restore_checkout="$HOME/machine-whisperer-restore"
+project=machine-whisperer-restored
+mw() {
+    docker compose --env-file deploy/.env.server -p "${project:?set a Compose project name}" -f deploy/compose.yaml "$@"
+}
+cd -- "$restore_checkout" &&
+    mw config --quiet &&
+    mw up --build -d &&
+    mw ps -a
+```
+
+Verify migration and container status, then confirm the expected data through
+the API.
 
 ## Shutdown
 
