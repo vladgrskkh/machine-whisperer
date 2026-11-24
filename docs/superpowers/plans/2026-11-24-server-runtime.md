@@ -165,10 +165,10 @@
 - `renew-certificates.sh` runs `certbot renew` with the webroot and reloads Nginx. The systemd timer runs the script daily; Certbot receives no Docker socket.
 - Smoke tests use a temporary self-signed certificate and temporary webroot; CI checks Certbot CLI startup without contacting Let's Encrypt.
 
-- [ ] Add tests for bootstrap-mode routing, Certbot command arguments, renewal reload, and safe temporary certificate paths.
-- [ ] Add the optional Certbot service, persistent certificate/webroot mounts, and Nginx bootstrap/HTTPS selection.
-- [ ] Implement bootstrap and renewal helpers plus systemd scheduling.
-- [ ] Update Compose assertions, smoke fixtures, runbook, and CI for Certbot.
+- [x] Add tests for bootstrap-mode routing, Certbot command arguments, renewal reload, and safe temporary certificate paths.
+- [x] Add the optional Certbot service, persistent certificate/webroot mounts, and Nginx bootstrap/HTTPS selection.
+- [x] Implement bootstrap and renewal helpers plus systemd scheduling.
+- [x] Update Compose assertions, smoke fixtures, runbook, and CI for Certbot.
 - [x] Run static checks and obtain Task 6 review (`62aa1f8`, fix `0b68eaa`; reviews clean). Live Certbot issuance remains a server deployment check.
 
 ## Final acceptance
