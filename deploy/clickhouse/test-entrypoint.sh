@@ -57,6 +57,10 @@ LC_ALL=C.UTF-8 reject_password 'fixture-left\0302\000fixture-right\r\n' 'NUL aft
 reject_password 'fixture-left\rfixture-right\r\n' 'embedded CR'
 reject_password 'fixture-left\r\nfixture-right\r\n' 'embedded CRLF'
 
+shopt -s nocasematch
+reject_password "${generated_password:0:63}F" 'uppercase with nocasematch'
+shopt -u nocasematch
+
 if run_wrapper "$test_dir/missing" > "$test_dir/output" 2> "$test_dir/error"; then
     echo 'ClickHouse entrypoint accepted a missing password file' >&2
     exit 1

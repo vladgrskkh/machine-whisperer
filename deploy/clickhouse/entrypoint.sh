@@ -23,7 +23,8 @@ while [[ "$CLICKHOUSE_PASSWORD" == *$'\r' || "$CLICKHOUSE_PASSWORD" == *$'\n' ]]
     CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD%?}
 done
 
-# The upstream entrypoint embeds this value in XML.
+# The upstream entrypoint embeds this value in XML. Enforce lowercase even with inherited shell options.
+shopt -u nocasematch
 if [[ "${#CLICKHOUSE_PASSWORD}" -ne 64 || -n "${CLICKHOUSE_PASSWORD//[0123456789abcdef]/}" ]]; then
     echo 'CLICKHOUSE_PASSWORD_FILE must contain exactly 64 lowercase hexadecimal characters' >&2
     exit 1
