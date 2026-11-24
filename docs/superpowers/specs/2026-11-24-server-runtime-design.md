@@ -1,6 +1,7 @@
 # Machine Whisperer Single-Server Runtime
 
-**Status:** Draft for review  
+**Status:** Approved by the user
+
 **Date:** 2026-11-24
 
 ## Intent
