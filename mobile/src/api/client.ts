@@ -55,15 +55,15 @@ export class ApiClient {
     const grant = session?.getAccess();
     if (!session || !grant) throw sessionRequired();
 
-    try {
-      return await this.send<T>(path, request, grant.token);
-    } catch (error) {
+    const result = await this.send<T>(path, request, grant.token).catch(async (error: unknown) => {
       if (!(error instanceof ApiError) || error.status !== 401) throw error;
-    }
+      const renewed = await session.refreshAccess(grant);
+      if (session.getAccess()?.generation !== grant.generation) throw sessionRequired();
+      return this.send<T>(path, request, renewed.token);
+    });
 
-    const renewed = await session.refreshAccess(grant);
-    if (session.getAccess()?.generation !== renewed.generation) throw sessionRequired();
-    return this.send<T>(path, request, renewed.token);
+    if (session.getAccess()?.generation !== grant.generation) throw sessionRequired();
+    return result;
   }
 
   private async requestPair(path: ApiPath, body: unknown) {

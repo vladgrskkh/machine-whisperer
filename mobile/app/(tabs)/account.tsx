@@ -58,6 +58,7 @@ export default function Account() {
           </View>
           <Text style={styles.unit}>g RMS</Text>
         </View>
+        {/* The root route displays cleanup progress and any retry action. */}
         <Button label="Sign out" outline onPress={() => { void session.logout().catch(() => undefined); }} />
       </ScrollView>
     </SafeAreaView>

@@ -201,3 +201,93 @@ it('preserves a successful sign-in if an overlapping sign-in fails', async () =>
   expect(session.getStatus()).toBe('signedIn');
   expect(JSON.parse(storedValue!)).toEqual(initial);
 });
+
+it('cannot restore a predecessor token while its refresh response is pending', async () => {
+  const refreshStarted = deferred();
+  const releaseResponse = deferred();
+  const request: typeof fetch = async (url) => {
+    if (!String(url).endsWith('/refresh')) return unauthorized();
+    refreshStarted.resolve();
+    await releaseResponse.promise;
+    return json(rotated);
+  };
+  const { session } = setup(request);
+  await session.initialize();
+  const refreshing = session.refreshAccess(session.getAccess()!);
+  await refreshStarted.promise;
+
+  const { session: restarted } = setup(request);
+  await restarted.initialize();
+  try {
+    expect(restarted.getStatus()).toBe('signedOut');
+    expect(restarted.getAccess()).toBeNull();
+  } finally {
+    releaseResponse.resolve();
+    await refreshing;
+  }
+});
+
+it('keeps access disabled after failed logout cleanup and removes the session on retry', async () => {
+  jest.mocked(SecureStore.deleteItemAsync).mockRejectedValueOnce(new Error('Secure storage unavailable'));
+  const request = jest.fn(async () => { throw new TypeError('Network unavailable'); });
+  const { session, api } = setup(request);
+  await session.initialize();
+
+  await expect(session.logout()).rejects.toMatchObject({ code: 'secure_storage_error' });
+  expect(session.getStatus()).toBe('cleanupFailed');
+  await expect(api.me()).rejects.toMatchObject({ code: 'session_required' });
+
+  await session.logout();
+  const { session: restarted } = setup(request);
+  await restarted.initialize();
+  expect(session.getStatus()).toBe('signedOut');
+  expect(restarted.getStatus()).toBe('signedOut');
+  expect(request).toHaveBeenCalledTimes(1);
+});
+
+it.each(['initial', 'retry'])('discards a successful %s request after the session changes', async (stage) => {
+  const successStarted = deferred();
+  const releaseSuccess = deferred();
+  const request: typeof fetch = async (url, options) => {
+    const path = String(url);
+    if (path.endsWith('/refresh')) return json(rotated);
+    if (path.endsWith('/logout')) return new Response(null, { status: 204 });
+    if (path.endsWith('/login')) return json({
+      ...rotated, access_token: 'another-access', refresh_token: 'another-refresh',
+    });
+    if (stage === 'retry' && (options?.headers as Record<string, string>).Authorization === 'Bearer old-access') {
+      return unauthorized();
+    }
+    const response = json(user);
+    const readBody = response.json.bind(response);
+    response.json = async () => {
+      successStarted.resolve();
+      await releaseSuccess.promise;
+      return readBody();
+    };
+    return response;
+  };
+  const { api, session } = setup(request);
+  await session.initialize();
+  const result = api.me();
+  await successStarted.promise;
+
+  await session.logout();
+  await session.login({ email: 'another@example.com', password: 'another password' });
+  releaseSuccess.resolve();
+
+  await expect(result).rejects.toMatchObject({ code: 'session_required' });
+  expect(session.getStatus()).toBe('signedIn');
+});
+
+it('does not dispatch refresh if SecureStore cannot remove the predecessor', async () => {
+  jest.mocked(SecureStore.deleteItemAsync).mockRejectedValueOnce(new Error('Secure storage unavailable'));
+  const request = jest.fn(async () => json(rotated));
+  const { session } = setup(request);
+  await session.initialize();
+
+  await expect(session.refreshAccess(session.getAccess()!)).rejects.toMatchObject({ code: 'secure_storage_error' });
+  expect(request).not.toHaveBeenCalled();
+  expect(session.getStatus()).toBe('signedOut');
+  expect(storedValue).toBeNull();
+});

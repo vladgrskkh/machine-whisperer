@@ -2,7 +2,7 @@ import type { AccessGrant, ApiClient } from '../api/client';
 import { ApiError, sessionRequired } from '../api/errors';
 import type { Credentials, TokenPair } from '../api/types';
 
-export type SessionStatus = 'loading' | 'signedOut' | 'signedIn';
+export type SessionStatus = 'loading' | 'signedOut' | 'signedIn' | 'clearing' | 'cleanupFailed';
 
 export type TokenStore = {
   load(): Promise<TokenPair | null>;
@@ -24,6 +24,7 @@ export class Session {
   private initialization?: Promise<void>;
   private activeRefresh?: { generation: number; promise: Promise<AccessGrant> };
   private storageWrites = Promise.resolve();
+  private cleanup?: Promise<void>;
 
   constructor(private readonly store: TokenStore, private readonly api: AuthApi) {}
 
@@ -46,6 +47,7 @@ export class Session {
   async login(credentials: Credentials): Promise<void> {
     await this.initialize();
     if (this.tokens) throw new ApiError(0, 'session_exists', 'Sign out before signing in again.');
+    if (this.status !== 'signedOut') throw storageError();
     const generation = this.generation;
     const pair = await this.api.login(credentials);
     await this.save(pair, generation, true);
@@ -85,6 +87,9 @@ export class Session {
 
   private async rotate(token: string, generation: number): Promise<AccessGrant> {
     try {
+      // A restart during the request must never restore a potentially spent refresh token.
+      await this.writeStorage(() => this.store.clear()).catch(() => { throw storageError(); });
+      if (generation !== this.generation) throw sessionRequired();
       const pair = await this.api.refresh(token);
       await this.save(pair, generation);
       return { token: pair.access_token, generation };
@@ -107,11 +112,19 @@ export class Session {
   }
 
   private clear() {
+    if (this.cleanup) return this.cleanup;
+
     this.generation += 1;
     this.tokens = null;
-    const removal = this.writeStorage(() => this.store.clear());
-    this.updateStatus('signedOut');
-    return removal.catch(() => { throw storageError(); });
+    this.cleanup = this.writeStorage(() => this.store.clear()).then(
+      () => { this.updateStatus('signedOut'); },
+      () => {
+        this.updateStatus('cleanupFailed');
+        throw storageError();
+      },
+    ).finally(() => { this.cleanup = undefined; });
+    this.updateStatus('clearing');
+    return this.cleanup;
   }
 
   private writeStorage(operation: () => Promise<void>) {

@@ -90,3 +90,35 @@ it('blocks a signed-out account deep link and routes through sign-in, account, a
   await waitFor(() => expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(1));
   expect(request).toHaveBeenCalledWith('https://example.test/v1/auth/logout', expect.objectContaining({ method: 'POST' }));
 });
+
+it('hides the protected screen while signing out and offers a retry if secure deletion fails', async () => {
+  jest.mocked(SecureStore.getItemAsync).mockResolvedValue(JSON.stringify(pair));
+  let rejectDelete!: (error: Error) => void;
+  jest.mocked(SecureStore.deleteItemAsync).mockReturnValueOnce(new Promise((_, reject) => {
+    rejectDelete = reject;
+  }));
+  jest.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
+    if (String(url).endsWith('/logout')) return new Response(null, { status: 204 });
+    return new Response(JSON.stringify(user));
+  });
+  renderRouter(routes, { initialUrl: '/account' });
+
+  await screen.findByText(user.email);
+  fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
+  await waitFor(() => expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(1));
+  try {
+    expect(await screen.findByLabelText('Clearing session')).toBeOnTheScreen();
+    expect(screen.queryByText(user.email)).toBeNull();
+    expect(screen.queryByRole('header', { name: 'Sign in' })).toBeNull();
+  } finally {
+    rejectDelete(new Error('Secure storage unavailable'));
+  }
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove the session from this device.');
+  expect(screen.queryByText(user.email)).toBeNull();
+  expect(screen.queryByRole('header', { name: 'Sign in' })).toBeNull();
+  fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+
+  expect(await screen.findByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
+  expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(2);
+});
