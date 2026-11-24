@@ -15,6 +15,10 @@ export default function TabLayout() {
         title: 'Machines',
         tabBarIcon: ({ color }) => <Text accessible={false} style={{ color, fontSize: 21 }}>⌂</Text>,
       }} />
+      <Tabs.Screen name="alerts" options={{
+        title: 'Alerts',
+        tabBarIcon: ({ color }) => <Text accessible={false} style={{ color, fontSize: 21 }}>♧</Text>,
+      }} />
       <Tabs.Screen name="account" options={{
         title: 'Account',
         tabBarIcon: ({ color }) => <Text accessible={false} style={{ color, fontSize: 21 }}>○</Text>,

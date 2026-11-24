@@ -4,6 +4,9 @@ import { fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-li
 import AuthLayout from '../../../app/(auth)/_layout';
 import SignIn from '../../../app/(auth)/sign-in';
 import SignUp from '../../../app/(auth)/sign-up';
+import Alerts from '../../../app/(tabs)/alerts';
+import Baseline from '../../../app/machines/[id]/baseline';
+import MachineDetail from '../../../app/machines/[id]/index';
 import Tabs from '../../../app/(tabs)/_layout';
 import Account from '../../../app/(tabs)/account';
 import Machines from '../../../app/(tabs)/machines/index';
@@ -27,9 +30,12 @@ const routes = {
   '(auth)/sign-up': SignUp,
   '(tabs)/_layout': Tabs,
   '(tabs)/account': Account,
+  '(tabs)/alerts': Alerts,
   '(tabs)/machines/index': Machines,
   'machines/new': NewMachine,
   'machines/[id]/claim-device': ClaimDevice,
+  'machines/[id]/index': MachineDetail,
+  'machines/[id]/baseline': Baseline,
 };
 const user = { id: 'operator-id', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
 const pair = { access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 };

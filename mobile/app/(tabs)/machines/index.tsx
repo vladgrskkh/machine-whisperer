@@ -6,7 +6,7 @@ export default function MachinesRoute() {
   return (
     <MachineList
       onAdd={() => router.push('/machines/new')}
-      onSelect={(id) => router.push({ pathname: '/machines/[id]/claim-device', params: { id } })}
+      onSelect={(id) => router.push({ pathname: '/machines/[id]', params: { id } })}
     />
   );
 }

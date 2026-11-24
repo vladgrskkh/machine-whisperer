@@ -4,6 +4,9 @@ import { fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-li
 
 import AuthLayout from '../../../../app/(auth)/_layout';
 import SignIn from '../../../../app/(auth)/sign-in';
+import Alerts from '../../../../app/(tabs)/alerts';
+import Baseline from '../../../../app/machines/[id]/baseline';
+import MachineDetail from '../../../../app/machines/[id]/index';
 import Tabs from '../../../../app/(tabs)/_layout';
 import Account from '../../../../app/(tabs)/account';
 import Machines from '../../../../app/(tabs)/machines/index';
@@ -44,9 +47,12 @@ const routes = {
   '(auth)/sign-in': SignIn,
   '(tabs)/_layout': Tabs,
   '(tabs)/account': Account,
+  '(tabs)/alerts': Alerts,
   '(tabs)/machines/index': Machines,
   'machines/new': NewMachine,
   'machines/[id]/claim-device': ClaimDevice,
+  'machines/[id]/index': MachineDetail,
+  'machines/[id]/baseline': Baseline,
 };
 const base = 'https://example.test';
 const originalBaseUrl = process.env.EXPO_PUBLIC_API_URL;
@@ -77,6 +83,9 @@ function network(handler?: (path: string, init?: RequestInit) => Response | unde
     if (path === '/v1/machines' && init?.method === 'GET') return json([fan, pump]);
     if (path === `/v1/machines/${fan.id}`) return json(fan);
     if (path === `/v1/machines/${pump.id}`) return json(pump);
+    if (path.endsWith('/telemetry')) return json({ items: [], next_cursor: null });
+    if (path.endsWith('/alerts')) return json([]);
+    if (path.endsWith('/baseline')) return json({ error: { code: 'baseline_not_found', message: 'Baseline not found' } }, 404);
     if (path === '/v1/devices/claim') {
       return json({ device_id: deviceId, machine_id: fan.id, status: 'claimed' });
     }
@@ -120,8 +129,10 @@ it('loads the selected machine before showing the claim form', async () => {
   const fetch = network();
   const navigation = renderRouter(routes, { initialUrl: '/machines' });
 
-  await screen.findByRole('button', { name: fan.name });
+  await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
   press(pump.name);
+  await screen.findByRole('button', { name: 'Scan device QR' });
+  press('Scan device QR');
 
   expect(await screen.findByText(/Pair a sensor device with Water pump/)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(`/machines/${pump.id}/claim-device`);
@@ -137,7 +148,8 @@ it('reports a list error and retries loading', async () => {
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your machines.');
   press('Try again');
-  expect(await screen.findByRole('button', { name: fan.name })).toBeOnTheScreen();
+  await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
+  expect(screen.getByRole('button', { name: fan.name })).toBeOnTheScreen();
 });
 
 it('creates a machine by normalized name and opens that machine’s claim flow', async () => {
@@ -152,7 +164,8 @@ it('creates a machine by normalized name and opens that machine’s claim flow',
   });
   const navigation = renderRouter(routes, { initialUrl: '/machines' });
 
-  await screen.findByRole('button', { name: pump.name });
+  await screen.findByText('No active alerts');
+  expect(screen.getByRole('button', { name: pump.name })).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: fan.name })).toBeNull();
   press('Add machine');
   fireEvent.changeText(screen.getByLabelText('Machine name'), '  Workshop fan  ');
@@ -164,7 +177,8 @@ it('creates a machine by normalized name and opens that machine’s claim flow',
     method: 'POST', body: '{"name":"Workshop fan"}',
   }));
   fireEvent.press(screen.getByRole('link', { name: /Machines/ }));
-  expect(await screen.findByRole('button', { name: fan.name })).toBeOnTheScreen();
+  await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
+  expect(screen.getByRole('button', { name: fan.name })).toBeOnTheScreen();
 });
 
 it('keeps an invalid name local and shows a public error for a failed creation', async () => {
@@ -200,7 +214,8 @@ it('keeps manual entry available after camera denial and binds the request to th
     method: 'POST', body: JSON.stringify({ device_id: deviceId, claim_code: claimCode, machine_id: fan.id }),
   }));
   press('Back to machines');
-  expect(await screen.findByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
+  await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
+  expect(screen.getByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
 });
 
 it('recovers after scanning an invalid QR and uses a valid QR for the selected machine', async () => {

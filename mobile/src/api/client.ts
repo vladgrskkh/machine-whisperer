@@ -1,7 +1,7 @@
 import { ApiError, decodeApiError, sessionRequired } from './errors';
 import {
-  isTokenPair, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
-  type Credentials, type Machine, type TokenPair, type User,
+  isTokenPair, type BaselineValues, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
+  type Credentials, type Machine, type MachineAlert, type MachineBaseline, type TelemetryPage, type TokenPair, type User,
 } from './types';
 
 export type AccessGrant = { token: string; generation: number };
@@ -19,13 +19,26 @@ type ApiClientOptions = {
   session?: RequestSession;
 };
 
-type JsonRequest = { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown };
+type JsonRequest = {
+  method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
+  body?: unknown;
+  signal?: AbortSignal;
+};
 type ApiPath = `/v1/${string}`;
+type TelemetryQuery = { cursor?: string | null; limit?: number; signal?: AbortSignal };
+
+const maxMachineReads = 4;
+
+function cancelledRequest() {
+  return new ApiError(0, 'request_cancelled', 'The request was cancelled.');
+}
 
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetch: Fetch;
   private readonly session?: RequestSession;
+  private activeMachineReads = 0;
+  private readonly waitingMachineReads: (() => void)[] = [];
 
   constructor(options: ApiClientOptions) {
     this.baseUrl = options.baseUrl?.trim().replace(/\/+$/, '') ?? '';
@@ -65,6 +78,32 @@ export class ApiClient {
     return this.authenticated(`/v1/machines/${encodeURIComponent(id)}`);
   }
 
+  getTelemetry(id: string, { cursor = null, limit = 100, signal }: TelemetryQuery = {}): Promise<TelemetryPage> {
+    const query = cursor === null ? `limit=${limit}` : `limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
+    return this.machineRead(`/v1/machines/${encodeURIComponent(id)}/telemetry?${query}`, signal);
+  }
+
+  async getBaseline(id: string, signal?: AbortSignal): Promise<MachineBaseline | null> {
+    try {
+      return await this.machineRead<MachineBaseline>(`/v1/machines/${encodeURIComponent(id)}/baseline`, signal);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404 && error.code === 'baseline_not_found') return null;
+      throw error;
+    }
+  }
+
+  setBaseline(id: string, values: BaselineValues): Promise<MachineBaseline> {
+    return this.authenticated(`/v1/machines/${encodeURIComponent(id)}/baseline`, { method: 'PUT', body: values });
+  }
+
+  listAlerts(id: string, signal?: AbortSignal): Promise<MachineAlert[]> {
+    return this.machineRead(`/v1/machines/${encodeURIComponent(id)}/alerts`, signal);
+  }
+
+  acknowledgeAlert(id: string): Promise<void> {
+    return this.authenticated(`/v1/alerts/${encodeURIComponent(id)}/acknowledge`, { method: 'POST' });
+  }
+
   async claimDevice(claim: ClaimDeviceRequest): Promise<ClaimedDevice> {
     const result = await this.authenticated<ClaimedDevice>('/v1/devices/claim', { method: 'POST', body: claim });
     if (result?.status !== 'claimed' || result.machine_id !== claim.machine_id.toLowerCase()
@@ -74,6 +113,28 @@ export class ApiClient {
     return result;
   }
 
+  private async machineRead<T>(path: ApiPath, signal?: AbortSignal): Promise<T> {
+    const generation = this.session?.getAccess()?.generation;
+    if (generation === undefined) throw sessionRequired();
+    if (signal?.aborted) throw cancelledRequest();
+
+    if (this.activeMachineReads < maxMachineReads) {
+      this.activeMachineReads++;
+    } else {
+      await new Promise<void>((start) => { this.waitingMachineReads.push(start); });
+    }
+
+    try {
+      if (signal?.aborted) throw cancelledRequest();
+      if (generation !== this.session?.getAccess()?.generation) throw sessionRequired();
+      return await this.authenticated<T>(path, { signal });
+    } finally {
+      const next = this.waitingMachineReads.shift();
+      if (next) next();
+      else this.activeMachineReads--;
+    }
+  }
+
   async authenticated<T>(path: ApiPath, request: JsonRequest = {}): Promise<T> {
     const session = this.session;
     const grant = session?.getAccess();
@@ -81,6 +142,7 @@ export class ApiClient {
 
     const result = await this.send<T>(path, request, grant.token).catch(async (error: unknown) => {
       if (!(error instanceof ApiError) || error.status !== 401) throw error;
+      if (request.signal?.aborted) throw cancelledRequest();
       const renewed = await session.refreshAccess(grant);
       if (session.getAccess()?.generation !== grant.generation) throw sessionRequired();
       return this.send<T>(path, request, renewed.token);
@@ -107,8 +169,12 @@ export class ApiClient {
     if (request.body !== undefined) headers['Content-Type'] = 'application/json';
     if (token) headers.Authorization = `Bearer ${token}`;
 
+    const signal = request.signal;
+    if (signal?.aborted) throw cancelledRequest();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15_000);
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort);
+    const timer = setTimeout(abort, 15_000);
     try {
       const response = await this.fetch(`${this.baseUrl}${path}`, {
         method: request.method ?? 'GET',
@@ -128,6 +194,7 @@ export class ApiClient {
       throw new ApiError(0, 'network_error', 'Could not reach the server. Check your connection and try again.');
     } finally {
       clearTimeout(timer);
+      signal?.removeEventListener('abort', abort);
     }
   }
 }

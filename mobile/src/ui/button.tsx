@@ -2,8 +2,9 @@ import { Pressable, StyleSheet, Text } from 'react-native';
 
 import { colors } from './theme';
 
-export function Button({ label, onPress, busy = false, outline = false }: {
+export function Button({ label, accessibilityLabel, onPress, busy = false, outline = false }: {
   label: string;
+  accessibilityLabel?: string;
   onPress: () => void;
   busy?: boolean;
   outline?: boolean;
@@ -11,6 +12,7 @@ export function Button({ label, onPress, busy = false, outline = false }: {
   return (
     <Pressable
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
       accessibilityState={{ busy, disabled: busy }}
       disabled={busy}
       onPress={onPress}

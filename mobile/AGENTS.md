@@ -20,7 +20,9 @@ for Expo and React Native modules so native packages match the project's SDK.
   returns a user.
 - Use Jest and React Native Testing Library to exercise screen interactions and
   observable API and session behavior. Mock network and OS storage at their
-  boundaries. Follow the Superpowers workflow for feature work.
+  boundaries. Run focused screen tests with `npm test -- --testPathPattern=<pattern>`.
+  Follow the Superpowers workflow for feature work.
 - Use Node.js 24 and install from the lockfile with `npm ci`. Run `npm run lint`,
   `npm run typecheck`, `npm test`, and `npm run export:check` before committing.
-  The `mobile` CI job runs the same checks. Keep ESLint and its Expo config pinned.
+  Lint allows zero warnings. The `mobile` CI job runs all four checks. Keep ESLint
+  and its Expo config pinned.
