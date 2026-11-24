@@ -1,0 +1,167 @@
+x-clickhouse-client: &clickhouse-client
+  CLICKHOUSE_ADDRESS: clickhouse:9000
+  CLICKHOUSE_DATABASE: machine_whisperer
+  CLICKHOUSE_USER: analytics
+  CLICKHOUSE_PASSWORD_FILE: /run/secrets/clickhouse_password
+
+x-health: &health
+  interval: 5s
+  timeout: 4s
+  retries: 24
+  start_period: 10s
+
+services:
+  nginx:
+    image: nginx:1.31.10-alpine3.24-slim
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in the server env file}
+      NGINX_ENVSUBST_FILTER: ^DOMAIN$
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      edge:
+        ipv4_address: ${MW_PROXY_IP:-172.30.48.2}
+    volumes:
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${MW_ACME_WEBROOT:-./acme-webroot}:/var/www/acme:ro
+    secrets: [public_cert, public_key, internal_ca]
+    depends_on:
+      api: {condition: service_healthy}
+
+  api:
+    build: ../api
+    restart: unless-stopped
+    networks: [edge, data]
+    environment:
+      API_ADDRESS: ":8443"
+      API_TLS_CERT_FILE: /run/secrets/api_cert
+      API_TLS_KEY_FILE: /run/secrets/api_key
+      DATABASE_URL_FILE: /run/secrets/database_url
+      AUTH_SIGNING_KEY_ID: server-1
+      AUTH_SIGNING_KEY_FILE: /run/secrets/signing_key
+      AUTH_VERIFY_KEYS_FILE: /run/secrets/verify_keys
+      ANALYTICS_URL: http://analytics:8081
+      ANALYTICS_INGEST_API_KEY_FILE: /run/secrets/analytics_token
+      TRUSTED_PROXY_CIDRS: ${MW_PROXY_IP:-172.30.48.2}/32
+    secrets: [api_cert, api_key, internal_ca, database_url, signing_key, verify_keys, analytics_token]
+    depends_on:
+      api-migrate: {condition: service_completed_successfully}
+      postgres: {condition: service_healthy}
+      analytics: {condition: service_healthy}
+    healthcheck:
+      <<: *health
+      test: [CMD, curl, -fsS, --noproxy, "*", --cacert, /run/secrets/internal_ca, --resolve, "api:8443:127.0.0.1", "https://api:8443/healthz"]
+
+  api-migrate:
+    build: ../api
+    entrypoint: [/usr/local/bin/migrate]
+    networks: [data]
+    environment:
+      DATABASE_URL_FILE: /run/secrets/database_url
+    secrets: [database_url]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  postgres:
+    image: postgres:18.7-alpine3.23
+    restart: unless-stopped
+    networks: [data]
+    environment:
+      POSTGRES_DB: machine_whisperer
+      POSTGRES_USER: machine_whisperer
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets: [postgres_password]
+    volumes: [postgres-data:/var/lib/postgresql]
+    healthcheck:
+      <<: *health
+      test: [CMD, pg_isready, -h, 127.0.0.1, -U, machine_whisperer, -d, machine_whisperer]
+
+  analytics:
+    build: ../analytics
+    restart: unless-stopped
+    networks: [data]
+    environment:
+      <<: *clickhouse-client
+      ANALYTICS_INGEST_API_KEY_FILE: /run/secrets/analytics_token
+    secrets: [clickhouse_password, analytics_token]
+    depends_on:
+      analytics-migrate: {condition: service_completed_successfully}
+      clickhouse: {condition: service_healthy}
+    healthcheck:
+      <<: *health
+      test: [CMD, wget, -qO, /dev/null, "http://127.0.0.1:8081/healthz"]
+
+  analytics-migrate:
+    build: ../analytics
+    entrypoint: [/usr/local/bin/migrate]
+    networks: [data]
+    environment: *clickhouse-client
+    secrets: [clickhouse_password]
+    depends_on:
+      clickhouse: {condition: service_healthy}
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:26.9.36.3
+    restart: unless-stopped
+    entrypoint: [/bin/bash, /opt/mw/entrypoint.sh]
+    networks: [data]
+    environment:
+      CLICKHOUSE_DB: machine_whisperer
+      CLICKHOUSE_USER: analytics
+      CLICKHOUSE_PASSWORD_FILE: /run/secrets/clickhouse_password
+    secrets: [clickhouse_password]
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./clickhouse/entrypoint.sh:/opt/mw/entrypoint.sh:ro
+    healthcheck:
+      <<: *health
+      test: [CMD, bash, -ec, "exec 3<>/dev/tcp/clickhouse/8123; printf 'GET /ping HTTP/1.0\\r\\n\\r\\n' >&3; head -n 1 <&3 | grep -q ' 200 '"]
+
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    restart: unless-stopped
+    ports: ["127.0.0.1:9090:9090"]
+    networks: [monitoring]
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+networks:
+  edge:
+    ipam:
+      config:
+        - subnet: ${MW_EDGE_SUBNET:-172.30.48.0/28}
+  data:
+    internal: true
+  monitoring: {}
+
+volumes:
+  postgres-data: {}
+  clickhouse-data: {}
+  prometheus-data: {}
+
+secrets:
+  database_url:
+    file: ${MW_SECRETS_DIR:-./secrets}/database-url
+  postgres_password:
+    file: ${MW_SECRETS_DIR:-./secrets}/postgres-password
+  clickhouse_password:
+    file: ${MW_SECRETS_DIR:-./secrets}/clickhouse-password
+  analytics_token:
+    file: ${MW_SECRETS_DIR:-./secrets}/analytics-token
+  signing_key:
+    file: ${MW_SECRETS_DIR:-./secrets}/auth-signing.pem
+  verify_keys:
+    file: ${MW_SECRETS_DIR:-./secrets}/auth-public-keys.json
+  internal_ca:
+    file: ${MW_SECRETS_DIR:-./secrets}/internal-ca.crt
+  api_cert:
+    file: ${MW_SECRETS_DIR:-./secrets}/api.crt
+  api_key:
+    file: ${MW_SECRETS_DIR:-./secrets}/api.key
+  public_cert:
+    file: ${MW_PUBLIC_CERT_FILE:-${MW_SECRETS_DIR:-./secrets}/public.crt}
+  public_key:
+    file: ${MW_PUBLIC_KEY_FILE:-${MW_SECRETS_DIR:-./secrets}/public.key}

@@ -1,0 +1,42 @@
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    access_log off;
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/acme;
+        try_files $uri =404;
+    }
+    location / {
+        return 308 https://${DOMAIN}$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    server_name ${DOMAIN};
+    ssl_certificate /run/secrets/public_cert;
+    ssl_certificate_key /run/secrets/public_key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    access_log off;
+
+    location ~ ^/(v1/|internal/v1/device-provisioning$) {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        set $api_endpoint api:8443;
+        proxy_pass https://$api_endpoint;
+        proxy_ssl_server_name on;
+        proxy_ssl_name api;
+        proxy_ssl_trusted_certificate /run/secrets/internal_ca;
+        proxy_ssl_verify on;
+
+        proxy_set_header Host ${DOMAIN};
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Host ${DOMAIN};
+        proxy_set_header X-Forwarded-Port 443;
+    }
+    location / {
+        return 404;
+    }
+}
