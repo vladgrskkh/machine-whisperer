@@ -76,6 +76,24 @@ jobs:
           working-directory: analytics
           args: --config ../api/.golangci.yml --build-tags=integration --timeout=5m
 
+  deployment:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the ClickHouse entrypoint
+        run: deploy/clickhouse/test-entrypoint.sh
+      - name: Validate the Compose configuration
+        run: deploy/scripts/test-compose-config.sh
+      - name: Build the API and Analytics images
+        run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
+      - name: Smoke test the server stack
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: deploy/scripts/smoke-test.sh
+
   mobile:
     runs-on: ubuntu-latest
     defaults:
