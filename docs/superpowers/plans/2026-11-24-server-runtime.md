@@ -27,6 +27,9 @@
 - The user supplied `onerep.mooo.com` as the SSH hostname and requested Certbot-managed TLS. Certbot runs as a Compose service; a host systemd timer invokes renewal.
 - Keep API and Analytics migration commands separate and require both migrations to complete before their applications start.
 - Keep mobile lint strict with zero warnings and use maintained, Expo-compatible lint tooling.
+- Restrict manufacturing provisioning at Nginx to `MW_PROVISIONING_CIDR`, defaulting to loopback so public clients are denied, while retaining the API's `device_provisioner` role check.
+- The generated ClickHouse password file contains exactly 64 lowercase hexadecimal characters plus an optional final line ending. Apply this format only to file-backed deployment credentials; preserve direct environment-based configuration behavior.
+- Publish Nginx on IPv4 only. Do not configure an AAAA record until the deployment has a verified IPv6 path that preserves client source addresses.
 
 ## Review Focus
 
@@ -171,6 +174,78 @@
 - [x] Update Compose assertions, smoke fixtures, runbook, and CI for Certbot.
 - [x] Run static checks and obtain Task 6 review (`62aa1f8`, fix `0b68eaa`; reviews clean). Live Certbot issuance remains a server deployment check.
 
+### Deployment review follow-ups
+
+#### Task 7: Restrict manufacturing provisioning at the proxy
+
+**Files:**
+- Modify: `deploy/compose.yaml`, `deploy/.env.server.example`, `deploy/nginx/default.conf.template`, and `deploy/nginx/entrypoint.sh`.
+- Modify: `deploy/scripts/test-compose-config.sh`, `deploy/scripts/smoke-test.sh`, and `deploy/README.md`.
+
+**Interfaces:**
+- Compose passes `MW_PROVISIONING_CIDR`, defaulting to `127.0.0.1/32`; the operator sets it to the manufacturing station or gateway CIDR.
+- Nginx routes `/internal/v1/device-provisioning` through a dedicated location that allows the configured source CIDR and denies all other sources before proxying. The API continues to require a JWT with the `device_provisioner` role.
+- The smoke test sets an unreachable documentation CIDR and verifies the provisioning route returns 403 through the public proxy; normal `/v1/` routes remain available.
+
+- [x] Add Compose and smoke assertions for the default CIDR, public denial, and unchanged normal API routing.
+- [x] Implement the Nginx allow/deny boundary and document the operator setting.
+- [x] Run the focused config and standalone Nginx checks, attempt the Compose smoke (Docker daemon unavailable locally), commit, and obtain Task 7 review (`5e2c831`, approved; one Minor deferred to whole-branch review).
+
+#### Task 8: Validate deployment ClickHouse password files
+
+**Files:**
+- Modify: `analytics/internal/config/config.go`, `analytics/internal/config/config_test.go`, `deploy/clickhouse/entrypoint.sh`, and `deploy/clickhouse/test-entrypoint.sh`.
+- Modify: `deploy/README.md` if credential replacement instructions need the exact format.
+
+**Interfaces:**
+- A file-backed `CLICKHOUSE_PASSWORD_FILE` value is accepted only after trailing CR/LF removal when it contains exactly 64 lowercase hexadecimal characters, matching `openssl rand -hex 32` and the ClickHouse XML configuration path.
+- Go Analytics configuration and the ClickHouse wrapper enforce the same file-backed contract without echoing the value. Direct `CLICKHOUSE_PASSWORD` environment configuration retains its existing behavior.
+
+- [x] Add Go and shell regression cases for valid generated values, malformed length, uppercase/non-hex bytes, XML-sensitive bytes, and trailing line endings.
+- [x] Confirm the new invalid-file cases fail before implementing the validators.
+- [x] Implement matching file-only validation in Go and shell.
+- [x] Run Analytics build/race tests, config and shell tests, and pinned lint; Docker-backed integration is pending hosted CI. Commit and obtain Task 8 review (`9365f9e`, fix `d128e63`; scoped review approved).
+
+#### Task 9: Bind public ports to IPv4 and align deployment checks
+
+**Files:**
+- Modify: `deploy/compose.yaml`, `deploy/scripts/test-compose-config.sh`, `deploy/README.md`, and `mobile/README.md`.
+
+**Interfaces:**
+- Nginx publishes `0.0.0.0:80:80` and `0.0.0.0:443:443`; Prometheus remains bound to `127.0.0.1:9090`.
+- The runbook requires a public A record and explicitly says not to publish an AAAA record until the service has a verified dual-stack source-address path.
+- Mobile setup refers to Expo SDK 58 and the repository's Node 24.22.3 pin.
+- Static Compose assertions pin exact port host IPs, direct API/Analytics database health dependencies, and each `_FILE` variable to its intended mounted secret.
+
+- [x] Add failing static assertions for IPv4-only Nginx binds, app-to-database health gates, and exact secret-file mappings.
+- [x] Implement the IPv4 binds and update the operator/mobile documentation.
+- [x] Run Compose config, script, mobile, API and Analytics checks; Docker integrations remain for hosted CI. Commit and obtain Task 9 review (`056a591`, approved; TCP protocol assertion deferred to whole-branch review).
+
+#### Task 10: Document internal API certificate renewal and expired restore
+
+**Files:**
+- Modify: `deploy/README.md`.
+
+**Interfaces:**
+- The runbook gives copyable OpenSSL commands to issue a new API leaf certificate under the existing internal CA with `DNS:api`, verify hostname/purpose and certificate/key correspondence, install `api.crt` and `api.key` as mode `0444`, then recreate the API container so Compose remounts the replaced files.
+- The same procedure applies before starting a restore whose API leaf has expired; it does not replace or regenerate the internal CA.
+
+- [x] Add the renewal/restore procedure and verify its OpenSSL commands against temporary generated CAs and leaves without changing deployment secrets.
+- [x] Commit the runbook change and obtain Task 10 review (`8dded67`, approved; concurrent operator caveat deferred to whole-branch review).
+
+#### Task 11: Keep restore regression extraction aligned with the runbook
+
+**Files:**
+- Modify: `deploy/scripts/test-runbook-restore.py`.
+
+**Interfaces:**
+- Select the restore and launch Bash snippets by distinctive commands such as `git worktree add --detach` and `mw config --quiet`, not by assuming a fixed number of code fences in the section.
+- Preserve the tests' isolated temporary checkout, no-overwrite assertions, and selected project/worktree behavior.
+
+- [x] Reproduce the restore suite failure caused by the new certificate-check block.
+- [x] Change snippet extraction to use command markers and assert the expected snippets were found.
+- [x] Run the runbook restore suite (3/3), commit, and obtain Task 11 review (`6dca69c`, clean).
+
 ## Final acceptance
 
 - `docker compose up --build -d` starts the complete server stack and applies migrations before serving traffic.
@@ -178,5 +253,7 @@
 - Nginx serves a Certbot-managed certificate and verifies its internal TLS connection to the API.
 - Only Nginx accepts public app traffic; databases and Analytics remain on private networks and Prometheus is host-loopback only.
 - Compose named volumes retain operational data across service restarts.
+- The manufacturing provisioning route is denied at Nginx outside the configured CIDR.
+- Nginx binds public ports on IPv4 only, with documented DNS requirements.
 - CI checks Compose configuration, image builds, and an ephemeral end-to-end server-stack smoke test.
 - Whole-branch Superpowers review is clean before opening a PR.
