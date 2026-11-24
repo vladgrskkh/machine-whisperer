@@ -8,8 +8,8 @@ fi
 
 if ! CLICKHOUSE_PASSWORD=$(
     cat -- "$CLICKHOUSE_PASSWORD_FILE" 2>/dev/null | {
-        # read succeeds when it finds the NUL delimiter.
-        if IFS= read -r -d '' password; then
+        # Read bytes so a malformed multibyte sequence cannot consume the delimiter.
+        if LC_ALL=C IFS= read -r -d '' password; then
             exit 1
         fi
         printf '%s' "$password"
