@@ -222,9 +222,18 @@ handling after device clock changes remain to be specified.
 | `GET /v1/machines/{id}`            | Get machine details.                         |
 | `GET /v1/machines/{id}/baseline`   | Get the owner's current machine baseline. |
 | `PUT /v1/machines/{id}/baseline`   | Set or replace the owner's machine baseline. |
-| `GET /v1/machines/{id}/telemetry`  | Get bounded historical observations.         |
+| `GET /v1/machines/{machine_id}/telemetry` | Get the owner’s bounded historical observations. |
 | `GET /v1/machines/{id}/alerts`     | Get alert history.                           |
 | `POST /v1/alerts/{id}/acknowledge` | Record that a user has seen an alert.        |
+
+The API verifies the user JWT and machine ownership before requesting telemetry
+history from Analytics with the internal service token. Analytics reads
+`telemetry_events FINAL` in ClickHouse to deduplicate retries. History is
+newest first with a descending `(observed_at, device_id, event_id)` cursor key.
+The default page size is 100 and the maximum is 1,000. The response includes
+`items` and an opaque `next_cursor` that is null when the history is exhausted.
+Invalid queries return `400`, inaccessible machines return `404`, and
+Analytics failures return a sanitized `503`.
 
 Only the machine owner can list or acknowledge its alerts. History is returned
 newest trigger time first. Acknowledgement records the first time the owner saw

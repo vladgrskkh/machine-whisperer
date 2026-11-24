@@ -310,6 +310,49 @@ observations at most five minutes ahead of that time and strictly less than
 
 Telemetry responses use `Cache-Control: no-store`.
 
+## Machine telemetry history
+
+`GET /v1/machines/{machine_id}/telemetry` requires a user JWT and is available
+to the machine owner. Observations appear after the outbox delivers them to
+Analytics. Pages are ordered newest first by observation time, device ID and
+event ID, so observations with the same timestamp paginate consistently.
+
+Use `limit` to request 1 to 1,000 observations. The default is 100. Pass the
+previous page’s `next_cursor` in the `cursor` query parameter to read older
+observations. The cursor is opaque and belongs to the machine that issued it.
+An exhausted page has a null `next_cursor`.
+
+```json
+{
+  "items": [
+    {
+      "device_id": "77777777-7777-4777-8777-777777777777",
+      "event_id": "88888888-8888-4888-8888-888888888888",
+      "received_at": "2026-11-24T12:01:00.987654Z",
+      "schema_version": 1,
+      "observed_at": "2026-11-24T12:00:00.123456Z",
+      "operating_state": "running",
+      "vibration_rms_g": 0.043,
+      "dominant_frequency_hz": null,
+      "current_rms_a": null
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `200` | The requested page. An empty page uses `"items":[]`. |
+| `400` | The machine ID, limit or cursor is invalid. |
+| `401` | User credentials are missing or invalid. |
+| `404` | The machine is missing or belongs to another user. |
+| `503` | Analytics is unavailable. Retry the request later. |
+
+History responses use `Cache-Control: no-store`. The API uses
+`ANALYTICS_URL` and `ANALYTICS_INGEST_API_KEY` for history requests. These
+requests have a 10-second timeout and reject redirects.
+
 ## Telemetry export
 
 The API process runs an outbox worker alongside HTTP. It sends pending events
