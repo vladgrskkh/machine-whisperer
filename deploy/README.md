@@ -157,14 +157,19 @@ Restore using the recorded repository revision and its image versions. Shut
 down the original project if restoring on the same host because both projects
 use the same published ports and may use the same edge subnet. From the
 monorepo root, restore the env file and matching secrets in a separate detached
-worktree. For the example layout, set `backup` to the full path to the backup
-and use a new path for `restore_checkout`. If the env file uses custom secret,
-ACME, or certificate paths, prepare separate destinations for the restore and
-update the restored env file accordingly.
+worktree. Set `backup` to the full path to the backup. Choose a new
+`restore_checkout` path and a fresh Compose `project`, using the values below
+as examples. If the env file uses custom secret, ACME, or certificate paths,
+prepare separate destinations for the restore and update the restored env file
+accordingly.
 
 ```bash
 backup=/path/to/mw-backup
 restore_checkout="$HOME/machine-whisperer-restore"
+project=machine-whisperer-restored
+```
+
+```bash
 (
     set -eu
     revision=$(cat "$backup/revision")
@@ -187,9 +192,9 @@ creates the three volumes with the names and labels Compose expects.
 [Compose volume labels](https://docs.docker.com/reference/compose-file/volumes/#labels)
 
 ```bash
-project=machine-whisperer-restored
 (
     set -eu
+    : "${project:?set the selected restore project}"
     for name in postgres-data clickhouse-data prometheus-data; do
         tar -tf "$backup/$name.tar" >/dev/null
         if docker volume inspect "${project}_${name}" >/dev/null 2>&1; then
@@ -209,16 +214,19 @@ project=machine-whisperer-restored
 ```
 
 After the volumes and all TLS files are in place, launch the restored project.
-This block also works in a fresh Bash shell. Use the same worktree path and
-project name for future operations on this deployment.
+Record the worktree path and project name that succeeded, including any
+changes made to resolve a collision. In a fresh Bash shell, set
+`restore_checkout` to that exact worktree path and `project` to the exact
+project used to restore the volumes before running this block. Reuse these
+values for future operations on this deployment.
 
 ```bash
-restore_checkout="$HOME/machine-whisperer-restore"
-project=machine-whisperer-restored
 mw() {
     docker compose --env-file deploy/.env.server -p "${project:?set a Compose project name}" -f deploy/compose.yaml "$@"
 }
-cd -- "$restore_checkout" &&
+: "${restore_checkout:?set the worktree used to restore the configuration}" \
+    "${project:?set the Compose project used to restore the volumes}" &&
+    cd -- "$restore_checkout" &&
     mw config --quiet &&
     mw up --build -d &&
     mw ps -a

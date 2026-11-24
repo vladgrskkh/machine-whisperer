@@ -87,6 +87,8 @@ jobs:
         run: deploy/clickhouse/test-entrypoint.sh
       - name: Validate the Compose configuration
         run: deploy/scripts/test-compose-config.sh
+      - name: Test the backup restore runbook
+        run: python3 deploy/scripts/test-runbook-restore.py
       - name: Build the API and Analytics images
         run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
       - name: Smoke test the server stack
