@@ -86,4 +86,4 @@
 
 ## Final review
 
-- [ ] Whole-branch review, final fix wave if needed, and PR/CI verification.
+- [x] Whole-branch review found no Critical/Important issues. Final fix wave `42b7d93` added malformed cursor tests, upstream page validation and corrected the API 503 docs; scoped re-review approved.
