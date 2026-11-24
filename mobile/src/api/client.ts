@@ -1,5 +1,8 @@
 import { ApiError, decodeApiError, sessionRequired } from './errors';
-import { isTokenPair, type Credentials, type TokenPair, type User } from './types';
+import {
+  isTokenPair, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
+  type Credentials, type Machine, type TokenPair, type User,
+} from './types';
 
 export type AccessGrant = { token: string; generation: number };
 
@@ -48,6 +51,27 @@ export class ApiClient {
 
   me(): Promise<User> {
     return this.authenticated('/v1/users/me');
+  }
+
+  listMachines(): Promise<Machine[]> {
+    return this.authenticated('/v1/machines');
+  }
+
+  createMachine(machine: CreateMachineRequest): Promise<Machine> {
+    return this.authenticated('/v1/machines', { method: 'POST', body: machine });
+  }
+
+  getMachine(id: string): Promise<Machine> {
+    return this.authenticated(`/v1/machines/${encodeURIComponent(id)}`);
+  }
+
+  async claimDevice(claim: ClaimDeviceRequest): Promise<ClaimedDevice> {
+    const result = await this.authenticated<ClaimedDevice>('/v1/devices/claim', { method: 'POST', body: claim });
+    if (result?.status !== 'claimed' || result.machine_id !== claim.machine_id.toLowerCase()
+      || result.device_id !== claim.device_id.toLowerCase()) {
+      throw new ApiError(0, 'invalid_response', 'The server did not confirm the device claim.');
+    }
+    return result;
   }
 
   async authenticated<T>(path: ApiPath, request: JsonRequest = {}): Promise<T> {

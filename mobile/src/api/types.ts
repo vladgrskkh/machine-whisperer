@@ -24,3 +24,23 @@ export function isTokenPair(value: unknown): value is TokenPair {
     && pair.token_type === 'Bearer'
     && typeof pair.expires_in === 'number' && Number.isFinite(pair.expires_in) && pair.expires_in > 0;
 }
+
+export type Machine = {
+  id: string;
+  name: string;
+  created_at: string;
+};
+
+export type CreateMachineRequest = { name: string };
+
+export type ClaimDeviceRequest = {
+  device_id: string;
+  claim_code: string;
+  machine_id: string;
+};
+
+export type ClaimedDevice = {
+  device_id: string;
+  machine_id: string;
+  status: 'claimed';
+};

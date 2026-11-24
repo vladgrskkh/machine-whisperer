@@ -19,6 +19,8 @@ function AppNavigation() {
       </Stack.Protected>
       <Stack.Protected guard={status === 'signedIn'}>
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="machines/new" />
+        <Stack.Screen name="machines/[id]/claim-device" />
       </Stack.Protected>
     </Stack>
   );

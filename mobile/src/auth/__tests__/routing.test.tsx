@@ -6,6 +6,9 @@ import SignIn from '../../../app/(auth)/sign-in';
 import SignUp from '../../../app/(auth)/sign-up';
 import Tabs from '../../../app/(tabs)/_layout';
 import Account from '../../../app/(tabs)/account';
+import Machines from '../../../app/(tabs)/machines/index';
+import NewMachine from '../../../app/machines/new';
+import ClaimDevice from '../../../app/machines/[id]/claim-device';
 import RootLayout from '../../../app/_layout';
 import Index from '../../../app/index';
 
@@ -24,6 +27,9 @@ const routes = {
   '(auth)/sign-up': SignUp,
   '(tabs)/_layout': Tabs,
   '(tabs)/account': Account,
+  '(tabs)/machines/index': Machines,
+  'machines/new': NewMachine,
+  'machines/[id]/claim-device': ClaimDevice,
 };
 const user = { id: 'operator-id', email: 'operator@example.com', created_at: '2026-11-24T00:00:00Z' };
 const pair = { access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900 };
@@ -68,6 +74,7 @@ it('blocks a signed-out account deep link and routes through sign-in, account, a
   const request = jest.spyOn(globalThis, 'fetch').mockImplementation(async (url) => {
     const path = String(url);
     if (path.endsWith('/login')) return new Response(JSON.stringify(pair));
+    if (path.endsWith('/machines')) return new Response('[]');
     if (path.endsWith('/me')) return new Response(JSON.stringify(user));
     if (path.endsWith('/logout')) return new Response(null, { status: 204 });
     throw new Error('Unexpected request');
@@ -79,6 +86,10 @@ it('blocks a signed-out account deep link and routes through sign-in, account, a
   expect(request).not.toHaveBeenCalled();
   enterCredentials();
   fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+
+  expect(await screen.findByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
+  expect(navigation.getPathname()).toBe('/machines');
+  fireEvent.press(screen.getByRole('button', { name: /^Account, tab/ }));
 
   expect(await screen.findByText(user.email)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe('/account');

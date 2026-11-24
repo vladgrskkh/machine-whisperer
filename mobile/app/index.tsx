@@ -28,7 +28,7 @@ export default function Index() {
     );
   }
 
-  return <Redirect href={status === 'signedIn' ? '/account' : '/sign-in'} />;
+  return <Redirect href={status === 'signedIn' ? '/machines' : '/sign-in'} />;
 }
 
 const styles = StyleSheet.create({
