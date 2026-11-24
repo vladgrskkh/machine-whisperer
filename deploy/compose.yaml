@@ -15,8 +15,7 @@ services:
     image: nginx:1.31.10-alpine3.24-slim
     restart: unless-stopped
     environment:
-      DOMAIN: ${DOMAIN:?set DOMAIN in the server env file}
-      NGINX_ENVSUBST_FILTER: ^DOMAIN$
+      DOMAIN: ${DOMAIN:-onerep.mooo.com}
     ports:
       - "80:80"
       - "443:443"
@@ -24,11 +23,32 @@ services:
       edge:
         ipv4_address: ${MW_PROXY_IP:-172.30.48.2}
     volumes:
-      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./nginx:/opt/mw/nginx:ro
+      - ./nginx/entrypoint.sh:/docker-entrypoint.d/19-machine-whisperer.sh:ro
+      - ${MW_CERT_DIR:-./letsencrypt}:/etc/letsencrypt:ro
       - ${MW_ACME_WEBROOT:-./acme-webroot}:/var/www/acme:ro
-    secrets: [public_cert, public_key, internal_ca]
+    secrets: [internal_ca]
     depends_on:
       api: {condition: service_healthy}
+
+  certbot:
+    image: certbot/certbot:v5.10.0
+    profiles: [certbot]
+    networks: [acme]
+    volumes:
+      - ${MW_CERT_DIR:-./letsencrypt}:/etc/letsencrypt
+      - ${MW_ACME_WEBROOT:-./acme-webroot}:/var/www/acme
+    command:
+      - certonly
+      - --webroot
+      - --webroot-path
+      - /var/www/acme
+      - --cert-name
+      - ${DOMAIN:-onerep.mooo.com}
+      - -d
+      - ${DOMAIN:-onerep.mooo.com}
+      - --email
+      - "${ACME_EMAIL:-}"
 
   api:
     build: ../api
@@ -136,6 +156,7 @@ networks:
   data:
     internal: true
   monitoring: {}
+  acme: {}
 
 volumes:
   postgres-data: {}
@@ -161,7 +182,3 @@ secrets:
     file: ${MW_SECRETS_DIR:-./secrets}/api.crt
   api_key:
     file: ${MW_SECRETS_DIR:-./secrets}/api.key
-  public_cert:
-    file: ${MW_PUBLIC_CERT_FILE:-${MW_SECRETS_DIR:-./secrets}/public.crt}
-  public_key:
-    file: ${MW_PUBLIC_KEY_FILE:-${MW_SECRETS_DIR:-./secrets}/public.key}

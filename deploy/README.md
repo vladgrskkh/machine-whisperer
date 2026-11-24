@@ -12,10 +12,9 @@ Point the public DNS name at the host and allow inbound TCP 80 and 443 for
 Nginx. Leave host port 9090 available for Prometheus on loopback. PostgreSQL,
 ClickHouse, and Analytics are on the private Compose network.
 
-Obtain a publicly trusted certificate chain and matching private key for the DNS
-name before startup. The operator manages issuance and renewal. Port 80 serves
-HTTP-01 challenges from the configured ACME webroot and redirects other
-requests to HTTPS.
+Certbot uses HTTP-01 validation. Check the public DNS A record and any AAAA
+records from outside the host network. Each published address must reach
+Nginx on port 80 during both issuance and renewal.
 
 ## First startup
 
@@ -26,17 +25,16 @@ deploy/scripts/prepare-secrets.sh --output-dir deploy/secrets
 mkdir -p deploy/acme-webroot
 ```
 
-Edit `deploy/.env.server` and set `DOMAIN` to the certificate's hostname, without
-a scheme or port. Set `MW_PUBLIC_CERT_FILE` and `MW_PUBLIC_KEY_FILE` to the
-operator-managed certificate chain and key, or install them as `public.crt`
-and `public.key` in `deploy/secrets`. Restrict the private key to mode
-`0600` and make both files available on the Docker host. If using HTTP-01,
-write challenge files under `deploy/acme-webroot/.well-known/acme-challenge/`
-with permissions that let Nginx read them. If the edge network overlaps an
-existing network, set `MW_EDGE_SUBNET` and choose an unused `MW_PROXY_IP` within
-that subnet. The API trusts forwarding headers from that IP. If you customize
-`MW_SECRETS_DIR` or `MW_ACME_WEBROOT`, use the corresponding paths in the setup
-commands. Compose resolves relative paths from `deploy/`.
+Set `ACME_EMAIL` in `deploy/.env.server` to the operator's email address for
+the Let's Encrypt account. The default `DOMAIN` is `onerep.mooo.com`. Set it
+to the public DNS hostname of this deployment, without a scheme or port.
+Certbot writes account data, renewal configuration, and certificate lineages
+under `MW_CERT_DIR`. Nginx reads that directory and the HTTP-01 webroot
+(`MW_ACME_WEBROOT`). Compose resolves relative host paths from `deploy/`.
+If you customize `MW_SECRETS_DIR` or the webroot, use those paths in setup.
+If the edge network overlaps an existing network, set `MW_EDGE_SUBNET` and
+choose an unused `MW_PROXY_IP` within it. The API trusts forwarding headers
+from that IP.
 
 Keep credentials, signing keys, private TLS keys, and backups outside Git.
 `prepare-secrets.sh` requires an empty directory. Preserve the generated files
@@ -69,13 +67,24 @@ mw ps -a
 PostgreSQL and ClickHouse must pass their health checks before their respective
 migration jobs can run. The API and Analytics wait for successful migrations.
 Nginx starts after the API becomes healthy. In `mw ps -a`, both migration jobs
-should show exit code 0. Try the deployed API from a client with normal public
+should show exit code 0. Before issuance, Nginx serves the challenge path on
+port 80 and returns HTTP 503 for application routes. To obtain the first
+certificate, run the following on the host in an interactive terminal. Certbot
+prompts you to review and accept the Let's Encrypt subscriber agreement. On
+success the helper restarts Nginx, enabling HTTPS and redirecting other HTTP
+requests to the public hostname.
+
+```bash
+COMPOSE_PROJECT_NAME="$project" deploy/scripts/bootstrap-certificates.sh
+```
+
+Try the deployed API from a client with normal public
 certificate validation, substituting your public hostname below. An
 unauthenticated request should return HTTP 401.
 
 ```bash
 curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
-    https://api.example.com/v1/users/me
+    https://onerep.mooo.com/v1/users/me
 ```
 
 ## Logs and Prometheus
@@ -90,7 +99,7 @@ Prometheus listens on host loopback at `127.0.0.1:9090` and initially scrapes
 itself. Run this from a workstation and open `http://127.0.0.1:9090` there.
 
 ```bash
-ssh -N -L 127.0.0.1:9090:127.0.0.1:9090 operator@api.example.com
+ssh -N -L 127.0.0.1:9090:127.0.0.1:9090 operator@onerep.mooo.com
 ```
 
 ## Upgrade and public TLS renewal
@@ -108,11 +117,24 @@ mw logs --tail=100 api-migrate analytics-migrate
 ```
 
 Verify both migration exit codes and the public HTTPS request after upgrading.
-For a public certificate renewal, update the configured chain and key on the
-host and recreate Nginx so its file mounts pick up the current files.
+Install the example systemd units after successful issuance. Set both paths
+in the service to the absolute location of a root-controlled deployment
+checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`
+under `[Service]`. The timer checks daily. After a successful Certbot run the
+helper checks the Nginx configuration and reloads the certificate files.
 
 ```bash
-mw up -d --no-deps --force-recreate nginx
+sudo install -m 0644 deploy/systemd/machine-whisperer-certbot-renew.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now machine-whisperer-certbot-renew.timer
+systemctl list-timers machine-whisperer-certbot-renew.timer
+journalctl -u machine-whisperer-certbot-renew.service
+```
+
+To run a renewal check manually:
+
+```bash
+COMPOSE_PROJECT_NAME="$project" deploy/scripts/renew-certificates.sh
 ```
 
 ## Back up the volumes
@@ -140,14 +162,16 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
         tar -tf "$backup/$name.tar" >/dev/null
     done
     tar -C deploy -cpf "$backup/secrets.tar" secrets
+    sudo tar -C deploy -cpf - letsencrypt > "$backup/letsencrypt.tar"
     printf 'Backup complete: %s\n' "$backup"
 )
 mw up -d
 ```
 
-The secret archive command covers the example layout. For a custom
-`MW_SECRETS_DIR`, archive that directory instead. If the public chain and key
-are stored elsewhere, back them up through the operator's certificate workflow.
+The archive commands cover the example layout. For custom `MW_SECRETS_DIR` or
+`MW_CERT_DIR`, substitute those directories in backup and restore. Archive
+the entire Certbot directory to preserve account keys, symlinks, and renewal
+settings. Schedule the backup outside the renewal window.
 Keep the matching secret set, env file, and code revision with the volume
 archives. Check that the backup completed before relying on it.
 
@@ -175,7 +199,7 @@ project=machine-whisperer-restored
     revision=$(cat "$backup/revision")
     git worktree add --detach "$restore_checkout" "$revision"
     cd -- "$restore_checkout"
-    for path in deploy/.env.server deploy/secrets; do
+    for path in deploy/.env.server deploy/secrets deploy/letsencrypt; do
         if [[ -e "$path" || -L "$path" ]]; then
             printf 'Restore destination already exists: %s\n' "$path" >&2
             exit 1
@@ -183,6 +207,7 @@ project=machine-whisperer-restored
     done
     install -m 0600 "$backup/env.server" deploy/.env.server
     tar -C deploy -xpf "$backup/secrets.tar"
+    sudo tar -C deploy -xpf "$backup/letsencrypt.tar"
     mkdir -p deploy/acme-webroot
 )
 ```
@@ -233,7 +258,8 @@ mw() {
 ```
 
 Verify migration and container status, then confirm the expected data through
-the API.
+the API. Update the renewal service checkout and project to match the restored
+deployment, then run `sudo systemctl daemon-reload`.
 
 ## Shutdown
 
@@ -248,7 +274,7 @@ the persisted database and monitoring data.
 ## Mobile client
 
 Build the iOS and Android app separately from the server stack. Set
-`EXPO_PUBLIC_API_URL=https://api.example.com` in `mobile/.env.local` or in the
+`EXPO_PUBLIC_API_URL=https://onerep.mooo.com` in `mobile/.env.local` or in the
 mobile build environment, using the public hostname in `DOMAIN`. Expo embeds
 this value in the client bundle. Rebuild the mobile app when its server URL
 changes. See the [mobile setup instructions](../mobile/README.md).

@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 [[ -f compose.yaml ]] || { echo 'Missing server Compose topology' >&2; exit 1; }
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
-docker compose --env-file .env.server.example -f compose.yaml config --format json >"$config"
+ACME_EMAIL=fixture@example.invalid docker compose --env-file .env.server.example --profile certbot -f compose.yaml config --format json >"$config"
 python3 - "$config" <<'PY'
 import json
 import pathlib
@@ -13,7 +13,7 @@ import sys
 cfg = json.loads(pathlib.Path(sys.argv[1]).read_text())
 svc = cfg["services"]
 networks = {
-    "nginx": {"edge"}, "api": {"edge", "data"}, "api-migrate": {"data"},
+    "certbot": {"acme"}, "nginx": {"edge"}, "api": {"edge", "data"}, "api-migrate": {"data"},
     "postgres": {"data"}, "analytics": {"data"}, "analytics-migrate": {"data"},
     "clickhouse": {"data"}, "prometheus": {"monitoring"},
 }
@@ -26,11 +26,24 @@ ports = {(name, p.get("host_ip", ""), str(p["published"]), p["target"])
          for name, service in svc.items() for p in service.get("ports", [])}
 assert ports == {("nginx", "", "80", 80), ("nginx", "", "443", 443),
                  ("prometheus", "127.0.0.1", "9090", 9090)}, ports
-for name, image in {"postgres": "postgres:18.7-alpine3.23",
+for name, image in {"certbot": "certbot/certbot:v5.10.0", "postgres": "postgres:18.7-alpine3.23",
                     "clickhouse": "clickhouse/clickhouse-server:26.9.36.3",
                     "nginx": "nginx:1.31.10-alpine3.24-slim",
                     "prometheus": "prom/prometheus:v3.16.0"}.items():
     assert svc[name]["image"] == image, name
+certbot = svc["certbot"]
+assert certbot["profiles"] == ["certbot"]
+assert certbot["command"] == [
+    "certonly", "--webroot", "--webroot-path", "/var/www/acme", "--cert-name",
+    svc["nginx"]["environment"]["DOMAIN"], "-d", svc["nginx"]["environment"]["DOMAIN"],
+    "--email", "fixture@example.invalid",
+]
+mounts = {v["target"]: v for v in certbot["volumes"]}
+assert set(mounts) == {"/etc/letsencrypt", "/var/www/acme"}
+for target, volume in mounts.items():
+    assert volume["type"] == "bind" and not volume.get("read_only")
+    assert any(v["target"] == target and v["source"] == volume["source"] and v["read_only"]
+               for v in svc["nginx"]["volumes"])
 for job, db in [("api-migrate", "postgres"), ("analytics-migrate", "clickhouse")]:
     assert svc[job]["entrypoint"] == ["/usr/local/bin/migrate"]
     assert svc[job]["depends_on"][db]["condition"] == "service_healthy"
@@ -45,7 +58,7 @@ for name, target in [("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/l
 grants = {"api": {"database_url", "analytics_token", "signing_key", "verify_keys", "api_cert", "api_key", "internal_ca"},
           "api-migrate": {"database_url"}, "analytics": {"analytics_token", "clickhouse_password"},
           "analytics-migrate": {"clickhouse_password"}, "clickhouse": {"clickhouse_password"},
-          "postgres": {"postgres_password"}, "nginx": {"internal_ca", "public_cert", "public_key"},
+          "postgres": {"postgres_password"}, "nginx": {"internal_ca"}, "certbot": set(),
           "prometheus": set()}
 for name, expected in grants.items():
     assert {s["source"] for s in svc[name].get("secrets", [])} == expected, name

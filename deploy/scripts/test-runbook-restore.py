@@ -36,9 +36,13 @@ class RestoreTest(unittest.TestCase):
         self.restore_checkout = self.scratch / "restore worktree"
         self.project = "mw-restore-alternate"
         self.backup = self.scratch / "backup"
+        sudo = self.scratch / "sudo"
+        sudo.write_text('#!/bin/sh\n[ "$1" = tar ] || exit 1\nexec "$@"\n', encoding="utf-8")
+        sudo.chmod(0o755)
         self.env = dict(os.environ)
         self.env.pop("BASH_ENV", None)
         self.env.update(
+            PATH=f"{self.scratch}:{os.environ['PATH']}",
             HOME=str(self.scratch),
             backup=str(self.backup),
             restore_checkout=str(self.restore_checkout),
@@ -70,6 +74,8 @@ class RestoreTest(unittest.TestCase):
         (secrets / "token").write_text("backup secret\n", encoding="utf-8")
         with tarfile.open(self.backup / "secrets.tar", "w") as archive:
             archive.add(secrets, arcname="secrets")
+        with tarfile.open(self.backup / "letsencrypt.tar", "w") as archive:
+            archive.add(secrets / "token", arcname="letsencrypt/accounts/token")
 
     def test_restores_to_separate_worktree(self):
         self.create_backup()
@@ -83,6 +89,8 @@ class RestoreTest(unittest.TestCase):
         self.assertEqual((self.restore_checkout / "deploy/.env.server").read_text(), "backup env\n")
         self.assertEqual((self.restore_checkout / "deploy/secrets/token").read_text(), "backup secret\n")
 
+        self.assertEqual((self.restore_checkout / "deploy/letsencrypt/accounts/token").read_text(), "backup secret\n")
+
     def test_refuses_to_overwrite_ignored_configuration(self):
         self.create_backup()
         hooks = self.scratch / "hooks"
@@ -91,6 +99,8 @@ class RestoreTest(unittest.TestCase):
         post_checkout = hooks / "post-checkout"
         for label, script, occupied, absent in (
             ("env", "printf 'occupied' > deploy/.env.server", "deploy/.env.server", "deploy/secrets"),
+            ("certs", "mkdir deploy/letsencrypt\nprintf 'occupied' > deploy/letsencrypt/token",
+             "deploy/letsencrypt/token", "deploy/.env.server"),
             ("secrets", "mkdir deploy/secrets\nprintf 'occupied' > deploy/secrets/token",
              "deploy/secrets/token", "deploy/.env.server"),
         ):

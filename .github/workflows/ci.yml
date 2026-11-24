@@ -87,6 +87,12 @@ jobs:
         run: api/scripts/test-migrate.sh
       - name: Test the ClickHouse entrypoint
         run: deploy/clickhouse/test-entrypoint.sh
+      - name: Test certificate bootstrap and renewal helpers
+        run: deploy/scripts/test-certificates.sh
+      - name: Check the Certbot CLI offline
+        run: |
+          version=$(docker run --rm --network none certbot/certbot:v5.10.0 --version)
+          test "$version" = 'certbot 5.10.0'
       - name: Validate the Compose configuration
         run: deploy/scripts/test-compose-config.sh
       - name: Test the backup restore runbook

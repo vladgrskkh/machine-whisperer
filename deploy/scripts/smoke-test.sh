@@ -5,7 +5,9 @@ cd "$(dirname "$0")/.."
 work=$(mktemp -d)
 project="mw-smoke-$(openssl rand -hex 10)"
 export DOMAIN=smoke.test MW_SECRETS_DIR="$work/secrets" MW_ACME_WEBROOT="$work/acme"
-export MW_PUBLIC_CERT_FILE="$work/public.crt" MW_PUBLIC_KEY_FILE="$work/public.key"
+export MW_CERT_DIR="$work/certs"
+fixture="$MW_CERT_DIR/live/$DOMAIN"
+export SMOKE_CA_FILE="$fixture/fullchain.pem"
 octets=$(openssl rand -hex 2)
 export MW_EDGE_SUBNET="10.$((16#${octets:0:2})).$((16#${octets:2:2})).0/28"
 export MW_PROXY_IP="${MW_EDGE_SUBNET%.0/28}.2"
@@ -42,8 +44,7 @@ services:
       - "127.0.0.1::9090"
 YAML
 scripts/prepare-secrets.sh --output-dir "$MW_SECRETS_DIR"
-openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$DOMAIN" \
-    -addext "subjectAltName=DNS:$DOMAIN" -keyout "$MW_PUBLIC_KEY_FILE" -out "$MW_PUBLIC_CERT_FILE"
+mkdir -p "$fixture"
 mkdir -p "$MW_ACME_WEBROOT/.well-known/acme-challenge"
 echo acme-ok >"$MW_ACME_WEBROOT/.well-known/acme-challenge/probe"
 chmod 0755 "$MW_ACME_WEBROOT" "$MW_ACME_WEBROOT/.well-known" "$MW_ACME_WEBROOT/.well-known/acme-challenge"
@@ -59,7 +60,6 @@ for service in api analytics; do
     [[ $(docker inspect -f '{{.State.Health.Status}}' "$id") == healthy ]]
 done
 http=$("${compose[@]}" port nginx 80)
-tls=$("${compose[@]}" port nginx 443)
 prom=$("${compose[@]}" port prometheus 9090)
 curl=(curl --silent --show-error --max-time 10 --noproxy '*')
 for ((i=0; i<15; i++)); do
@@ -67,9 +67,20 @@ for ((i=0; i<15; i++)); do
     sleep 1
 done
 [[ $i -lt 15 ]]
+[[ $("${curl[@]}" -o /dev/null -w '%{http_code}' "http://$http/v1/users/me") == 503 ]]
+openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=$DOMAIN" \
+    -addext "subjectAltName=DNS:$DOMAIN" -keyout "$fixture/privkey.pem" -out "$SMOKE_CA_FILE"
+"${compose[@]}" restart nginx
+http=$("${compose[@]}" port nginx 80)
+tls=$("${compose[@]}" port nginx 443)
+for ((i=0; i<15; i++)); do
+    if "${curl[@]}" -f "http://$http/.well-known/acme-challenge/probe" >/dev/null; then break; fi
+    sleep 1
+done
+[[ $i -lt 15 ]]
 [[ $("${curl[@]}" -o /dev/null -w '%{redirect_url}' "http://$http/v1/users/me") == "https://$DOMAIN/v1/users/me" ]]
 status() {
-    "${curl[@]}" --resolve "$DOMAIN:${tls##*:}:127.0.0.1" --cacert "$MW_PUBLIC_CERT_FILE" \
+    "${curl[@]}" --resolve "$DOMAIN:${tls##*:}:127.0.0.1" --cacert "$SMOKE_CA_FILE" \
         -o /dev/null -w '%{http_code}' "https://$DOMAIN:${tls##*:}$1"
 }
 [[ $(status /v1/users/me) == 401 ]]
@@ -118,7 +129,7 @@ prom=$("${compose[@]}" port prometheus 9090)
 cat >"$work/untrusted.yaml" <<'YAML'
 secrets:
   internal_ca:
-    file: ${MW_PUBLIC_CERT_FILE}
+    file: ${SMOKE_CA_FILE}
 YAML
 "${compose[@]}" -f "$work/untrusted.yaml" up -d --no-deps --force-recreate nginx
 tls=$("${compose[@]}" port nginx 443)
