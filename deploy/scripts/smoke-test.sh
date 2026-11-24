@@ -11,6 +11,7 @@ export SMOKE_CA_FILE="$fixture/fullchain.pem"
 octets=$(openssl rand -hex 2)
 export MW_EDGE_SUBNET="10.$((16#${octets:0:2})).$((16#${octets:2:2})).0/28"
 export MW_PROXY_IP="${MW_EDGE_SUBNET%.0/28}.2"
+export MW_PROVISIONING_CIDR=192.0.2.0/24
 compose=(docker compose --env-file .env.server.example -p "$project" -f compose.yaml -f "$work/ports.yaml")
 started=false
 cleanup() {
@@ -80,10 +81,18 @@ done
 [[ $i -lt 15 ]]
 [[ $("${curl[@]}" -o /dev/null -w '%{redirect_url}' "http://$http/v1/users/me") == "https://$DOMAIN/v1/users/me" ]]
 status() {
+    local path=$1
+    shift
     "${curl[@]}" --resolve "$DOMAIN:${tls##*:}:127.0.0.1" --cacert "$SMOKE_CA_FILE" \
-        -o /dev/null -w '%{http_code}' "https://$DOMAIN:${tls##*:}$1"
+        -o /dev/null -w '%{http_code}' "$@" "https://$DOMAIN:${tls##*:}$path"
 }
 [[ $(status /v1/users/me) == 401 ]]
+provisioning_status=$(status /internal/v1/device-provisioning --request POST \
+    --header 'X-Forwarded-For: 192.0.2.1')
+[[ $provisioning_status == 403 ]] || {
+    printf 'Expected HTTP 403 for public device provisioning, got %s\n' "$provisioning_status" >&2
+    exit 1
+}
 for private_path in /healthz /metrics /internal/v1/telemetry-batches; do
     [[ $(status "$private_path") == 404 ]]
 done

@@ -4,7 +4,8 @@ cd "$(dirname "$0")/.."
 [[ -f compose.yaml ]] || { echo 'Missing server Compose topology' >&2; exit 1; }
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
-ACME_EMAIL=fixture@example.invalid docker compose --env-file .env.server.example --profile certbot -f compose.yaml config --format json >"$config"
+ACME_EMAIL=fixture@example.invalid MW_PROVISIONING_CIDR= \
+    docker compose --env-file .env.server.example --profile certbot -f compose.yaml config --format json >"$config"
 python3 - "$config" <<'PY'
 import json
 import pathlib
@@ -70,6 +71,18 @@ for name, expected in grants.items():
 for secret in cfg["secrets"].values():
     assert "file" in secret and not secret.get("external")
 assert svc["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == svc["nginx"]["networks"]["edge"]["ipv4_address"] + "/32"
+assert svc["nginx"]["environment"].get("MW_PROVISIONING_CIDR") == "127.0.0.1/32", "Unexpected default provisioning CIDR"
+PY
+
+MW_PROVISIONING_CIDR=192.0.2.0/24 \
+    docker compose --env-file .env.server.example -f compose.yaml config --format json >"$config"
+python3 - "$config" <<'PY'
+import json
+import pathlib
+import sys
+
+cfg = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert cfg["services"]["nginx"]["environment"].get("MW_PROVISIONING_CIDR") == "192.0.2.0/24", "Provisioning CIDR override did not reach Nginx"
 PY
 
 # Check file-backed credentials against the actual bootstrap contract.

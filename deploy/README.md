@@ -36,6 +36,11 @@ If the edge network overlaps an existing network, set `MW_EDGE_SUBNET` and
 choose an unused `MW_PROXY_IP` within it. The API trusts forwarding headers
 from that IP.
 
+Set `MW_PROVISIONING_CIDR` to the manufacturing station or gateway CIDR as seen
+by Nginx. It defaults to `127.0.0.1/32`. Nginx returns HTTP 403 for requests
+to `/internal/v1/device-provisioning` from outside that CIDR. The API requires
+a JWT with the `device_provisioner` role for requests from allowed sources.
+
 Keep credentials, signing keys, private TLS keys, and backups outside Git.
 `prepare-secrets.sh` requires an empty directory. Preserve the generated files
 across upgrades and restores. The directory is mode `0700` and mounted files
@@ -63,6 +68,8 @@ mw config --quiet
 mw up --build -d
 mw ps -a
 ```
+
+After changing `MW_PROVISIONING_CIDR`, apply the new value with `mw up -d nginx`.
 
 PostgreSQL and ClickHouse must pass their health checks before their respective
 migration jobs can run. The API and Analytics wait for successful migrations.
