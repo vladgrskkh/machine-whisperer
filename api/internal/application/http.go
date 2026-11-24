@@ -32,6 +32,9 @@ func (a *Application) Routes() http.Handler {
 			return r.Method + " " + r.URL.Path
 		},
 	}))
+	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	limit := middleware.RateLimit(a.rateLimitConfig)
 	access := middleware.AccessToken(a.verifier)
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)

@@ -3,6 +3,8 @@ package application_test
 import (
 	"math"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -86,6 +88,8 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 
 func configEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("DATABASE_URL_FILE", "")
+	t.Setenv("ANALYTICS_INGEST_API_KEY_FILE", "")
 	t.Setenv("AUTH_SIGNING_KEY_ID", "active")
 	t.Setenv("AUTH_SIGNING_KEY_FILE", "/test/private.pem")
 	t.Setenv("AUTH_VERIFY_KEYS_FILE", "/test/public.json")
@@ -242,4 +246,50 @@ func TestDetectorConfigRejectsInvalidSettings(t *testing.T) {
 			assert.Zero(t, config)
 		})
 	}
+}
+
+func TestLoadConfigReadsSecretsFromFiles(t *testing.T) {
+	configEnvironment(t)
+	t.Setenv("DATABASE_URL", "ignored")
+	t.Setenv("ANALYTICS_INGEST_API_KEY", "ignored")
+	dir := t.TempDir()
+	databaseFile := filepath.Join(dir, "database")
+	tokenFile := filepath.Join(dir, "token")
+	const databaseURL = " postgres://signup:database-secret@localhost/signup "
+	require.NoError(t, os.WriteFile(databaseFile, []byte(databaseURL+"\r\n"), 0o600))
+	require.NoError(t, os.WriteFile(tokenFile, []byte("private-token\n"), 0o600))
+	t.Setenv("DATABASE_URL_FILE", databaseFile)
+	t.Setenv("ANALYTICS_INGEST_API_KEY_FILE", tokenFile)
+
+	config, err := application.LoadConfig()
+	require.NoError(t, err)
+	assert.Equal(t, databaseURL, config.Database.URL)
+	assert.Equal(t, "private-token", config.Relay.AnalyticsAPIKey)
+}
+
+func TestLoadConfigRejectsUnreadableSecretFiles(t *testing.T) {
+	for _, variable := range []string{"DATABASE_URL_FILE", "ANALYTICS_INGEST_API_KEY_FILE"} {
+		t.Run(variable, func(t *testing.T) {
+			configEnvironment(t)
+			t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
+			t.Setenv(variable, filepath.Join(t.TempDir(), "private-secret-path"))
+			config, err := application.LoadConfig()
+			require.Error(t, err)
+			assert.Zero(t, config)
+			assert.NotContains(t, err.Error(), "private-secret-path")
+		})
+	}
+}
+
+func TestLoadConfigRejectsInvalidTokenFileWithoutLeakingContents(t *testing.T) {
+	configEnvironment(t)
+	t.Setenv("DATABASE_URL", "postgres://signup:test@localhost/signup")
+	tokenFile := filepath.Join(t.TempDir(), "token")
+	require.NoError(t, os.WriteFile(tokenFile, []byte(" private-token\n"), 0o600))
+	t.Setenv("ANALYTICS_INGEST_API_KEY_FILE", tokenFile)
+
+	config, err := application.LoadConfig()
+	require.Error(t, err)
+	assert.Zero(t, config)
+	assert.NotContains(t, err.Error(), "private-token")
 }
