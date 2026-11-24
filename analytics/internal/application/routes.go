@@ -13,5 +13,7 @@ func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
 	router.With(middleware.Bearer(a.ingestKey)).
 		Post("/internal/v1/telemetry-batches", telemetry.NewBatch(a.ingest).ServeHTTP)
+	router.With(middleware.Bearer(a.ingestKey)).
+		Get("/internal/v1/machines/{machine_id}/telemetry", telemetry.NewHistory(a.history).ServeHTTP)
 	return router
 }

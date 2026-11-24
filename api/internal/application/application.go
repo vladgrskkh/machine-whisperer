@@ -43,6 +43,7 @@ type Application struct {
 	claim            *device.Claim
 	deviceAuth       *device.Authenticator
 	ingestTelemetry  *telemetry.Ingest
+	telemetryHistory *telemetry.ListHistory
 	telemetryWorker  *telemetryworker.Worker
 	createMachine    *machine.Create
 	listMachines     *machine.List
@@ -130,7 +131,11 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
 	app.logout = auth.NewLogout(sessions, transactions, now)
 	app.me = auth.NewMe(repository)
-	app.setupEnrollment(transactions, claimTTL)
+	app.setupEnrollment(
+		transactions,
+		claimTTL,
+		analyticshttp.NewHistoryClient(config.Relay.AnalyticsURL, config.Relay.AnalyticsAPIKey),
+	)
 	app.setupDetection(transactions, detectorConfig)
 	if relayConfigured {
 		app.setupRelay(config.Relay)
@@ -142,6 +147,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 func (a *Application) setupEnrollment(
 	transactions *transactionpostgres.Manager,
 	claimTTL time.Duration,
+	history telemetry.HistoryClient,
 ) {
 	machines := machinepostgres.New(a.pool)
 	devices := devicepostgres.New(a.pool)
@@ -157,6 +163,7 @@ func (a *Application) setupEnrollment(
 	a.createMachine = machine.NewCreate(machines, token.IDs{})
 	a.listMachines = machine.NewList(machines)
 	a.machineDetail = machine.NewDetail(machines)
+	a.telemetryHistory = telemetry.NewListHistory(machines, history)
 	a.getBaseline = machine.NewGetBaseline(machines)
 	a.setBaseline = machine.NewSetBaseline(machines, transactions)
 }

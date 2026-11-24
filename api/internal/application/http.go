@@ -56,6 +56,7 @@ func (a *Application) Routes() http.Handler {
 		owner.Get("/v1/machines/{id}/baseline", machines.NewGetBaseline(a.getBaseline).ServeHTTP)
 		owner.Put("/v1/machines/{id}/baseline", machines.NewSetBaseline(a.setBaseline).ServeHTTP)
 		owner.Get("/v1/machines/{id}/alerts", alerts.NewList(a.listAlerts).ServeHTTP)
+		owner.Get("/v1/machines/{machine_id}/telemetry", telemetry.NewHistory(a.telemetryHistory).ServeHTTP)
 		owner.Post("/v1/alerts/{id}/acknowledge", alerts.NewAcknowledge(a.acknowledgeAlert).ServeHTTP)
 	})
 

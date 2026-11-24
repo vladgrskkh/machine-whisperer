@@ -18,6 +18,7 @@ type Application struct {
 	ingestKey  string
 	clickHouse ch.Conn
 	ingest     *telemetry.IngestBatch
+	history    *telemetry.ListHistory
 }
 
 type Option func(context.Context, *Application) error
@@ -33,7 +34,9 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 	if app.clickHouse == nil {
 		return nil, errors.New("telemetry repository is required")
 	}
-	app.ingest = telemetry.NewIngestBatch(clickhouse.NewRepository(app.clickHouse))
+	repository := clickhouse.NewRepository(app.clickHouse)
+	app.ingest = telemetry.NewIngestBatch(repository)
+	app.history = telemetry.NewListHistory(repository)
 	return app, nil
 }
 
