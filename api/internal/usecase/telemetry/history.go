@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"errors"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
@@ -31,7 +32,10 @@ func (l *ListHistory) Execute(
 	cursor string,
 ) (telemetry.HistoryPage, error) {
 	if _, err := l.machines.FindByOwner(ctx, ownerID, machineID); err != nil {
-		return telemetry.HistoryPage{}, err
+		if errors.Is(err, machine.ErrNotFound) {
+			return telemetry.HistoryPage{}, err
+		}
+		return telemetry.HistoryPage{}, telemetry.ErrHistoryUnavailable
 	}
 	return l.client.List(ctx, machineID, limit, cursor)
 }
