@@ -5,8 +5,9 @@ import type { Credentials, TokenPair } from '../api/types';
 export type SessionStatus = 'loading' | 'signedOut' | 'signedIn' | 'clearing' | 'cleanupFailed';
 
 export type TokenStore = {
-  load(): Promise<TokenPair | null>;
+  load(): Promise<TokenPair | 'cleanupPending' | null>;
   save(pair: TokenPair): Promise<void>;
+  markCleanupPending(): Promise<void>;
   clear(): Promise<void>;
 };
 
@@ -25,6 +26,7 @@ export class Session {
   private activeRefresh?: { generation: number; promise: Promise<AccessGrant> };
   private storageWrites = Promise.resolve();
   private cleanup?: Promise<void>;
+  private cleanupMarked = false;
 
   constructor(private readonly store: TokenStore, private readonly api: AuthApi) {}
 
@@ -81,7 +83,13 @@ export class Session {
   }
 
   private async restore() {
-    this.tokens = await this.store.load().catch(() => null);
+    const stored = await this.store.load().catch(() => null);
+    if (stored === 'cleanupPending') {
+      this.cleanupMarked = true;
+      this.updateStatus('cleanupFailed');
+      return;
+    }
+    this.tokens = stored;
     this.updateStatus(this.tokens ? 'signedIn' : 'signedOut');
   }
 
@@ -116,7 +124,15 @@ export class Session {
 
     this.generation += 1;
     this.tokens = null;
-    this.cleanup = this.writeStorage(() => this.store.clear()).then(
+    this.cleanup = this.writeStorage(async () => {
+      if (!this.cleanupMarked) {
+        // Replace the credentials before deletion so a failed delete cannot restore them.
+        await this.store.markCleanupPending();
+        this.cleanupMarked = true;
+      }
+      await this.store.clear();
+      this.cleanupMarked = false;
+    }).then(
       () => { this.updateStatus('signedOut'); },
       () => {
         this.updateStatus('cleanupFailed');

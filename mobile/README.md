@@ -20,8 +20,10 @@ Open the app in an SDK 57-compatible Expo Go or development build. Use
 Sign up with an email address and a password of 15–128 characters, then sign in.
 Account shows the current user's email and account creation date. The app
 stores its access and refresh tokens together in SecureStore. If a refresh
-fails, sign in again. Sign out removes the local session and requests server
-revocation. Server revocation requires a connection to the API.
+fails, sign in again. Sign out clears local credentials and attempts server
+revocation while the app is running. If local cleanup needs a retry, the app
+shows a retry action, including after restart. An interrupted or offline
+revocation request may leave the server session active until it expires.
 
 ```sh
 npm run lint

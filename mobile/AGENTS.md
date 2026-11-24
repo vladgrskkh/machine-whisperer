@@ -14,8 +14,10 @@ for Expo and React Native modules so native packages match the project's SDK.
 - Store the token pair as one SecureStore value. Serialize refresh, remove the
   stored pair before sending the refresh request, and persist the rotated pair
   before retrying the protected request. Clear the session after rejected or
-  uncertain refresh. Keep protected routes blocked until secure cleanup succeeds.
-  Route successful signup to sign-in because signup returns a user.
+  uncertain refresh. Replace stored credentials with a cleanup marker before
+  deletion. Keep protected routes blocked until secure cleanup succeeds,
+  including after restart. Route successful signup to sign-in because signup
+  returns a user.
 - Use Jest and React Native Testing Library to exercise screen interactions and
   observable API and session behavior. Mock network and OS storage at their
   boundaries. Follow the Superpowers workflow for feature work.

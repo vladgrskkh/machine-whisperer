@@ -227,7 +227,7 @@ it('cannot restore a predecessor token while its refresh response is pending', a
   }
 });
 
-it('keeps access disabled after failed logout cleanup and removes the session on retry', async () => {
+it('keeps access disabled across a restart after failed logout cleanup and removes the session on retry', async () => {
   jest.mocked(SecureStore.deleteItemAsync).mockRejectedValueOnce(new Error('Secure storage unavailable'));
   const request = jest.fn(async () => { throw new TypeError('Network unavailable'); });
   const { session, api } = setup(request);
@@ -237,11 +237,17 @@ it('keeps access disabled after failed logout cleanup and removes the session on
   expect(session.getStatus()).toBe('cleanupFailed');
   await expect(api.me()).rejects.toMatchObject({ code: 'session_required' });
 
-  await session.logout();
-  const { session: restarted } = setup(request);
+  const { session: restarted, api: restartedApi } = setup(request);
   await restarted.initialize();
-  expect(session.getStatus()).toBe('signedOut');
+  expect(restarted.getStatus()).toBe('cleanupFailed');
+  await expect(restartedApi.me()).rejects.toMatchObject({ code: 'session_required' });
+
+  await restarted.logout();
   expect(restarted.getStatus()).toBe('signedOut');
+  const { session: afterRetry } = setup(request);
+  await afterRetry.initialize();
+  expect(afterRetry.getStatus()).toBe('signedOut');
+  expect(afterRetry.getAccess()).toBeNull();
   expect(request).toHaveBeenCalledTimes(1);
 });
 
