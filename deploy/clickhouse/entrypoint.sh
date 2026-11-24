@@ -23,6 +23,11 @@ while [[ "$CLICKHOUSE_PASSWORD" == *$'\r' || "$CLICKHOUSE_PASSWORD" == *$'\n' ]]
     CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD%?}
 done
 
+# XML normalizes embedded CR and CRLF in the upstream password configuration.
+if [[ "$CLICKHOUSE_PASSWORD" == *$'\r'* ]]; then
+    echo 'CLICKHOUSE_PASSWORD_FILE must not contain embedded CR bytes' >&2
+    exit 1
+fi
 if [[ -z "$CLICKHOUSE_PASSWORD" ]]; then
     echo 'CLICKHOUSE_PASSWORD_FILE must contain a nonempty password' >&2
     exit 1

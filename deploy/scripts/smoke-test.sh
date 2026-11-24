@@ -76,15 +76,44 @@ status() {
 for private_path in /healthz /metrics /internal/v1/telemetry-batches; do
     [[ $(status "$private_path") == 404 ]]
 done
-# Wait for a successful sample from the self-scrape.
+postgres_query() {
+    "${compose[@]}" exec -T postgres psql -XAtq -v ON_ERROR_STOP=1 \
+        -U machine_whisperer -d machine_whisperer -c "$1"
+}
+clickhouse_query() {
+    "${compose[@]}" exec -T clickhouse bash -ec '
+        CLICKHOUSE_PASSWORD=$(cat -- "$CLICKHOUSE_PASSWORD_FILE")
+        export CLICKHOUSE_PASSWORD
+        exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --query "$1"
+    ' bash "$1"
+}
+postgres_query "CREATE TABLE smoke_marker (value text NOT NULL)"
+postgres_query "INSERT INTO smoke_marker VALUES ('$project')"
+clickhouse_query "CREATE TABLE smoke_marker (value String) ENGINE = MergeTree ORDER BY tuple()"
+clickhouse_query "INSERT INTO smoke_marker VALUES ('$project')"
+
+# A range vector contains the original sample timestamps.
+prometheus_sample() {
+    "${curl[@]}" -fsG --retry 8 --retry-connrefused --retry-delay 1 "http://$prom/api/v1/query" \
+        --data-urlencode 'query=up{job="prometheus"}[1m]' "$@" |
+        python3 -c '
+import json, sys
+series = json.load(sys.stdin)["data"]["result"]
+print(max((t for row in series for t, value in row["values"] if value == "1"), default=""))
+'
+}
 for ((i=0; i<30; i++)); do
-    if "${curl[@]}" -fsG "http://$prom/api/v1/query" --data-urlencode 'query=up{job="prometheus"}' |
-        python3 -c 'import json,sys; sys.exit(not any(s["value"][1]=="1" for s in json.load(sys.stdin)["data"]["result"]))'; then
-        break
-    fi
+    if sample=$(prometheus_sample) && [[ -n "$sample" ]]; then break; fi
     sleep 2
 done
 [[ $i -lt 30 ]]
+
+"${compose[@]}" down --timeout 30
+"${compose[@]}" up -d --wait --wait-timeout 240
+[[ $(postgres_query 'SELECT value FROM smoke_marker') == "$project" ]]
+[[ $(clickhouse_query 'SELECT value FROM smoke_marker') == "$project" ]]
+prom=$("${compose[@]}" port prometheus 9090)
+[[ $(prometheus_sample --data-urlencode "time=$sample") == "$sample" ]]
 # Replace only the proxy container's upstream trust root with an unrelated certificate.
 cat >"$work/untrusted.yaml" <<'YAML'
 secrets:

@@ -88,6 +88,8 @@ func TestLoadRejectsInvalidSecretFiles(t *testing.T) {
 		{name: "missing token file", env: "ANALYTICS_INGEST_API_KEY_FILE"},
 		{name: "empty password file", env: "CLICKHOUSE_PASSWORD_FILE", data: "\r\n"},
 		{name: "password with NUL byte", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\x00suffix\r\n"},
+		{name: "password with embedded CR", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\rsuffix\r\n"},
+		{name: "password with embedded CRLF", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\r\nsuffix\r\n"},
 		{name: "token with NUL byte", env: "ANALYTICS_INGEST_API_KEY_FILE", data: "fixture-token\x00suffix\r\n"},
 		{name: "token with trailing space", env: "ANALYTICS_INGEST_API_KEY_FILE", data: "fixture-token \n"},
 	} {

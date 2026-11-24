@@ -23,22 +23,24 @@ if ! run_wrapper "$test_dir/password" > "$test_dir/output" 2> "$test_dir/error" 
     exit 1
 fi
 
-reject_nul() {
+reject_password() {
     printf '%b' "$1" > "$test_dir/password"
     if run_wrapper "$test_dir/password" > "$test_dir/output" 2> "$test_dir/error"; then
-        echo 'ClickHouse entrypoint accepted a password containing a NUL byte' >&2
+        echo 'ClickHouse entrypoint accepted an invalid password' >&2
         exit 1
     fi
     diagnostic=$(cat "$test_dir/error")
-    if [[ -s "$test_dir/output" || "$diagnostic" != *CLICKHOUSE_PASSWORD_FILE* || "$diagnostic" != *NUL* ||
+    if [[ -s "$test_dir/output" || "$diagnostic" != *CLICKHOUSE_PASSWORD_FILE* || "$diagnostic" != *"$2"* ||
         "$diagnostic" == *"$test_dir"* || "$diagnostic" == *fixture-left* || "$diagnostic" == *fixture-right* ]]; then
         echo 'ClickHouse entrypoint did not report the invalid password safely' >&2
         exit 1
     fi
 }
 
-reject_nul 'fixture-left\000fixture-right\r\n'
-LC_ALL=C.UTF-8 reject_nul 'fixture-left\0302\000fixture-right\r\n'
+reject_password 'fixture-left\000fixture-right\r\n' NUL
+LC_ALL=C.UTF-8 reject_password 'fixture-left\0302\000fixture-right\r\n' NUL
+reject_password 'fixture-left\rfixture-right\r\n' CR
+reject_password 'fixture-left\r\nfixture-right\r\n' CR
 
 if run_wrapper "$test_dir/missing" > "$test_dir/output" 2> "$test_dir/error"; then
     echo 'ClickHouse entrypoint accepted a missing password file' >&2

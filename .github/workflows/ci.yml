@@ -83,6 +83,8 @@ jobs:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
+      - name: Test the API migration wrapper
+        run: api/scripts/test-migrate.sh
       - name: Test the ClickHouse entrypoint
         run: deploy/clickhouse/test-entrypoint.sh
       - name: Validate the Compose configuration

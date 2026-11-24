@@ -1,8 +1,20 @@
-#!/bin/sh
-set -eu
+#!/bin/bash
+set -euo pipefail
 
-if [ -z "${DATABASE_URL_FILE:-}" ] || ! database_url=$(cat -- "$DATABASE_URL_FILE" 2>/dev/null); then
-    echo "cannot read DATABASE_URL_FILE" >&2
+if [[ -z "${DATABASE_URL_FILE:-}" ]]; then
+    echo 'DATABASE_URL_FILE is required' >&2
+    exit 1
+fi
+if ! database_url=$(
+    cat -- "$DATABASE_URL_FILE" 2>/dev/null | {
+        # Read to NUL or EOF before passing bytes through command substitution.
+        if LC_ALL=C IFS= read -r -d '' url; then
+            exit 1
+        fi
+        printf '%s' "$url"
+    }
+); then
+    echo 'DATABASE_URL_FILE must be readable and must not contain NUL bytes' >&2
     exit 1
 fi
 

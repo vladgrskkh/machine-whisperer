@@ -293,3 +293,16 @@ func TestLoadConfigRejectsInvalidTokenFileWithoutLeakingContents(t *testing.T) {
 	assert.Zero(t, config)
 	assert.NotContains(t, err.Error(), "private-token")
 }
+
+func TestLoadConfigRejectsDatabaseURLFileWithNUL(t *testing.T) {
+	configEnvironment(t)
+	path := filepath.Join(t.TempDir(), "private-database-url")
+	require.NoError(t, os.WriteFile(path, []byte("postgres://user:private-fixture\x00tail@localhost/db\r\n"), 0o600))
+	t.Setenv("DATABASE_URL_FILE", path)
+
+	config, err := application.LoadConfig()
+	require.Error(t, err)
+	assert.Zero(t, config)
+	assert.NotContains(t, err.Error(), "private-fixture")
+	assert.NotContains(t, err.Error(), path)
+}

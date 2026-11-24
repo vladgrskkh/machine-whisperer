@@ -1,6 +1,7 @@
 package application
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"net/netip"
@@ -190,6 +191,9 @@ func loadSecretFile(value *string, path, variable string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return errors.New("cannot read " + variable)
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return errors.New(variable + " must not contain NUL bytes")
 	}
 	*value = strings.TrimRight(string(data), "\r\n")
 	return nil
