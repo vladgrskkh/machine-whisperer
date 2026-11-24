@@ -11,7 +11,17 @@ import unittest
 
 RUNBOOK = (Path(__file__).resolve().parents[1] / "README.md").read_text(encoding="utf-8")
 RESTORE_SECTION = RUNBOOK.split("## Restore a backup\n", 1)[1].split("## Shutdown\n", 1)[0]
-RESTORE_CONFIG, _, START_RESTORE = re.findall(r"```bash\n(.*?)\n```", RESTORE_SECTION, re.S)[-3:]
+RESTORE_SNIPPETS = re.findall(r"```bash\n(.*?)\n```", RESTORE_SECTION, re.S)
+
+
+def restore_snippet(command):
+    matches = [snippet for snippet in RESTORE_SNIPPETS if command in snippet]
+    assert len(matches) == 1, f"Expected one restore runbook block containing {command!r}, found {len(matches)}"
+    return matches[0]
+
+
+RESTORE_CONFIG = restore_snippet("git worktree add --detach")
+START_RESTORE = restore_snippet("mw config --quiet")
 
 
 def git(checkout, *args):
