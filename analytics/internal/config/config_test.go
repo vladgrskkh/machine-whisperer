@@ -40,6 +40,19 @@ func TestServiceConfiguration(t *testing.T) {
 
 const generatedPassword = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
+func TestLoadClickHousePreservesEnvironmentPassword(t *testing.T) {
+	t.Setenv("CLICKHOUSE_ADDRESS", "localhost:9000")
+	t.Setenv("CLICKHOUSE_DATABASE", "history")
+	t.Setenv("CLICKHOUSE_USER", "ingest")
+	t.Setenv("CLICKHOUSE_PASSWORD_FILE", "")
+	const password = "env\rpassword"
+	t.Setenv("CLICKHOUSE_PASSWORD", password)
+
+	cfg, err := config.LoadClickHouse()
+	require.NoError(t, err)
+	assert.Equal(t, password, cfg.Password)
+}
+
 func TestLoadClickHouseReadsPasswordFile(t *testing.T) {
 	t.Setenv("CLICKHOUSE_ADDRESS", "localhost:9000")
 	t.Setenv("CLICKHOUSE_DATABASE", "history")
@@ -110,7 +123,7 @@ func TestLoadRejectsInvalidSecretFiles(t *testing.T) {
 		{name: "whitespace in password file", env: "CLICKHOUSE_PASSWORD_FILE", data: generatedPassword[:63] + " \r\n"},
 		{name: "password with embedded LF", env: "CLICKHOUSE_PASSWORD_FILE", data: generatedPassword[:62] + "\nf\r\n"},
 		{name: "password with NUL byte", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\x00suffix\r\n"},
-		{name: "password with embedded CR", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\rsuffix\r\n"},
+		{name: "password with embedded CR", env: "CLICKHOUSE_PASSWORD_FILE", data: generatedPassword[:62] + "\rf\r\n"},
 		{name: "password with embedded CRLF", env: "CLICKHOUSE_PASSWORD_FILE", data: "fixture-token\r\nsuffix\r\n"},
 		{name: "token with NUL byte", env: "ANALYTICS_INGEST_API_KEY_FILE", data: "fixture-token\x00suffix\r\n"},
 		{name: "token with trailing space", env: "ANALYTICS_INGEST_API_KEY_FILE", data: "fixture-token \n"},

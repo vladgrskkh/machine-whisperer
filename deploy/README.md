@@ -34,9 +34,10 @@ Certbot writes account data, renewal configuration, and certificate lineages
 under `MW_CERT_DIR`. Nginx reads that directory and the HTTP-01 webroot
 (`MW_ACME_WEBROOT`). Compose resolves relative host paths from `deploy/`.
 If you customize `MW_SECRETS_DIR` or the webroot, use those paths in setup.
-If the edge network overlaps an existing network, set `MW_EDGE_SUBNET` and
-choose an unused `MW_PROXY_IP` within it. The API trusts forwarding headers
-from that IP.
+Nginx and the API use fixed edge addresses (172.30.48.2 and 172.30.48.3 by
+default). If the edge subnet overlaps an existing network, set `MW_EDGE_SUBNET`
+to a free subnet and set `MW_PROXY_IP` and `MW_API_IP` to two distinct unused
+host addresses within it. The API trusts forwarding headers only from `MW_PROXY_IP`.
 
 Set `MW_PROVISIONING_CIDR` to the manufacturing station or gateway CIDR as seen
 by Nginx. It defaults to `127.0.0.1/32`. Nginx returns HTTP 403 for requests

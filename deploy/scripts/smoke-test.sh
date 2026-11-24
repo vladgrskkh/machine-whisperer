@@ -11,6 +11,7 @@ export SMOKE_CA_FILE="$fixture/fullchain.pem"
 octets=$(openssl rand -hex 2)
 export MW_EDGE_SUBNET="10.$((16#${octets:0:2})).$((16#${octets:2:2})).0/28"
 export MW_PROXY_IP="${MW_EDGE_SUBNET%.0/28}.2"
+export MW_API_IP="${MW_EDGE_SUBNET%.0/28}.3"
 export MW_PROVISIONING_CIDR=192.0.2.0/24
 compose=(docker compose --env-file .env.server.example -p "$project" -f compose.yaml -f "$work/ports.yaml")
 started=false
@@ -52,6 +53,13 @@ chmod 0755 "$MW_ACME_WEBROOT" "$MW_ACME_WEBROOT/.well-known" "$MW_ACME_WEBROOT/.
 chmod 0644 "$MW_ACME_WEBROOT/.well-known/acme-challenge/probe"
 started=true
 "${compose[@]}" up -d --build --wait --wait-timeout 240
+edge_ip() {
+    local id
+    id=$("${compose[@]}" ps -q "$1")
+    docker inspect -f "{{(index .NetworkSettings.Networks \"${project}_edge\").IPAddress}}" "$id"
+}
+[[ $(edge_ip nginx) == "$MW_PROXY_IP" ]]
+[[ $(edge_ip api) == "$MW_API_IP" ]]
 for job in api-migrate analytics-migrate; do
     id=$("${compose[@]}" ps -aq "$job")
     [[ $(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "$id") == 'exited 0' ]]

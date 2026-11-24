@@ -52,9 +52,6 @@ func LoadClickHouse() (ClickHouse, error) {
 			"CLICKHOUSE_PASSWORD_FILE must contain exactly 64 lowercase hexadecimal characters",
 		)
 	}
-	if strings.ContainsRune(password, '\r') {
-		return ClickHouse{}, errors.New("CLICKHOUSE_PASSWORD must not contain CR bytes")
-	}
 	c := ClickHouse{
 		Address:  os.Getenv("CLICKHOUSE_ADDRESS"),
 		Database: os.Getenv("CLICKHOUSE_DATABASE"),

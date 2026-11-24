@@ -54,7 +54,10 @@ services:
   api:
     build: ../api
     restart: unless-stopped
-    networks: [edge, data]
+    networks:
+      edge:
+        ipv4_address: ${MW_API_IP:-172.30.48.3}
+      data: {}
     environment:
       API_ADDRESS: ":8443"
       API_TLS_CERT_FILE: /run/secrets/api_cert

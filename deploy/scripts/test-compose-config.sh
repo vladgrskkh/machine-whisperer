@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 [[ -f compose.yaml ]] || { echo 'Missing server Compose topology' >&2; exit 1; }
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
-ACME_EMAIL=fixture@example.invalid MW_PROVISIONING_CIDR= \
+ACME_EMAIL=fixture@example.invalid MW_PROVISIONING_CIDR= MW_PROXY_IP= MW_API_IP= \
     docker compose --env-file .env.server.example --profile certbot -f compose.yaml config --format json >"$config"
 python3 - "$config" <<'PY'
 import json
@@ -92,7 +92,12 @@ for name, expected in grants.items():
     assert actual_files == secret_files.get(name, {}), (name, actual_files)
 for secret in cfg["secrets"].values():
     assert "file" in secret and not secret.get("external")
-assert svc["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == svc["nginx"]["networks"]["edge"]["ipv4_address"] + "/32"
+proxy_ip = svc["nginx"]["networks"]["edge"]["ipv4_address"]
+api_ip = (svc["api"]["networks"]["edge"] or {}).get("ipv4_address")
+assert proxy_ip == "172.30.48.2", proxy_ip
+assert api_ip == "172.30.48.3", f"Unexpected API edge address: {api_ip}"
+assert api_ip != proxy_ip
+assert svc["api"]["environment"]["TRUSTED_PROXY_CIDRS"] == proxy_ip + "/32"
 assert svc["nginx"]["environment"].get("MW_PROVISIONING_CIDR") == "127.0.0.1/32", "Unexpected default provisioning CIDR"
 PY
 
