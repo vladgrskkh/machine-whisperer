@@ -39,10 +39,18 @@ func Load() (Config, error) {
 	return Config{ClickHouse: db, Address: addr, IngestKey: key}, nil
 }
 
+const clickHousePasswordLength = 64
+
 func LoadClickHouse() (ClickHouse, error) {
 	password, err := loadSecret("CLICKHOUSE_PASSWORD")
 	if err != nil {
 		return ClickHouse{}, err
+	}
+	if os.Getenv("CLICKHOUSE_PASSWORD_FILE") != "" &&
+		(len(password) != clickHousePasswordLength || strings.Trim(password, "0123456789abcdef") != "") {
+		return ClickHouse{}, errors.New(
+			"CLICKHOUSE_PASSWORD_FILE must contain exactly 64 lowercase hexadecimal characters",
+		)
 	}
 	if strings.ContainsRune(password, '\r') {
 		return ClickHouse{}, errors.New("CLICKHOUSE_PASSWORD must not contain CR bytes")

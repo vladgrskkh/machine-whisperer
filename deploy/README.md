@@ -43,8 +43,11 @@ a JWT with the `device_provisioner` role for requests from allowed sources.
 
 Keep credentials, signing keys, private TLS keys, and backups outside Git.
 `prepare-secrets.sh` requires an empty directory. Preserve the generated files
-across upgrades and restores. The directory is mode `0700` and mounted files
-are mode `0444` so non-root container users can read them. The internal CA
+across upgrades and restores. If you generate a replacement
+`clickhouse-password` file, use `openssl rand -hex 32`. Analytics and ClickHouse
+require exactly 64 lowercase hexadecimal characters and allow trailing CR/LF.
+The directory is mode `0700` and mounted files are mode `0444` so non-root
+container users can read them. The internal CA
 private key stays on the host at mode `0600`. Nginx uses the CA certificate
 to verify the API's internal TLS certificate for hostname `api`. The generated
 API certificate is valid for 365 days. Track its expiration and renew it using
