@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { StyleSheet, Text, TextInput, type TextInputInstance, View } from 'react-native';
 
 import { errorMessage } from '../api/errors';
 import type { Credentials } from '../api/types';
@@ -15,7 +15,7 @@ export function CredentialsForm({ mode, onSubmit }: {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const pending = useRef(false);
-  const passwordInput = useRef<TextInput>(null);
+  const passwordInput = useRef<TextInputInstance>(null);
   const signup = mode === 'sign-up';
   const submitLabel = signup ? 'Create account' : 'Sign in';
 
