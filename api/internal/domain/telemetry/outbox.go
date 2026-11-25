@@ -20,6 +20,19 @@ var (
 	ErrAnalyticsRequest   = errors.New("analytics request could not be encoded or created")
 )
 
+func AnalyticsFailureCategory(err error) string {
+	switch {
+	case errors.Is(err, ErrAnalyticsHTTP):
+		return OutboxAnalyticsHTTP
+	case errors.Is(err, ErrAnalyticsTimeout):
+		return OutboxAnalyticsTimeout
+	case errors.Is(err, ErrAnalyticsRequest):
+		return OutboxAnalyticsRequest
+	default:
+		return OutboxAnalyticsTransport
+	}
+}
+
 type EventKey struct {
 	DeviceID string
 	EventID  string

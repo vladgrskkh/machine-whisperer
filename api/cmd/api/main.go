@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/signal"
-	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 )
@@ -42,46 +42,75 @@ func run(
 	if err != nil {
 		return err
 	}
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
+	metricsAddress, err := resolveMetricsAddress(endpoint.address)
 	if err != nil {
-		return fmt.Errorf("listen: %w", err)
+		return err
 	}
-	defer func() { _ = listener.Close() }()
-	metricsListener, err := listenMetrics(ctx, endpoint.address)
-	if err != nil {
-		return fmt.Errorf("listen for metrics: %w", err)
-	}
-	defer func() { _ = metricsListener.Close() }()
 	server := &http.Server{
-		Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
+		Addr: address, Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout,
 	}
 	if len(certificate.Certificate) != 0 {
 		server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
 	}
 	metrics := &http.Server{
-		Handler: endpoint.handler, ReadHeaderTimeout: metricsTimeout, ReadTimeout: metricsTimeout,
-		WriteTimeout: metricsTimeout, IdleTimeout: metricsIdleTimeout,
+		Addr:              metricsAddress,
+		Handler:           endpoint.handler,
+		ReadHeaderTimeout: metricsTimeout,
+		ReadTimeout:       metricsTimeout,
+		WriteTimeout:      metricsTimeout,
+		IdleTimeout:       metricsIdleTimeout,
 	}
+	return runServers(ctx, server, metrics, runWorkers)
+}
 
-	ctx, cancel := context.WithCancel(ctx)
-	var background sync.WaitGroup
-	background.Go(func() { runWorkers(ctx) })
-	background.Go(func() { shutdownServers(ctx, server, metrics) })
-	results := make(chan error)
-	go func() {
-		if server.TLSConfig != nil {
-			results <- serveError("serve API HTTPS", server.ServeTLS(listener, "", ""))
-			return
+func runServers(ctx context.Context, apiServer, metricsServer *http.Server, runWorkers func(context.Context)) error {
+	group, ctx := errgroup.WithContext(ctx)
+	servers := []struct {
+		name   string
+		server *http.Server
+	}{{"API", apiServer}, {"metrics", metricsServer}}
+	ready := make(chan struct{}, len(servers))
+	for _, entry := range servers {
+		entry.server.BaseContext = func(net.Listener) context.Context {
+			ready <- struct{}{}
+			return context.WithoutCancel(ctx)
 		}
-		results <- serveError("serve API HTTP", server.Serve(listener))
-	}()
-	go func() {
-		results <- serveError("serve metrics HTTP", metrics.Serve(metricsListener))
-	}()
-	firstErr := <-results
-	cancel()
-	background.Wait()
-	return errors.Join(firstErr, <-results)
+		group.Go(func() error {
+			serve := entry.server.ListenAndServe
+			if entry.server.TLSConfig != nil {
+				serve = func() error { return entry.server.ListenAndServeTLS("", "") }
+			}
+			if err := serve(); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve %s: %w", entry.name, err)
+			}
+			return nil
+		})
+		group.Go(func() error {
+			<-ctx.Done()
+			shutdown, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+			defer stop()
+			if err := entry.server.Shutdown(shutdown); err != nil {
+				_ = entry.server.Close()
+				return fmt.Errorf("shut down %s: %w", entry.name, err)
+			}
+			return nil
+		})
+	}
+	group.Go(func() error {
+		// Start the relay only after both HTTP servers have bound their addresses.
+		for range servers {
+			select {
+			case <-ready:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		if ctx.Err() == nil {
+			runWorkers(ctx)
+		}
+		return nil
+	})
+	return group.Wait()
 }
 
 func loadTLSCertificate() (tls.Certificate, error) {
@@ -100,50 +129,19 @@ func loadTLSCertificate() (tls.Certificate, error) {
 	return certificate, nil
 }
 
-func listenMetrics(ctx context.Context, address string) (net.Listener, error) {
+func resolveMetricsAddress(address string) (string, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || host == "" || port == "" {
-		return nil, errors.New("API_METRICS_ADDRESS must include a specific host and port")
+		return "", errors.New("API_METRICS_ADDRESS must include a specific host and port")
 	}
-	ip, err := netip.ParseAddr(host)
+	resolved, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
-		resolved, lookupErr := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if lookupErr != nil {
-			return nil, fmt.Errorf("resolve metrics host: %w", lookupErr)
-		}
-		if len(resolved) == 0 {
-			return nil, errors.New("metrics host has no IP address")
-		}
-		ip = resolved[0]
+		return "", fmt.Errorf("resolve API_METRICS_ADDRESS: %w", err)
 	}
-	if ip.Unmap().WithZone("").IsUnspecified() {
-		return nil, errors.New("API_METRICS_ADDRESS cannot use a wildcard address")
+	if resolved.IP == nil || resolved.IP.IsUnspecified() {
+		return "", errors.New("API_METRICS_ADDRESS must bind to a specific IP address")
 	}
-	return (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-}
-
-func shutdownServers(ctx context.Context, servers ...*http.Server) {
-	<-ctx.Done()
-	shutdownCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-	defer stop()
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	var shutdowns sync.WaitGroup
-	for _, server := range servers {
-		shutdowns.Go(func() {
-			if err := server.Shutdown(shutdownCtx); err != nil {
-				logger.Error("shutdown failed", "error", err)
-				_ = server.Close()
-			}
-		})
-	}
-	shutdowns.Wait()
-}
-
-func serveError(label string, err error) error {
-	if err == nil || errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return fmt.Errorf("%s: %w", label, err)
+	return resolved.String(), nil
 }
 
 func serve(ctx context.Context, address string) error {

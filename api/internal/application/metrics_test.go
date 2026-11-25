@@ -22,7 +22,10 @@ import (
 func TestApplicationMetricsUseIndependentRegistriesAndBoundedRoutes(t *testing.T) {
 	t.Parallel()
 	id, signing, verifying, _ := testutil.AuthKeys(t)
-	pool, err := pgxpool.New(t.Context(), "postgres://unused:unused@localhost/unused")
+	poolConfig, err := pgxpool.ParseConfig("postgres://unused:unused@localhost/unused?sslmode=disable")
+	require.NoError(t, err)
+	poolConfig.ConnConfig.Host = t.TempDir()
+	pool, err := pgxpool.NewWithConfig(t.Context(), poolConfig)
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	config := application.Config{
@@ -103,15 +106,17 @@ func TestApplicationMetricsUseIndependentRegistriesAndBoundedRoutes(t *testing.T
 		ingestOutcomes[labels["outcome"]] = sample.GetCounter().GetValue()
 	}
 	assert.Equal(t, map[string]float64{
-		"accepted_new": 0, "accepted_replay": 0, "invalid": 0, "unauthorized": 8, "forbidden": 0,
+		"accepted_new": 0, "accepted_replay": 0, "invalid": 0,
 		"machine_not_found": 0, "conflict": 0, "outside_window": 0, "out_of_order": 0, "internal_error": 0,
 	}, ingestOutcomes)
-	poolFamily := assertMetricFamily(t, families, "mw_postgres_pool_connections", dto.MetricType_GAUGE)
-	assert.Len(t, poolFamily.GetMetric(), 3)
+	assert.NotContains(t, families, "mw_postgres_pool_connections")
 	timestamp := assertMetricFamily(t, families, "mw_outbox_snapshot_timestamp_seconds", dto.MetricType_GAUGE)
 	require.Len(t, timestamp.GetMetric(), 1)
 	assert.Zero(t, timestamp.GetMetric()[0].GetGauge().GetValue())
 	assert.NotContains(t, families, "mw_outbox_pending_events")
+	failures := assertMetricFamily(t, families, "mw_outbox_snapshot_errors_total", dto.MetricType_COUNTER)
+	require.Len(t, failures.GetMetric(), 1)
+	assert.InDelta(t, 1, failures.GetMetric()[0].GetCounter().GetValue(), 0)
 	assert.NotContains(t, scrapeMetrics(t, secondMetrics), "mw_http_requests_total")
 	for _, path := range []string{"/healthz", "/metrics/"} {
 		response, getErr := firstMetrics.Client().Get(firstMetrics.URL + path)

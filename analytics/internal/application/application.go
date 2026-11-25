@@ -17,6 +17,8 @@ import (
 const connectTimeout = 10 * time.Second
 
 type Application struct {
+	MetricsHandler http.Handler
+
 	ingestKey  string
 	clickHouse ch.Conn
 	metrics    *metrics.Metrics
@@ -37,9 +39,10 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 	if app.clickHouse == nil {
 		return nil, errors.New("telemetry repository is required")
 	}
-	app.metrics = metrics.New(app.clickHouse.Stats)
+	app.metrics = metrics.New()
+	app.MetricsHandler = app.metrics.Handler()
 	repository := clickhouse.NewRepository(app.clickHouse, app.metrics)
-	app.ingest = telemetry.NewIngestBatch(repository)
+	app.ingest = telemetry.NewIngestBatch(repository, app.metrics)
 	app.history = telemetry.NewListHistory(repository)
 	return app, nil
 }
@@ -66,10 +69,6 @@ func WithClickHouse(cfg config.ClickHouse) Option {
 		app.clickHouse = conn
 		return nil
 	}
-}
-
-func (a *Application) MetricsHandler() http.Handler {
-	return a.metrics.Handler()
 }
 
 func (a *Application) Close() {

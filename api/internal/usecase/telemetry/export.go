@@ -30,14 +30,10 @@ type ExportMetrics interface {
 	RecordClaimed(rows int)
 	RecordDelivered(rows int64)
 	RecordRetried(reason string, rows int64)
-	RecordSend(outcome string, duration time.Duration)
 	RecordOutboxError(operation string)
 }
 
 const (
-	OutboxSendSuccess  = "success"
-	OutboxSendCanceled = "canceled"
-
 	OutboxOperationClaim       = "claim"
 	OutboxOperationAcknowledge = "acknowledge"
 	OutboxOperationReschedule  = "reschedule"
@@ -82,10 +78,7 @@ func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 	}
 	e.metrics.RecordClaimed(claimed)
 	e.logger.DebugContext(ctx, "outbox batch claimed", "rows", claimed)
-	started := time.Now()
 	err = e.sender.Send(ctx, events)
-	outcome := sendOutcome(err)
-	e.metrics.RecordSend(outcome, time.Since(started))
 	if err != nil {
 		return claimed, e.retry(ctx, token, events, err)
 	}
@@ -114,7 +107,7 @@ func (e *Export) PruneDelivered(ctx context.Context) (int64, error) {
 }
 
 func (e *Export) retry(ctx context.Context, token string, events []telemetry.OutboxEvent, sendErr error) error {
-	category := analyticsErrorCategory(sendErr)
+	category := telemetry.AnalyticsFailureCategory(sendErr)
 	e.logger.WarnContext(ctx, "outbox batch delivery failed", "category", category, "rows", len(events))
 	if ctx.Err() != nil {
 		// A canceled worker leaves the rows available for recovery after lease expiry.
@@ -147,16 +140,6 @@ func (e *Export) operationFailed(ctx context.Context, operation string, rows int
 	e.logger.WarnContext(ctx, "outbox operation failed", "category", operation, "rows", rows)
 }
 
-func sendOutcome(err error) string {
-	if err == nil {
-		return OutboxSendSuccess
-	}
-	if errors.Is(err, context.Canceled) {
-		return OutboxSendCanceled
-	}
-	return analyticsErrorCategory(err)
-}
-
 func (e *Export) retryDelay(attempt int64) time.Duration {
 	delay := e.settings.RetryBase
 	for remaining := attempt - 1; remaining > 0 && delay < e.settings.RetryMax; remaining-- {
@@ -166,17 +149,4 @@ func (e *Export) retryDelay(attempt int64) time.Duration {
 		delay *= 2
 	}
 	return delay
-}
-
-func analyticsErrorCategory(err error) string {
-	switch {
-	case errors.Is(err, telemetry.ErrAnalyticsHTTP):
-		return telemetry.OutboxAnalyticsHTTP
-	case errors.Is(err, telemetry.ErrAnalyticsTimeout):
-		return telemetry.OutboxAnalyticsTimeout
-	case errors.Is(err, telemetry.ErrAnalyticsRequest):
-		return telemetry.OutboxAnalyticsRequest
-	default:
-		return telemetry.OutboxAnalyticsTransport
-	}
 }

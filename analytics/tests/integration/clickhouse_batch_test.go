@@ -69,7 +69,7 @@ func TestClickHouseBatch(t *testing.T) {
 	t.Cleanup(app.Close)
 	srv := httptest.NewServer(app.Routes())
 	defer srv.Close()
-	metrics := httptest.NewServer(app.MetricsHandler())
+	metrics := httptest.NewServer(app.MetricsHandler)
 	defer metrics.Close()
 	status, reply := getHistory(t, srv, historyPath, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
@@ -97,7 +97,6 @@ func TestClickHouseBatch(t *testing.T) {
 		status, reply = post(t, srv, body, bearer)
 		require.Equal(t, http.StatusNoContent, status, reply)
 	}
-	assertClickHouseIdlePool(t, metrics)
 	var n uint64
 	require.NoError(t, conn.QueryRow(ctx, "SELECT count() FROM telemetry_events").Scan(&n))
 	assert.Equal(t, uint64(4), n)

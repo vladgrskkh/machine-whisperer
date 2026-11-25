@@ -243,9 +243,12 @@ Prometheus listens on host loopback at `127.0.0.1:9090` and scrapes `prometheus`
 five-second timeout. The app endpoints listen on the private `scrape` bridge,
 and Nginx exposes `stub_status` to its exporter on `nginx-status` during both
 bootstrap and TLS operation. PostgreSQL and ClickHouse expose statistics on
-`data`. The database metrics proxy forwards only `GET /metrics` from
-`infra-scrape` to the two fixed backends. The PostgreSQL exporter uses the
-separate `postgres-exporter-password` file and leaves statement collection off.
+`data`. A second Nginx container runs as a private database metrics proxy. It
+publishes no host ports and forwards only `GET /metrics` from `infra-scrape` to
+the two fixed backends. Both Prometheus and the public Nginx stay off `data`,
+which keeps database query ports and the PostgreSQL exporter's `/probe` route
+out of their reach. The PostgreSQL exporter uses the separate
+`postgres-exporter-password` file and leaves statement collection off.
 
 Open the Targets page via an SSH tunnel to see scrape health. `up` tracks the
 scrape listener. `pg_up` and `nginx_up` show whether each exporter reached its

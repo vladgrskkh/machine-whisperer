@@ -28,7 +28,7 @@ const (
 )
 
 type OperationObserver interface {
-	RecordOperation(operation, outcome string, elapsed time.Duration, storedRows int)
+	RecordOperation(operation, outcome string, elapsed time.Duration)
 }
 
 type Repository struct {
@@ -45,11 +45,7 @@ func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) erro
 	defer cancel()
 	start := time.Now()
 	err := r.storeBatch(ctx, events)
-	storedRows := 0
-	if err == nil {
-		storedRows = len(events)
-	}
-	r.observer.RecordOperation(OperationInsertBatch, operationOutcome(ctx, err), time.Since(start), storedRows)
+	r.observer.RecordOperation(OperationInsertBatch, operationOutcome(ctx, err), time.Since(start))
 	return err
 }
 
@@ -87,7 +83,7 @@ func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) ([]dom
 	defer cancel()
 	start := time.Now()
 	events, err := r.list(ctx, query)
-	r.observer.RecordOperation(OperationListHistory, operationOutcome(ctx, err), time.Since(start), 0)
+	r.observer.RecordOperation(OperationListHistory, operationOutcome(ctx, err), time.Since(start))
 	return events, err
 }
 

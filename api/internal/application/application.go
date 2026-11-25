@@ -6,13 +6,11 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
-	telemetryhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	alertpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/alert/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
@@ -49,7 +47,6 @@ type Application struct {
 	ingestTelemetry  *telemetry.Ingest
 	telemetryHistory *telemetry.ListHistory
 	telemetryWorker  *telemetryworker.Worker
-	outbox           *telemetrypostgres.Outbox
 	metrics          *metrics.Metrics
 	createMachine    *machine.Create
 	listMachines     *machine.List
@@ -175,23 +172,23 @@ func (a *Application) setupTelemetry(
 	detection DetectorConfig,
 	relay RelayConfig,
 ) {
-	a.metrics = metrics.New(a.pool, telemetryhandler.IngestOutcomes())
-	a.outbox = telemetrypostgres.NewOutbox(a.pool)
+	outbox := telemetrypostgres.NewOutbox(a.pool)
+	a.metrics = metrics.New(telemetry.NewMeasureOutbox(outbox))
 	repository := telemetrypostgres.New()
 	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(detection))
-	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector)
+	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector, a.metrics)
 	alerts := alertpostgres.New(a.pool)
 	a.listAlerts = alert.NewList(alerts)
-	a.acknowledgeAlert = alert.NewAcknowledge(alerts)
+	a.acknowledgeAlert = alert.NewAcknowledge(alerts, a.metrics)
 	if relay != (RelayConfig{}) {
-		a.setupRelay(relay)
+		a.setupRelay(relay, outbox)
 	}
 }
 
-func (a *Application) setupRelay(config RelayConfig) {
+func (a *Application) setupRelay(config RelayConfig, outbox *telemetrypostgres.Outbox) {
 	export := telemetry.NewExport(
-		a.outbox,
-		analyticshttp.NewHTTPClient(config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout),
+		outbox,
+		analyticshttp.NewHTTPClient(config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout, a.metrics),
 		telemetry.ExportSettings{
 			BatchSize: config.BatchSize,
 			Lease:     config.Lease,
@@ -206,12 +203,9 @@ func (a *Application) setupRelay(config RelayConfig) {
 }
 
 func (a *Application) RunWorkers(ctx context.Context) {
-	var workers sync.WaitGroup
 	if a.telemetryWorker != nil {
-		workers.Go(func() { a.telemetryWorker.Run(ctx) })
+		a.telemetryWorker.Run(ctx)
 	}
-	a.runOutboxSnapshots(ctx)
-	workers.Wait()
 }
 
 func (a *Application) MetricsHandler() http.Handler {

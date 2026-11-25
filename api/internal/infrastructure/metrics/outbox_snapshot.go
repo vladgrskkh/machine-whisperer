@@ -1,43 +1,20 @@
 package metrics
 
 import (
-	"sync/atomic"
+	"context"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 )
 
-type poolMetrics struct {
-	pool        *pgxpool.Pool
-	connections *prometheus.Desc
-}
-
-func newPoolMetrics(pool *pgxpool.Pool) poolMetrics {
-	return poolMetrics{
-		pool: pool,
-		connections: prometheus.NewDesc(
-			"mw_postgres_pool_connections", "PostgreSQL pool connections by state.", []string{"state"}, nil,
-		),
-	}
-}
-
-func (m poolMetrics) Describe(descs chan<- *prometheus.Desc) {
-	descs <- m.connections
-}
-
-func (m poolMetrics) Collect(samples chan<- prometheus.Metric) {
-	stats := m.pool.Stat()
-	samples <- prometheus.MustNewConstMetric(m.connections, prometheus.GaugeValue, float64(stats.AcquiredConns()), "acquired")
-	samples <- prometheus.MustNewConstMetric(m.connections, prometheus.GaugeValue, float64(stats.IdleConns()), "idle")
-	samples <- prometheus.MustNewConstMetric(
-		m.connections, prometheus.GaugeValue, float64(stats.ConstructingConns()), "constructing",
-	)
+type OutboxMeasurer interface {
+	Snapshot(context.Context) (telemetry.OutboxSnapshot, error)
 }
 
 type snapshotMetrics struct {
-	latest     atomic.Pointer[telemetry.OutboxSnapshot]
+	outbox     OutboxMeasurer
+	errors     prometheus.Counter
 	timestamp  *prometheus.Desc
 	pending    *prometheus.Desc
 	pendingAge *prometheus.Desc
@@ -45,10 +22,17 @@ type snapshotMetrics struct {
 	retriedAge *prometheus.Desc
 }
 
-func newSnapshotMetrics() *snapshotMetrics {
+func newSnapshotMetrics(outbox OutboxMeasurer) *snapshotMetrics {
 	return &snapshotMetrics{
+		outbox: outbox,
+		errors: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "mw_outbox_snapshot_errors_total",
+			Help: "Failed outbox snapshot reads.",
+		}),
 		timestamp: prometheus.NewDesc(
-			"mw_outbox_snapshot_timestamp_seconds", "Unix timestamp of the last successful outbox snapshot.", nil, nil,
+			"mw_outbox_snapshot_timestamp_seconds",
+			"Unix timestamp of the outbox snapshot, or zero if unavailable.",
+			nil, nil,
 		),
 		pending: prometheus.NewDesc("mw_outbox_pending_events", "Undelivered outbox events.", nil, nil),
 		pendingAge: prometheus.NewDesc(
@@ -65,6 +49,7 @@ func newSnapshotMetrics() *snapshotMetrics {
 }
 
 func (m *snapshotMetrics) Describe(descs chan<- *prometheus.Desc) {
+	m.errors.Describe(descs)
 	descs <- m.timestamp
 	descs <- m.pending
 	descs <- m.pendingAge
@@ -73,8 +58,11 @@ func (m *snapshotMetrics) Describe(descs chan<- *prometheus.Desc) {
 }
 
 func (m *snapshotMetrics) Collect(samples chan<- prometheus.Metric) {
-	snapshot := m.latest.Load()
-	if snapshot == nil {
+	defer m.errors.Collect(samples)
+	// Collect has no HTTP request context. The use case bounds the query.
+	snapshot, err := m.outbox.Snapshot(context.Background())
+	if err != nil {
+		m.errors.Inc()
 		samples <- prometheus.MustNewConstMetric(m.timestamp, prometheus.GaugeValue, 0)
 		return
 	}

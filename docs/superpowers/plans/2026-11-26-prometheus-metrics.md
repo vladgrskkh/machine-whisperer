@@ -9,12 +9,12 @@ Use Superpowers subagent driven development and independent task reviews.
 ## 1. Instrument the API
 
 - [ ] Add an application-owned Prometheus registry and a private metrics listener with process, Go and HTTP collectors. Name HTTP series using registered route templates.
-- [ ] Count telemetry admission and replay, detector and alert transitions after commits, and relay outcomes using confirmed affected rows. Expose a bounded periodic outbox snapshot and pgx pool state.
-- [ ] Check independent registries, status and route labels, rollbacks, repeated acknowledgements, stale snapshots and lost leases using the shared Testcontainer suite.
+- [ ] Count telemetry admission and replay, detector and alert transitions after commits, and relay outcomes using confirmed affected rows. Read one bounded outbox snapshot on each scrape.
+- [ ] Check independent registries, status and route labels, rollbacks, repeated acknowledgements, unavailable snapshots and lost leases using the shared Testcontainer suite.
 
 ## 2. Instrument Analytics
 
-- [ ] Add the same registry and listener lifecycle for Analytics. Measure batch dispositions, physically acknowledged event rows, ClickHouse client operations and native connection pool state.
+- [ ] Add the same registry and listener lifecycle for Analytics. Measure batch dispositions, physically acknowledged event rows, and ClickHouse client operations. The native database scrape jobs supply connection metrics.
 - [ ] Check real batch writes and history queries, failure classification and low cardinality using the existing ClickHouse integration fixture.
 
 ## 3. Wire the application scrape network

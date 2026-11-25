@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/felixge/httpsnoop"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -15,9 +13,6 @@ import (
 
 const (
 	batchStored       = "stored"
-	batchInvalid      = "invalid"
-	batchTooLarge     = "too_large"
-	batchUnauthorized = "unauthorized"
 	batchStorageError = "storage_error"
 )
 
@@ -30,14 +25,14 @@ type Metrics struct {
 	duration   *prometheus.HistogramVec
 }
 
-func New(stats func() driver.Stats) *Metrics {
+func New() *Metrics {
 	registry := prometheus.NewRegistry()
 	m := &Metrics{
 		registry: registry,
 		http:     newHTTP(registry),
 		batches: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "mw_telemetry_batches_total",
-			Help: "Telemetry batch request outcomes.",
+			Help: "Telemetry batch storage outcomes.",
 		}, []string{"outcome"}),
 		storedRows: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "mw_telemetry_batch_events_stored_total",
@@ -55,9 +50,9 @@ func New(stats func() driver.Stats) *Metrics {
 	}
 	registry.MustRegister(
 		collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		newPoolMetrics(stats), m.batches, m.storedRows, m.operations, m.duration,
+		m.batches, m.storedRows, m.operations, m.duration,
 	)
-	for _, outcome := range []string{batchStored, batchInvalid, batchTooLarge, batchUnauthorized, batchStorageError} {
+	for _, outcome := range []string{batchStored, batchStorageError} {
 		m.batches.WithLabelValues(outcome)
 	}
 	for _, operation := range []string{clickhouse.OperationInsertBatch, clickhouse.OperationListHistory} {
@@ -87,26 +82,16 @@ func (m *Metrics) Handler() http.Handler {
 	})
 }
 
-func (m *Metrics) Batch(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := httpsnoop.CaptureMetrics(next, w, r)
-		outcome := batchStorageError
-		switch response.Code {
-		case http.StatusNoContent:
-			outcome = batchStored
-		case http.StatusBadRequest:
-			outcome = batchInvalid
-		case http.StatusRequestEntityTooLarge:
-			outcome = batchTooLarge
-		case http.StatusUnauthorized:
-			outcome = batchUnauthorized
-		}
-		m.batches.WithLabelValues(outcome).Inc()
-	})
+func (m *Metrics) RecordStoredBatch(events int) {
+	m.batches.WithLabelValues(batchStored).Inc()
+	m.storedRows.Add(float64(events))
 }
 
-func (m *Metrics) RecordOperation(operation, outcome string, elapsed time.Duration, storedRows int) {
+func (m *Metrics) RecordBatchStorageError() {
+	m.batches.WithLabelValues(batchStorageError).Inc()
+}
+
+func (m *Metrics) RecordOperation(operation, outcome string, elapsed time.Duration) {
 	m.operations.WithLabelValues(operation, outcome).Inc()
 	m.duration.WithLabelValues(operation).Observe(elapsed.Seconds())
-	m.storedRows.Add(float64(storedRows))
 }

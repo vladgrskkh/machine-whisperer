@@ -93,20 +93,18 @@ func availableAddress(t *testing.T) string {
 	return address
 }
 
-func TestListenMetricsRejectsWildcardAddresses(t *testing.T) {
+func TestResolveMetricsAddressRejectsWildcardAddresses(t *testing.T) {
 	t.Parallel()
-	for _, address := range []string{":0", "0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0"} {
-		listener, err := listenMetrics(t.Context(), address)
-		if listener != nil {
-			_ = listener.Close()
-		}
+	for _, address := range []string{":0", "0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0", "[::%loopback]:0", "127.0.0.1:"} {
+		_, err := resolveMetricsAddress(address)
 		assert.Error(t, err, address)
 	}
-	listener, err := listenMetrics(t.Context(), "[::%loopback]:0")
-	if listener != nil {
-		_ = listener.Close()
-	}
-	assert.ErrorContains(t, err, "wildcard")
+	address, err := resolveMetricsAddress("localhost:9091")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	assert.True(t, net.ParseIP(host).IsLoopback())
+	assert.Equal(t, "9091", port)
 }
 
 func testMetricsEndpoint() metricsEndpoint {

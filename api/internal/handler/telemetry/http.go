@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/felixge/httpsnoop"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
@@ -22,69 +21,7 @@ type Ingester interface {
 		ctx context.Context,
 		deviceID, assignedMachineID, requestedMachineID string,
 		observation telemetry.Observation,
-	) (telemetryusecase.IngestResult, error)
-}
-
-type IngestMetrics interface {
-	RecordIngest(outcome string)
-	RecordDetection(telemetryusecase.Detection)
-}
-
-const (
-	ingestAcceptedNew    = "accepted_new"
-	ingestAcceptedReplay = "accepted_replay"
-	ingestInvalid        = "invalid"
-	ingestUnauthorized   = "unauthorized"
-	ingestForbidden      = "forbidden"
-	ingestMachineMissing = "machine_not_found"
-	ingestConflict       = "conflict"
-	ingestOutsideWindow  = "outside_window"
-	ingestOutOfOrder     = "out_of_order"
-	ingestInternalError  = "internal_error"
-)
-
-type ingestMeasurementKey struct{}
-
-type ingestMeasurement struct {
-	outcome   string
-	detection telemetryusecase.Detection
-}
-
-func IngestOutcomes() []string {
-	return []string{ingestAcceptedNew, ingestAcceptedReplay, ingestInvalid, ingestUnauthorized, ingestForbidden,
-		ingestMachineMissing, ingestConflict, ingestOutsideWindow, ingestOutOfOrder, ingestInternalError}
-}
-
-func ObserveIngest(metrics IngestMetrics) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var measurement ingestMeasurement
-			ctx := context.WithValue(r.Context(), ingestMeasurementKey{}, &measurement)
-			response := httpsnoop.CaptureMetrics(next, w, r.WithContext(ctx))
-			if measurement.outcome == "" {
-				measurement.outcome = rejectedIngestOutcome(response.Code)
-			}
-			metrics.RecordIngest(measurement.outcome)
-			if measurement.outcome == ingestAcceptedNew {
-				metrics.RecordDetection(measurement.detection)
-			}
-		})
-	}
-}
-
-func rejectedIngestOutcome(status int) string {
-	switch status {
-	case http.StatusBadRequest:
-		return ingestInvalid
-	case http.StatusUnauthorized:
-		return ingestUnauthorized
-	case http.StatusForbidden:
-		return ingestForbidden
-	case http.StatusNotFound:
-		return ingestMachineMissing
-	default:
-		return ingestInternalError
-	}
+	) error
 }
 
 // NewIngest handles machine-scoped ingestion for legacy device clients.
@@ -161,10 +98,9 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 			}
 			requestedMachineID = parsedMachineID
 		}
-		var result telemetryusecase.IngestResult
 		observation, err := decodeObservation(r.Body)
 		if err == nil {
-			result, err = usecase.Ingest(r.Context(), deviceID, assignedMachineID, requestedMachineID, observation)
+			err = usecase.Ingest(r.Context(), deviceID, assignedMachineID, requestedMachineID, observation)
 		}
 		switch {
 		case errors.Is(err, handler.ErrInvalidBody), errors.Is(err, telemetryusecase.ErrInvalidObservation):
@@ -174,7 +110,6 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 		case errors.Is(err, telemetry.ErrEventConflict),
 			errors.Is(err, telemetryusecase.ErrObservationWindow),
 			errors.Is(err, telemetryusecase.ErrObservationOrder):
-			recordIngestResult(r, ingestMeasurement{outcome: ingestConflictOutcome(err)})
 			handler.Error(
 				w,
 				http.StatusConflict,
@@ -184,31 +119,9 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 		case err != nil:
 			handler.InternalError(w)
 		default:
-			outcome := ingestAcceptedNew
-			if result.Replay {
-				outcome = ingestAcceptedReplay
-			}
-			recordIngestResult(r, ingestMeasurement{outcome: outcome, detection: result.Detection})
 			w.WriteHeader(http.StatusAccepted)
 		}
 	})
-}
-
-func recordIngestResult(r *http.Request, measurement ingestMeasurement) {
-	if result, ok := r.Context().Value(ingestMeasurementKey{}).(*ingestMeasurement); ok {
-		*result = measurement
-	}
-}
-
-func ingestConflictOutcome(err error) string {
-	switch {
-	case errors.Is(err, telemetryusecase.ErrObservationWindow):
-		return ingestOutsideWindow
-	case errors.Is(err, telemetryusecase.ErrObservationOrder):
-		return ingestOutOfOrder
-	default:
-		return ingestConflict
-	}
 }
 
 func decodeObservation(body io.Reader) (telemetry.Observation, error) {

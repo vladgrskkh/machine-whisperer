@@ -23,10 +23,19 @@ func TestServeHTTPRequiresBothListeners(t *testing.T) {
 	cfg := config.Config{Address: business, MetricsAddress: occupied.Addr().String()}
 
 	err = serveHTTP(t.Context(), slog.New(slog.DiscardHandler), cfg, http.NotFoundHandler(), http.NotFoundHandler())
-	require.ErrorContains(t, err, "listen for metrics")
+	require.ErrorContains(t, err, "serve metrics HTTP")
 	listener, err := new(net.ListenConfig).Listen(t.Context(), "tcp", business)
 	require.NoError(t, err, "the business listener must be released")
 	_ = listener.Close()
+}
+
+func TestServeHTTPRejectsWildcardMetricsAddress(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	cfg := config.Config{Address: "127.0.0.1:0", MetricsAddress: "[::ffff:0.0.0.0]:0"}
+	err := serveHTTP(ctx, slog.New(slog.DiscardHandler), cfg, http.NotFoundHandler(), http.NotFoundHandler())
+	require.ErrorContains(t, err, "ANALYTICS_METRICS_ADDRESS cannot use a wildcard address")
 }
 
 func TestServeHTTPShutsDownBothListeners(t *testing.T) {
@@ -66,18 +75,29 @@ func TestServeHTTPShutsDownBothListeners(t *testing.T) {
 	assert.Zero(t, status(cfg.MetricsAddress))
 }
 
-func TestListenMetricsRequiresSpecificAddress(t *testing.T) {
+func TestResolveMetricsAddress(t *testing.T) {
 	t.Parallel()
-	for _, address := range []string{":0", "0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0", "[::%lo0]:0"} {
-		listener, err := listenMetrics(t.Context(), address)
-		if listener != nil {
-			_ = listener.Close()
-		}
-		assert.ErrorContains(t, err, "ANALYTICS_METRICS_ADDRESS", address)
+	for _, address := range []string{"127.0.0.1:9091", "[::1]:9091", "localhost:9091"} {
+		t.Run(address, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := resolveMetricsAddress(address)
+			require.NoError(t, err)
+			host, port, err := net.SplitHostPort(resolved)
+			require.NoError(t, err)
+			assert.True(t, net.ParseIP(host).IsLoopback(), "expected a numeric loopback address in %q", resolved)
+			assert.Equal(t, "9091", port)
+		})
 	}
-	listener, err := listenMetrics(t.Context(), "localhost:0")
-	require.NoError(t, err)
-	_ = listener.Close()
+	for _, address := range []string{
+		"", ":9091", "127.0.0.1:", "0.0.0.0:9091", "[::]:9091", "[::ffff:0.0.0.0]:9091", "[::%lo0]:9091",
+	} {
+		t.Run(address, func(t *testing.T) {
+			t.Parallel()
+			resolved, err := resolveMetricsAddress(address)
+			require.ErrorContains(t, err, "ANALYTICS_METRICS_ADDRESS")
+			assert.Empty(t, resolved)
+		})
+	}
 }
 
 func availableAddress(t *testing.T) string {

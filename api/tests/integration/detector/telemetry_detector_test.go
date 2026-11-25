@@ -408,6 +408,9 @@ func TestAlertAcknowledgementDoesNotResolve(t *testing.T) {
 		assert.Equal(t, missing.Body, forbidden.Body)
 	}
 	assert.Nil(t, f.latestAlert(t).AcknowledgedAt)
+	metrics := testfixture.NewAPIMetricsServer(t, f.App)
+	assert.Contains(t, testfixture.APIMetrics(t, metrics),
+		"mw_alert_transitions_total{transition=\"acknowledged\"} 0\n")
 
 	f.acknowledge(t, id)
 	acknowledged := f.latestAlert(t)

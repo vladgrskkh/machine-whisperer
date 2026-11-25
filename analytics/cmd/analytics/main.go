@@ -7,11 +7,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
@@ -37,27 +38,20 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	defer app.Close()
-	return serveHTTP(ctx, logger, cfg, app.Routes(), app.MetricsHandler())
+	return serveHTTP(ctx, logger, cfg, app.Routes(), app.MetricsHandler)
 }
 
 func serveHTTP(
 	ctx context.Context, logger *slog.Logger, cfg config.Config, businessHandler, metricsHandler http.Handler,
 ) error {
-	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", cfg.Address)
+	metricsAddress, err := resolveMetricsAddress(cfg.MetricsAddress)
 	if err != nil {
-		return fmt.Errorf("listen for analytics: %w", err)
+		return err
 	}
-	defer func() { _ = listener.Close() }()
-	metricsListener, err := listenMetrics(ctx, cfg.MetricsAddress)
-	if err != nil {
-		return fmt.Errorf("listen for metrics: %w", err)
-	}
-	defer func() { _ = metricsListener.Close() }()
-
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	group, ctx := errgroup.WithContext(ctx)
 	baseContext := func(net.Listener) context.Context { return ctx }
-	server := &http.Server{
+	business := &http.Server{
+		Addr:              cfg.Address,
 		Handler:           businessHandler,
 		BaseContext:       baseContext,
 		ReadHeaderTimeout: headerTimeout,
@@ -66,6 +60,7 @@ func serveHTTP(
 		IdleTimeout:       idleTimeout,
 	}
 	metrics := &http.Server{
+		Addr:              metricsAddress,
 		Handler:           metricsHandler,
 		BaseContext:       baseContext,
 		ReadHeaderTimeout: metricsTimeout,
@@ -73,66 +68,49 @@ func serveHTTP(
 		WriteTimeout:      metricsTimeout,
 		IdleTimeout:       metricsIdleTimeout,
 	}
-	const serverCount = 2
-	results := make(chan error, serverCount)
-	go func() { results <- serveServer("serve Analytics HTTP", server, listener) }()
-	go func() { results <- serveServer("serve metrics HTTP", metrics, metricsListener) }()
-	logger.InfoContext(ctx, "analytics server started")
+	for _, listener := range []struct {
+		name   string
+		server *http.Server
+	}{{"analytics", business}, {"metrics", metrics}} {
+		group.Go(func() error {
+			if err := listener.server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve %s HTTP: %w", listener.name, err)
+			}
+			return nil
+		})
+		group.Go(func() error {
+			<-ctx.Done()
+			shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+			defer cancel()
+			if err := listener.server.Shutdown(shutdown); err != nil {
+				_ = listener.server.Close()
+				return fmt.Errorf("shut down %s HTTP: %w", listener.name, err)
+			}
+			return nil
+		})
+	}
 
-	remaining := serverCount
-	var serveErr error
-	select {
-	case serveErr = <-results:
-		remaining--
-	case <-ctx.Done():
+	logger.InfoContext(ctx, "starting analytics servers")
+	if err := group.Wait(); err != nil {
+		return err
 	}
-	cancel()
-	shutdown, stop := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-	defer stop()
-	go func() { results <- shutdownServer(shutdown, "shut down Analytics HTTP", server) }()
-	go func() { results <- shutdownServer(shutdown, "shut down metrics HTTP", metrics) }()
-	for range remaining + serverCount {
-		serveErr = errors.Join(serveErr, <-results)
-	}
-	logger.InfoContext(ctx, "analytics server stopped")
-	return serveErr
+	logger.InfoContext(ctx, "analytics servers stopped")
+	return nil
 }
 
-func listenMetrics(ctx context.Context, address string) (net.Listener, error) {
+func resolveMetricsAddress(address string) (string, error) {
 	host, port, err := net.SplitHostPort(address)
 	if err != nil || host == "" || port == "" {
-		return nil, errors.New("ANALYTICS_METRICS_ADDRESS must include a specific host and port")
+		return "", errors.New("ANALYTICS_METRICS_ADDRESS must include a specific host and port")
 	}
-	ip, err := netip.ParseAddr(host)
+	resolved, err := net.ResolveTCPAddr("tcp", address)
 	if err != nil {
-		resolved, lookupErr := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		if lookupErr != nil {
-			return nil, fmt.Errorf("resolve metrics host: %w", lookupErr)
-		}
-		if len(resolved) == 0 {
-			return nil, errors.New("metrics host has no IP address")
-		}
-		ip = resolved[0]
+		return "", fmt.Errorf("resolve ANALYTICS_METRICS_ADDRESS: %w", err)
 	}
-	if ip.Unmap().WithZone("").IsUnspecified() {
-		return nil, errors.New("ANALYTICS_METRICS_ADDRESS cannot use a wildcard address")
+	if resolved.IP == nil || resolved.IP.IsUnspecified() {
+		return "", errors.New("ANALYTICS_METRICS_ADDRESS cannot use a wildcard address")
 	}
-	return (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(ip.String(), port))
-}
-
-func serveServer(label string, server *http.Server, listener net.Listener) error {
-	if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("%s: %w", label, err)
-	}
-	return nil
-}
-
-func shutdownServer(ctx context.Context, label string, server *http.Server) error {
-	if err := server.Shutdown(ctx); err != nil {
-		_ = server.Close()
-		return fmt.Errorf("%s: %w", label, err)
-	}
-	return nil
+	return resolved.String(), nil
 }
 
 func main() {

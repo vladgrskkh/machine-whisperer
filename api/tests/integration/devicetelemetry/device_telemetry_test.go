@@ -118,8 +118,10 @@ func TestDeviceTelemetryRejectsUnclaimedRevokedAndWrongMachine(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, response.Status)
 	f.AssertStored(t, 0, 0, nil)
 	metrics := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
-	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"machine_not_found\"} 3\n")
-	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"unauthorized\"} 1\n")
+	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"machine_not_found\"} 1\n")
+	assert.NotContains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"unauthorized\"}")
+	assert.Contains(t, metrics,
+		`mw_http_requests_total{method="POST",route="/v1/machines/{machine_id}/telemetry",status_class="4xx"} 4`+"\n")
 }
 
 func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testing.T) {
@@ -275,7 +277,9 @@ func TestDeviceTelemetryValidatesV1Payload(t *testing.T) {
 	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
 	f.AssertStored(t, 1, 1, &f.Observed)
 	metrics := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
-	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"invalid\"} 20\n")
+	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"invalid\"} 5\n")
+	assert.Contains(t, metrics,
+		`mw_http_requests_total{method="POST",route="/v1/machines/{machine_id}/telemetry",status_class="4xx"} 20`+"\n")
 	assert.Contains(t, metrics, "mw_detector_observations_total{outcome=\"no_baseline\"} 1\n")
 	assert.Contains(t, metrics, "mw_detector_observations_total{outcome=\"unknown_state\"} 0\n")
 }

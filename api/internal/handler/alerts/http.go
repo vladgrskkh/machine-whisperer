@@ -19,7 +19,7 @@ type Lister interface {
 }
 
 type Acknowledger interface {
-	Execute(ctx context.Context, ownerID, alertID string) (bool, error)
+	Execute(ctx context.Context, ownerID, alertID string) error
 }
 
 type alertResponse struct {
@@ -99,22 +99,19 @@ func NewList(usecase Lister) http.Handler {
 // @Header all {string} Cache-Control "Always no-store."
 // @Header 401 {string} WWW-Authenticate "Bearer"
 // @Router /v1/alerts/{id}/acknowledge [post]
-func NewAcknowledge(usecase Acknowledger, recordAcknowledgement func()) http.Handler {
+func NewAcknowledge(usecase Acknowledger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ownerID, alertID, ok := ownerTarget(w, r, "Invalid alert ID")
 		if !ok {
 			return
 		}
-		changed, err := usecase.Execute(r.Context(), ownerID, alertID)
+		err := usecase.Execute(r.Context(), ownerID, alertID)
 		switch {
 		case errors.Is(err, alert.ErrNotFound):
 			handler.Error(w, http.StatusNotFound, "alert_not_found", "Alert not found")
 		case err != nil:
 			handler.InternalError(w)
 		default:
-			if changed {
-				recordAcknowledgement()
-			}
 			w.WriteHeader(http.StatusNoContent)
 		}
 	})

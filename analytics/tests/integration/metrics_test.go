@@ -34,7 +34,7 @@ func assertClickHouseMetrics(t *testing.T, srv *httptest.Server) {
 		batches[metricLabel(t, sample, "outcome")] = sample.GetCounter().GetValue()
 	}
 	assert.Equal(t, map[string]float64{
-		"stored": 2, "invalid": 1, "too_large": 0, "unauthorized": 4, "storage_error": 2,
+		"stored": 2, "storage_error": 2,
 	}, batches)
 	stored := requireFamily(t, families, "mw_telemetry_batch_events_stored_total", dto.MetricType_COUNTER)
 	require.Len(t, stored, 1)
@@ -42,16 +42,6 @@ func assertClickHouseMetrics(t *testing.T, srv *httptest.Server) {
 	assert.InDelta(t, 4, stored[0].GetCounter().GetValue(), 0)
 
 	assertClickHouseOperationMetrics(t, families)
-}
-
-func assertClickHouseIdlePool(t *testing.T, srv *httptest.Server) {
-	t.Helper()
-	families := scrapeMetrics(t, srv)
-	pool := make(map[string]float64)
-	for _, sample := range requireFamily(t, families, "mw_clickhouse_pool_connections", dto.MetricType_GAUGE) {
-		pool[metricLabel(t, sample, "state")] = sample.GetGauge().GetValue()
-	}
-	assert.Equal(t, map[string]float64{"idle": 1, "open": 0}, pool)
 }
 
 func assertClickHouseOperationMetrics(t *testing.T, families map[string]*dto.MetricFamily) {

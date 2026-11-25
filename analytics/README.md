@@ -65,11 +65,14 @@ without storage details.
 ## Prometheus metrics
 
 Scrape `GET /metrics` on the private listener. The endpoint reports Go and
-process metrics, business HTTP traffic, batch outcomes, ClickHouse operation
-counts and durations, and the native connection pool state.
+process metrics, HTTP requests by method, route and status class, and
+ClickHouse repository operation counts and durations. Authentication and body
+rejections appear in the HTTP metrics. `mw_telemetry_batches_total` reports
+`stored` and `storage_error` outcomes from batch ingestion.
 `mw_telemetry_batch_events_stored_total` counts rows acknowledged by
 ClickHouse. Successful retries add to this counter even when history returns
-a single observation.
+a single observation. ClickHouse engine metrics come from its built-in
+Prometheus endpoint.
 
 ## Checks
 

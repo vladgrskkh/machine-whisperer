@@ -259,12 +259,13 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(server.Close)
-	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second)
-	observations := metrics.New(pool, nil)
+	outbox := telemetrypostgres.NewOutbox(pool)
+	observations := metrics.New(telemetryusecase.NewMeasureOutbox(outbox))
+	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations)
 	metricsServer := httptest.NewServer(observations.Handler())
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
-		telemetrypostgres.NewOutbox(pool),
+		outbox,
 		sender,
 		telemetryusecase.ExportSettings{
 			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: 2 * time.Minute,
@@ -299,6 +300,16 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"analytics_http\"} 3\n")
 	assert.Contains(t, body, "mw_outbox_send_duration_seconds_count{outcome=\"analytics_http\"} 3\n")
 	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
+
+	require.NoError(t, sender.Send(t.Context(), []telemetry.OutboxEvent{{
+		DeviceID: event.DeviceID, EventID: event.EventID, MachineID: event.MachineID,
+		ReceivedAt: event.ReceivedAt, Payload: json.RawMessage(storedPayload),
+	}}))
+	assert.EqualValues(t, 5, requests.Load())
+	body = testfixture.APIMetrics(t, metricsServer)
+	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 2\n")
+	assert.Contains(t, body, "mw_outbox_send_duration_seconds_count{outcome=\"success\"} 2\n")
+	assert.Contains(t, body, "mw_outbox_delivered_events_total 1\n")
 }
 
 func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
@@ -323,12 +334,13 @@ func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(server.Close)
-	observations := metrics.New(pool, nil)
+	outbox := telemetrypostgres.NewOutbox(pool)
+	observations := metrics.New(telemetryusecase.NewMeasureOutbox(outbox))
 	metricsServer := httptest.NewServer(observations.Handler())
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
-		telemetrypostgres.NewOutbox(pool),
-		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second),
+		outbox,
+		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations),
 		telemetryusecase.ExportSettings{
 			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: time.Minute,
 		},

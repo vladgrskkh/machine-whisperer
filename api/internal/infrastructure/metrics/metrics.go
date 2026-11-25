@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetryusecase "github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
 )
 
@@ -17,29 +17,36 @@ type Metrics struct {
 	registry         *prometheus.Registry
 	http             httpMetrics
 	outbox           outboxMetrics
-	snapshot         *snapshotMetrics
 	ingest           *prometheus.CounterVec
 	detector         *prometheus.CounterVec
 	alertTransitions *prometheus.CounterVec
-	snapshotErrors   prometheus.Counter
 }
 
-func New(pool *pgxpool.Pool, ingestOutcomes []string) *Metrics {
+func New(outbox OutboxMeasurer) *Metrics {
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
-		newPoolMetrics(pool),
+		newSnapshotMetrics(outbox),
 	)
-	snapshot := newSnapshotMetrics()
-	registry.MustRegister(snapshot)
 	return &Metrics{
 		registry: registry,
 		http:     newHTTP(registry),
 		outbox:   newOutbox(registry),
-		snapshot: snapshot,
-		ingest: counterOutcomes(registry, "mw_telemetry_ingest_requests_total", "Telemetry ingest request outcomes.",
-			"outcome", ingestOutcomes...),
+		ingest: counterOutcomes(
+			registry,
+			"mw_telemetry_ingest_requests_total",
+			"Telemetry ingest use-case outcomes.",
+			"outcome",
+			string(telemetryusecase.IngestAcceptedNew),
+			string(telemetryusecase.IngestAcceptedReplay),
+			string(telemetryusecase.IngestInvalid),
+			string(telemetryusecase.IngestMachineMissing),
+			string(telemetryusecase.IngestConflict),
+			string(telemetryusecase.IngestOutsideWindow),
+			string(telemetryusecase.IngestOutOfOrder),
+			string(telemetryusecase.IngestInternalError),
+		),
 		detector: counterOutcomes(
 			registry,
 			"mw_detector_observations_total",
@@ -57,11 +64,6 @@ func New(pool *pgxpool.Pool, ingestOutcomes []string) *Metrics {
 			string(telemetryusecase.AlertOpened),
 			string(telemetryusecase.AlertRecovered),
 			"acknowledged",
-		),
-		snapshotErrors: count(
-			registry,
-			"mw_outbox_snapshot_errors_total",
-			"Failed attempts to refresh the outbox snapshot.",
 		),
 	}
 }
@@ -82,27 +84,20 @@ func (m *Metrics) Handler() http.Handler {
 	})
 }
 
-func (m *Metrics) RecordIngest(outcome string) {
-	m.ingest.WithLabelValues(outcome).Inc()
+func (m *Metrics) RecordIngest(outcome telemetryusecase.IngestOutcome) {
+	m.ingest.WithLabelValues(string(outcome)).Inc()
 }
 
-func (m *Metrics) RecordDetection(detection telemetryusecase.Detection) {
-	m.detector.WithLabelValues(string(detection.Outcome)).Inc()
-	if detection.Transition != "" {
-		m.alertTransitions.WithLabelValues(string(detection.Transition)).Inc()
-	}
+func (m *Metrics) RecordDetection(outcome telemetryusecase.DetectorOutcome) {
+	m.detector.WithLabelValues(string(outcome)).Inc()
+}
+
+func (m *Metrics) RecordAlertTransition(transition telemetryusecase.AlertTransition) {
+	m.alertTransitions.WithLabelValues(string(transition)).Inc()
 }
 
 func (m *Metrics) RecordAcknowledgement() {
 	m.alertTransitions.WithLabelValues("acknowledged").Inc()
-}
-
-func (m *Metrics) RecordSnapshot(snapshot telemetry.OutboxSnapshot) {
-	m.snapshot.latest.Store(&snapshot)
-}
-
-func (m *Metrics) RecordSnapshotError() {
-	m.snapshotErrors.Inc()
 }
 
 type outboxMetrics struct {
@@ -117,7 +112,7 @@ type outboxMetrics struct {
 func newOutbox(registry *prometheus.Registry) outboxMetrics {
 	reasons := []string{telemetry.OutboxAnalyticsHTTP, telemetry.OutboxAnalyticsTimeout,
 		telemetry.OutboxAnalyticsTransport, telemetry.OutboxAnalyticsRequest}
-	outcomes := append([]string{telemetryusecase.OutboxSendSuccess, telemetryusecase.OutboxSendCanceled}, reasons...)
+	outcomes := append([]string{analytics.SendSuccess, analytics.SendCanceled}, reasons...)
 	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "mw_outbox_send_duration_seconds",
 		Help:    "Outbox batch HTTP send duration in seconds.",
@@ -137,7 +132,7 @@ func newOutbox(registry *prometheus.Registry) outboxMetrics {
 		retried: counterOutcomes(registry, "mw_outbox_retried_events_total",
 			"Outbox events rescheduled under a valid lease.", "reason", reasons...),
 		sendAttempts: counterOutcomes(registry, "mw_outbox_send_attempts_total",
-			"Nonempty outbox batch HTTP send attempts.", "outcome", outcomes...),
+			"Outbound HTTP batch sends.", "outcome", outcomes...),
 		sendDuration: duration,
 		operationErrors: counterOutcomes(registry, "mw_outbox_operation_errors_total",
 			"Failed outbox database operations.", "operation", telemetryusecase.OutboxOperationClaim,
