@@ -194,6 +194,10 @@ telemetry history within a 30-second polling window. Run one invocation at a
 time on a fixture set. You can rerun it immediately after completion. The
 `alert` scenario leaves an active alert on its demo machine for inspection,
 and the `recovery` scenario opens and recovers an alert on a separate machine.
+The checks assume the API's default detector thresholds and sustained counts.
+If an `alert` or `recovery` run is interrupted after one or two high readings,
+the next run can trigger earlier than its third event; let that run fail and
+rerun the scenario after the alert is active.
 
 These synthetic readings exercise the API, detector, and history pipeline.
 They use a fixed baseline and do not represent measured vibration or validate

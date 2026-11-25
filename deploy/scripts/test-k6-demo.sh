@@ -19,8 +19,8 @@ const fixture = {
     api_base_url: 'https://api.example.invalid',
     owner_email: 'demo@example.invalid',
     owner_password: 'dummy-password',
-    simulations: 2,
-    scenarios: Object.fromEntries(groups.map(group => [group, Array.from({length: 2}, () => {
+    simulations: 3,
+    scenarios: Object.fromEntries(groups.map(group => [group, Array.from({length: 3}, () => {
         const deviceId = crypto.randomUUID();
         return {
             machine_id: crypto.randomUUID(),
@@ -190,7 +190,9 @@ function iteration(run, name, index, setupData) {
 
     await assert.rejects(() => load({SCENARIO: 'invalid'}));
     await assert.rejects(() => load({SIMULATIONS: '0'}));
-    await assert.rejects(() => load({SIMULATIONS: '3'}));
+    const maximum = await load({SIMULATIONS: '3'});
+    assert.equal(maximum.script.options.scenarios.healthy.vus, 3);
+    await assert.rejects(() => load({SIMULATIONS: '4'}));
     const duplicate = structuredClone(fixture);
     duplicate.scenarios.alert[0].device_id = duplicate.scenarios.healthy[0].device_id;
     duplicate.scenarios.alert[0].device_api_key = duplicate.scenarios.healthy[0].device_api_key;
@@ -222,7 +224,11 @@ chmod +x "$scratch/bin/docker"
 
 args=$(PATH="$scratch/bin:$PATH" SCENARIO=alert SIMULATIONS=2 FIXTURES_FILE="$scratch/fixtures.json" "$runner")
 grep -Fxq 'grafana/k6:1.8.2' <<<"$args"
+grep -Fxq 'run' <<<"$args"
+grep -Fxq "type=bind,src=$root/deploy/k6/telemetry-scenarios.js,dst=/telemetry-scenarios.js,readonly" <<<"$args"
 grep -Fxq "type=bind,src=$scratch/fixtures.json,dst=/demo-fixtures.json,readonly" <<<"$args"
+grep -Fxq -- '--include-system-env-vars=false' <<<"$args"
+grep -Fxq -- '--no-usage-report' <<<"$args"
 grep -Fxq 'SCENARIO=alert' <<<"$args"
 grep -Fxq 'SIMULATIONS=2' <<<"$args"
 grep -Fxq -- '--log-output=none' <<<"$args"

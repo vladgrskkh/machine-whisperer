@@ -42,6 +42,14 @@ guidance for real equipment.
    synthetic values. Store the generated owner/device credentials in an
    ignored private file for the UI and k6 runner.
 
+The API records the authenticated provisioner's UUID from JWT `sub` in the
+internal nullable `devices.provisioned_by_user_id` foreign key. The field is
+not returned in API responses. `ON DELETE SET NULL` preserves real devices if
+an operator account is removed. On seed failure, cleanup locks the dedicated
+demo owner's row, deletes only its unclaimed devices, then deletes that owner
+in one transaction. This handles a committed provisioning request whose
+response is lost and prevents a late insert from surviving owner deletion.
+
 ### Telemetry simulation
 
 1. **Write directly to PostgreSQL or ClickHouse:** rejected because this would
@@ -80,11 +88,12 @@ route remains a separate API feature.
   to `deploy/secrets/k6-demo-fixtures.json`, and refuse to overwrite it.
 - Temporarily grant `device_provisioner` to the new demo owner using the
   documented trusted database procedure. Revoke it on success and failure.
-- Seed through API use cases over HTTPS. The only direct database statement is
-  the trusted role grant/revoke. Provisioning uses the API container's internal
-  HTTPS listener to avoid widening the Nginx source CIDR.
-- Run k6 from the VPS with Docker host networking against the public HTTPS API.
-  Default to one simulation per scenario; cap the fixture count to keep the
+- Seed through API use cases over HTTPS. Direct database operations are
+  limited to trusted role grant/revoke and failure cleanup of the dedicated
+  demo owner plus its attributed unclaimed devices. Provisioning uses the API
+  container's internal HTTPS listener to avoid widening the Nginx source CIDR.
+- Run k6 from the VPS against the public HTTPS API. Default to one simulation
+  per scenario; cap the fixture count to keep the
   in-memory auth/enrollment rate limits within budget.
 - A k6 run exercises HTTP and detector behavior; it does not model accelerometer
   physics or establish a real machine baseline.
