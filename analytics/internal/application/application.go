@@ -17,7 +17,10 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/usecase/telemetry"
 )
 
-const connectTimeout = 10 * time.Second
+const (
+	connectTimeout       = 10 * time.Second
+	instrumentationScope = "github.com/vladgrskkh/machine-whisperer/analytics/internal/"
+)
 
 type Application struct {
 	MetricsHandler http.Handler
@@ -48,9 +51,14 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 	}
 	app.metrics = metrics.New()
 	app.MetricsHandler = app.metrics.Handler()
-	repository := clickhouse.NewRepository(app.clickHouse, app.metrics)
-	app.ingest = telemetry.NewIngestBatch(repository, app.metrics)
-	app.history = telemetry.NewListHistory(repository)
+	repository := clickhouse.NewRepository(
+		app.clickHouse,
+		app.metrics,
+		app.tracerProvider.Tracer(instrumentationScope+"infrastructure/clickhouse"),
+	)
+	tracer := app.tracerProvider.Tracer(instrumentationScope + "usecase/telemetry")
+	app.ingest = telemetry.NewIngestBatch(repository, app.metrics, tracer)
+	app.history = telemetry.NewListHistory(repository, tracer)
 	return app, nil
 }
 

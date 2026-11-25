@@ -3,6 +3,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -18,6 +19,11 @@ import (
 	"github.com/stretchr/testify/require"
 	tc "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
@@ -35,7 +41,10 @@ type historyPage struct {
 }
 
 func TestAnalyticsHistoryQueriesPages(t *testing.T) {
-	srv, conn := historyServer(t)
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+	srv, conn := historyServer(t, application.WithTracing(provider, propagation.TraceContext{}))
 	status, reply := getHistory(t, srv, historyPath, bearer)
 	require.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "telemetry_events")
@@ -63,6 +72,38 @@ func TestAnalyticsHistoryQueriesPages(t *testing.T) {
 		require.Equal(t, http.StatusOK, status, reply)
 		assert.JSONEq(t, `{"items":[],"next_cursor":null}`, reply)
 	})
+	t.Run("database spans", func(t *testing.T) {
+		assertHistoryDatabaseSpans(t, recorder.Ended())
+	})
+}
+
+func assertHistoryDatabaseSpans(t *testing.T, spans []sdktrace.ReadOnlySpan) {
+	t.Helper()
+	parents := make(map[trace.SpanID]sdktrace.ReadOnlySpan)
+	for _, span := range spans {
+		if span.SpanKind() == trace.SpanKindInternal {
+			parents[span.SpanContext().SpanID()] = span
+		}
+	}
+
+	operations := map[string]string{
+		"INSERT telemetry_events": "telemetry.batch.ingest",
+		"SELECT telemetry_events": "telemetry.history.list",
+	}
+	seen := make(map[string]bool)
+	for _, span := range spans {
+		if span.SpanKind() != trace.SpanKindClient || span.Status().Code != codes.Unset {
+			continue
+		}
+		useCase, ok := operations[span.Name()]
+		require.True(t, ok, "unexpected database span %q", span.Name())
+		parent := parents[span.Parent().SpanID()]
+		require.NotNil(t, parent)
+		assert.Equal(t, useCase, parent.Name())
+		assert.Equal(t, parent.SpanContext().TraceID(), span.SpanContext().TraceID())
+		seen[span.Name()] = true
+	}
+	assert.Len(t, seen, len(operations))
 }
 
 func assertHistoryPages(t *testing.T, srv *httptest.Server, conn clickhouse.Conn) {
@@ -168,7 +209,7 @@ func assertHistoryLimits(t *testing.T, srv *httptest.Server, conn clickhouse.Con
 	}
 }
 
-func historyServer(t *testing.T) (*httptest.Server, clickhouse.Conn) {
+func historyServer(t *testing.T, options ...application.Option) (*httptest.Server, clickhouse.Conn) {
 	t.Helper()
 	ctx := t.Context()
 	env := map[string]string{
@@ -194,7 +235,8 @@ func historyServer(t *testing.T) (*httptest.Server, clickhouse.Conn) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	app, err := application.New(ctx, config.Config{IngestKey: ingestKey}, application.WithClickHouse(cfg))
+	options = append(options, application.WithClickHouse(cfg))
+	app, err := application.New(ctx, config.Config{IngestKey: ingestKey}, options...)
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 	srv := httptest.NewServer(app.Routes())

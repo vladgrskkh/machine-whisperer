@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type LogoutRepository interface {
@@ -15,16 +18,25 @@ type LogoutRepository interface {
 }
 
 type Logout struct {
+	tracer       trace.Tracer
 	repository   LogoutRepository
 	transactions TransactionManager
 	now          func() time.Time
 }
 
-func NewLogout(repository LogoutRepository, transactions TransactionManager, now func() time.Time) *Logout {
-	return &Logout{repository: repository, transactions: transactions, now: now}
+func NewLogout(
+	repository LogoutRepository,
+	transactions TransactionManager,
+	now func() time.Time,
+	tracer trace.Tracer,
+) *Logout {
+	return &Logout{tracer: tracer, repository: repository, transactions: transactions, now: now}
 }
 
-func (u *Logout) Logout(ctx context.Context, raw string) error {
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (u *Logout) Logout(ctx context.Context, raw string) (err error) {
+	ctx, span := u.tracer.Start(ctx, "auth.logout")
+	defer func() { spanutil.End(span, err, ErrMalformedRefreshToken) }()
 	hash, err := hashRefreshToken(raw)
 	if err != nil {
 		return err

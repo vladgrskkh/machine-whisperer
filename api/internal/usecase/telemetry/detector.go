@@ -4,9 +4,12 @@ import (
 	"context"
 	"math"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/alert"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type DetectorState struct {
@@ -56,15 +59,19 @@ type Detection struct {
 }
 
 type Detector struct {
+	tracer     trace.Tracer
 	repository DetectionRepository
 	settings   DetectorSettings
 }
 
-func NewDetector(repository DetectionRepository, settings DetectorSettings) *Detector {
-	return &Detector{repository: repository, settings: settings}
+func NewDetector(repository DetectionRepository, settings DetectorSettings, tracer trace.Tracer) *Detector {
+	return &Detector{tracer: tracer, repository: repository, settings: settings}
 }
 
-func (d *Detector) Observe(ctx context.Context, event telemetry.Event) (Detection, error) {
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (d *Detector) Observe(ctx context.Context, event telemetry.Event) (_ Detection, err error) {
+	ctx, span := d.tracer.Start(ctx, "telemetry.detect")
+	defer func() { spanutil.End(span, err) }()
 	baseline, state, exists, err := d.repository.Load(ctx, event.MachineID)
 	if err != nil {
 		return Detection{}, err

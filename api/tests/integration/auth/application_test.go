@@ -13,6 +13,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
@@ -28,7 +29,7 @@ func TestAccountCreation(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
-	signup := auth.NewSignup(postgres.New(pool), hasher)
+	signup := auth.NewSignup(postgres.New(pool), hasher, noop.NewTracerProvider().Tracer("test"))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	for _, credentials := range []struct{ email, password string }{
@@ -70,7 +71,7 @@ func TestAccountCreation(t *testing.T) {
 func TestConcurrentSignup(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
-	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{})
+	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{}, noop.NewTracerProvider().Tracer("test"))
 	results := make(chan error, 6)
 	start := make(chan struct{})
 	var wg sync.WaitGroup

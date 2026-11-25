@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
@@ -52,6 +53,7 @@ func (m *loginMocks) usecase() *auth.Login {
 	return auth.NewLogin(
 		m.repository, m.verifier, m.sessions, m.transactions, m.signer, m.refresh, m.ids,
 		func() time.Time { return m.now }, "dummy PHC",
+		noop.NewTracerProvider().Tracer("test"),
 	)
 }
 func (m *loginMocks) validCredentials() {

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
@@ -70,7 +71,7 @@ func TestHistoryOwnershipLookupFailure(t *testing.T) {
 			repository.EXPECT().FindByOwner(mock.Anything, ownerID, machineID).
 				Return(machine.Machine{}, tc.err).Once()
 			client := analytics.NewHistoryClient(downstream.URL, "test-analytics-key", http.DefaultTransport)
-			list := telemetry.NewListHistory(repository, client)
+			list := telemetry.NewListHistory(repository, client, noop.NewTracerProvider().Tracer("test"))
 			router := chi.NewRouter()
 			router.With(middleware.AccessToken(jwt)).
 				Get("/v1/machines/{machine_id}/telemetry", telemetryhandler.NewHistory(list).ServeHTTP)

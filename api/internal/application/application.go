@@ -35,10 +35,14 @@ import (
 	telemetryworker "github.com/vladgrskkh/machine-whisperer/api/internal/worker/telemetry"
 )
 
-const authStartupTimeout = 10 * time.Second
+const (
+	authStartupTimeout   = 10 * time.Second
+	instrumentationScope = "github.com/vladgrskkh/machine-whisperer/api/internal/"
+)
 
 type Application struct {
 	pool             *pgxpool.Pool
+	databaseConfig   *DatabaseConfig
 	ownsPool         bool
 	signup           *auth.Signup
 	login            *auth.Login
@@ -121,27 +125,11 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 			return nil, err
 		}
 	}
-	if app.pool == nil {
-		return nil, errors.New("database pool is required")
+	if err = app.setupDatabase(ctx); err != nil {
+		return nil, err
 	}
-	repository := postgres.New(app.pool)
-	sessions := sessionpostgres.New(app.pool)
 	transactions := transactionpostgres.New(app.pool)
-	app.signup = auth.NewSignup(repository, hasher)
-	app.login = auth.NewLogin(
-		repository,
-		hasher,
-		sessions,
-		transactions,
-		signer,
-		token.Refresh{},
-		token.IDs{},
-		now,
-		dummy,
-	)
-	app.refresh = auth.NewRefresh(sessions, repository, transactions, signer, token.Refresh{}, token.IDs{}, now)
-	app.logout = auth.NewLogout(sessions, transactions, now)
-	app.me = auth.NewMe(repository)
+	app.setupAuth(transactions, hasher, now, dummy)
 	app.setupEnrollment(
 		transactions,
 		claimTTL,
@@ -156,6 +144,42 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	return app, nil
 }
 
+func (a *Application) setupAuth(
+	transactions *transactionpostgres.Manager,
+	hasher password.Argon2id,
+	now func() time.Time,
+	dummy string,
+) {
+	repository := postgres.New(a.pool)
+	sessions := sessionpostgres.New(a.pool)
+	authTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/auth")
+	a.signup = auth.NewSignup(repository, hasher, authTracer)
+	a.login = auth.NewLogin(
+		repository,
+		hasher,
+		sessions,
+		transactions,
+		a.verifier,
+		token.Refresh{},
+		token.IDs{},
+		now,
+		dummy,
+		authTracer,
+	)
+	a.refresh = auth.NewRefresh(
+		sessions,
+		repository,
+		transactions,
+		a.verifier,
+		token.Refresh{},
+		token.IDs{},
+		now,
+		authTracer,
+	)
+	a.logout = auth.NewLogout(sessions, transactions, now, authTracer)
+	a.me = auth.NewMe(repository, authTracer)
+}
+
 func (a *Application) setupEnrollment(
 	transactions *transactionpostgres.Manager,
 	claimTTL time.Duration,
@@ -163,21 +187,25 @@ func (a *Application) setupEnrollment(
 ) {
 	machines := machinepostgres.New(a.pool)
 	devices := devicepostgres.New(a.pool)
-	a.deviceAuth = device.NewAuthenticator(devices)
+	deviceTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/device")
+	machineTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/machine")
+	telemetryTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/telemetry")
+	a.deviceAuth = device.NewAuthenticator(devices, deviceTracer)
 	a.provision = device.NewProvision(
 		devices,
 		token.IDs{},
 		credential.Generator{},
 		credential.Generator{},
 		claimTTL,
+		deviceTracer,
 	)
-	a.claim = device.NewClaim(devices, transactions)
-	a.createMachine = machine.NewCreate(machines, token.IDs{})
-	a.listMachines = machine.NewList(machines)
-	a.machineDetail = machine.NewDetail(machines)
-	a.telemetryHistory = telemetry.NewListHistory(machines, history)
-	a.getBaseline = machine.NewGetBaseline(machines)
-	a.setBaseline = machine.NewSetBaseline(machines, transactions)
+	a.claim = device.NewClaim(devices, transactions, deviceTracer)
+	a.createMachine = machine.NewCreate(machines, token.IDs{}, machineTracer)
+	a.listMachines = machine.NewList(machines, machineTracer)
+	a.machineDetail = machine.NewDetail(machines, machineTracer)
+	a.telemetryHistory = telemetry.NewListHistory(machines, history, telemetryTracer)
+	a.getBaseline = machine.NewGetBaseline(machines, machineTracer)
+	a.setBaseline = machine.NewSetBaseline(machines, transactions, machineTracer)
 }
 
 func (a *Application) setupTelemetry(
@@ -188,11 +216,13 @@ func (a *Application) setupTelemetry(
 	outbox := telemetrypostgres.NewOutbox(a.pool)
 	a.metrics = metrics.New(telemetry.NewMeasureOutbox(outbox))
 	repository := telemetrypostgres.New()
-	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(detection))
-	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector, a.metrics)
+	telemetryTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/telemetry")
+	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(detection), telemetryTracer)
+	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector, a.metrics, telemetryTracer)
 	alerts := alertpostgres.New(a.pool)
-	a.listAlerts = alert.NewList(alerts)
-	a.acknowledgeAlert = alert.NewAcknowledge(alerts, a.metrics)
+	alertTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/alert")
+	a.listAlerts = alert.NewList(alerts, alertTracer)
+	a.acknowledgeAlert = alert.NewAcknowledge(alerts, a.metrics, alertTracer)
 	if relay != (RelayConfig{}) {
 		a.setupRelay(relay, outbox)
 	}

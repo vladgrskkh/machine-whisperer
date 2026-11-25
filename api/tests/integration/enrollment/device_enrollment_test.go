@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
@@ -242,6 +243,7 @@ func TestProvisioningEntropyFailureWritesNoDeviceOrSecret(t *testing.T) {
 		credential.NewGenerator(bytes.NewReader(apiSecret)),
 		credential.NewGenerator(iotest.ErrReader(generatorFailure)),
 		time.Hour,
+		noop.NewTracerProvider().Tracer("test"),
 	)
 	keyID, signing, verifying, _ := testutil.AuthKeys(t)
 	keys, err := token.LoadKeys(keyID, signing, verifying)

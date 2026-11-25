@@ -2,6 +2,7 @@ package analytics_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -82,6 +83,66 @@ func TestClientTransportFailureHasBoundedErrorClass(t *testing.T) {
 	assert.Equal(t, map[string]any{
 		"http.request.method": "GET", "error.type": "network_error",
 	}, spanAttributes(spans[0]))
+}
+
+func TestTracedClientsCancelInFlightRequests(t *testing.T) {
+	t.Parallel()
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			started := make(chan struct{})
+			serverCanceled := make(chan error, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				close(started)
+				<-r.Context().Done()
+				serverCanceled <- r.Context().Err()
+			}))
+			t.Cleanup(server.Close)
+			provider, recorder := tracingProvider(t)
+			transport := tracing.HTTPTransport(provider, propagation.TraceContext{})
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			clientResult := make(chan error, 1)
+			go func() {
+				if method == http.MethodGet {
+					client := analytics.NewHistoryClient(server.URL, "key", transport)
+					_, err := client.List(ctx, "machine", 1, "")
+					clientResult <- err
+				} else {
+					client := analytics.NewHTTPClient(server.URL, "key", 5*time.Second, metrics.New(nil), transport)
+					clientResult <- client.Send(ctx, nil)
+				}
+			}()
+			select {
+			case <-started:
+			case <-ctx.Done():
+				t.Fatal("request did not reach the server")
+			}
+			cancel()
+			select {
+			case err := <-serverCanceled:
+				assert.ErrorIs(t, err, context.Canceled)
+			case <-time.After(2 * time.Second):
+				t.Fatal("server request context remained active after canceling client")
+			}
+			select {
+			case err := <-clientResult:
+				if method == http.MethodGet {
+					assert.ErrorIs(t, err, telemetry.ErrHistoryUnavailable)
+				} else {
+					assert.ErrorIs(t, err, telemetry.ErrAnalyticsTransport)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("client request remained active after cancellation")
+			}
+			spans := recorder.Ended()
+			require.Len(t, spans, 1)
+			assert.Equal(t, method, spans[0].Name())
+			assert.Empty(t, spans[0].Events())
+			assert.Empty(t, spans[0].Status().Description)
+		})
+	}
 }
 
 func tracingProvider(t *testing.T) (*sdktrace.TracerProvider, *tracetest.SpanRecorder) {

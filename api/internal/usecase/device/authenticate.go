@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/subtle"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type AuthenticationRepository interface {
@@ -12,14 +15,18 @@ type AuthenticationRepository interface {
 }
 
 type Authenticator struct {
+	tracer     trace.Tracer
 	repository AuthenticationRepository
 }
 
-func NewAuthenticator(repository AuthenticationRepository) *Authenticator {
-	return &Authenticator{repository: repository}
+func NewAuthenticator(repository AuthenticationRepository, tracer trace.Tracer) *Authenticator {
+	return &Authenticator{tracer: tracer, repository: repository}
 }
 
-func (a *Authenticator) Authenticate(ctx context.Context, deviceID string, secret device.Secret) (string, error) {
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (a *Authenticator) Authenticate(ctx context.Context, deviceID string, secret device.Secret) (_ string, err error) {
+	ctx, span := a.tracer.Start(ctx, "device.authenticate")
+	defer func() { spanutil.End(span, err, device.ErrInvalidCredentials, device.ErrUnavailable) }()
 	value, err := a.repository.FindForAuthentication(ctx, deviceID)
 	if err != nil {
 		return "", err

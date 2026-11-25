@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -108,6 +109,31 @@ func TestHTTPServerSkipsProbesAndUsesMethodAsUnmatchedSpanName(t *testing.T) {
 	assert.Equal(t, map[string]any{
 		"http.request.method": "POST", "http.route": "/v1/auth/login", "http.response.status_code": int64(400),
 	}, traceAttributes(matched))
+}
+
+func TestLoginRecordsUseCaseUnderHTTPSpan(t *testing.T) {
+	t.Parallel()
+	server, recorder, handled := tracingServer(t, netip.MustParsePrefix("127.0.0.1/32"))
+	response, err := server.Client().Post(server.URL+"/v1/auth/login", "application/json",
+		strings.NewReader(`{"email":"sensitive-invalid-email","password":"sensitive-password"}`))
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	<-handled
+	require.Equal(t, http.StatusBadRequest, response.StatusCode)
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	operation, request := spans[0], spans[1]
+	assert.Equal(t, "auth.login", operation.Name())
+	assert.Equal(t, trace.SpanKindInternal, operation.SpanKind())
+	assert.Equal(t, request.SpanContext().SpanID(), operation.Parent().SpanID())
+	assert.Equal(
+		t,
+		"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth",
+		operation.InstrumentationScope().Name,
+	)
+	assert.Equal(t, codes.Unset, operation.Status().Code)
+	assert.Empty(t, operation.Attributes())
+	assert.Empty(t, operation.Events())
 }
 
 func tracingServer(t *testing.T, proxy netip.Prefix) (*httptest.Server, *tracetest.SpanRecorder, <-chan struct{}) {

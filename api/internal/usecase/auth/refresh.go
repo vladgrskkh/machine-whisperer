@@ -8,7 +8,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 var ErrMalformedRefreshToken = errors.New("malformed refresh token")
@@ -25,6 +28,7 @@ type RefreshRoleRepository interface {
 }
 
 type Refresh struct {
+	tracer       trace.Tracer
 	repository   RefreshRepository
 	roles        RefreshRoleRepository
 	transactions TransactionManager
@@ -42,9 +46,10 @@ func NewRefresh(
 	refresh RefreshGenerator,
 	ids IDGenerator,
 	now func() time.Time,
+	tracer trace.Tracer,
 ) *Refresh {
 	return &Refresh{
-		repository:   repository,
+		tracer: tracer, repository: repository,
 		roles:        roles,
 		transactions: transactions,
 		signer:       signer,
@@ -54,7 +59,10 @@ func NewRefresh(
 	}
 }
 
-func (u *Refresh) Refresh(ctx context.Context, raw string) (TokenPair, error) {
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (u *Refresh) Refresh(ctx context.Context, raw string) (_ TokenPair, err error) {
+	ctx, span := u.tracer.Start(ctx, "auth.refresh")
+	defer func() { spanutil.End(span, err, ErrMalformedRefreshToken, ErrAuthenticationFailed) }()
 	hash, err := hashRefreshToken(raw)
 	if err != nil {
 		return TokenPair{}, err

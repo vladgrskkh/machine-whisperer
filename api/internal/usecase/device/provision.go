@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type ProvisionRepository interface {
@@ -21,6 +24,7 @@ type SecretGenerator interface {
 }
 
 type Provision struct {
+	tracer     trace.Tracer
 	repository ProvisionRepository
 	ids        IDGenerator
 	apiSecrets SecretGenerator
@@ -39,9 +43,10 @@ func NewProvision(
 	ids IDGenerator,
 	apiSecrets, claimCodes SecretGenerator,
 	claimTTL time.Duration,
+	tracer trace.Tracer,
 ) *Provision {
 	return &Provision{
-		repository: repository,
+		tracer: tracer, repository: repository,
 		ids:        ids,
 		apiSecrets: apiSecrets,
 		claimCodes: claimCodes,
@@ -49,7 +54,10 @@ func NewProvision(
 	}
 }
 
-func (p *Provision) Provision(ctx context.Context, provisionerID string) (Provisioned, error) {
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (p *Provision) Provision(ctx context.Context, provisionerID string) (_ Provisioned, err error) {
+	ctx, span := p.tracer.Start(ctx, "device.provision")
+	defer func() { spanutil.End(span, err) }()
 	id, err := p.ids.Generate(ctx)
 	if err != nil {
 		return Provisioned{}, fmt.Errorf("generate device ID: %w", err)

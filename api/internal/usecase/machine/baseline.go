@@ -3,7 +3,10 @@ package machine
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type BaselineRepository interface {
@@ -15,28 +18,38 @@ type TransactionManager interface {
 	WithinTransaction(context.Context, func(context.Context) error) error
 }
 
-type GetBaseline struct{ repository BaselineRepository }
-
-func NewGetBaseline(repository BaselineRepository) *GetBaseline {
-	return &GetBaseline{repository: repository}
+type GetBaseline struct {
+	tracer     trace.Tracer
+	repository BaselineRepository
 }
 
-func (g *GetBaseline) Execute(ctx context.Context, ownerID, machineID string) (machine.Baseline, error) {
+func NewGetBaseline(repository BaselineRepository, tracer trace.Tracer) *GetBaseline {
+	return &GetBaseline{tracer: tracer, repository: repository}
+}
+
+//nolint:nonamedreturns // Span completion observes the returned error.
+func (g *GetBaseline) Execute(ctx context.Context, ownerID, machineID string) (_ machine.Baseline, err error) {
+	ctx, span := g.tracer.Start(ctx, "machine.baseline.get")
+	defer func() { spanutil.End(span, err, machine.ErrNotFound, machine.ErrBaselineNotFound) }()
 	return g.repository.GetByOwner(ctx, ownerID, machineID)
 }
 
 type SetBaseline struct {
+	tracer       trace.Tracer
 	repository   BaselineRepository
 	transactions TransactionManager
 }
 
-func NewSetBaseline(repository BaselineRepository, transactions TransactionManager) *SetBaseline {
-	return &SetBaseline{repository: repository, transactions: transactions}
+func NewSetBaseline(repository BaselineRepository, transactions TransactionManager, tracer trace.Tracer) *SetBaseline {
+	return &SetBaseline{tracer: tracer, repository: repository, transactions: transactions}
 }
 
+//nolint:nonamedreturns // Span completion observes the returned error.
 func (s *SetBaseline) Execute(
 	ctx context.Context, ownerID, machineID string, meanRMSG, stddevRMSG float64,
-) (machine.Baseline, error) {
+) (_ machine.Baseline, err error) {
+	ctx, span := s.tracer.Start(ctx, "machine.baseline.set")
+	defer func() { spanutil.End(span, err, machine.ErrInvalidBaseline, machine.ErrNotFound) }()
 	baseline, err := machine.NewBaseline(machineID, meanRMSG, stddevRMSG)
 	if err != nil {
 		return machine.Baseline{}, err

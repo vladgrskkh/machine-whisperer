@@ -10,9 +10,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 const (
@@ -69,6 +72,7 @@ type ingestResult struct {
 }
 
 type Ingest struct {
+	tracer       trace.Tracer
 	repository   Repository
 	transactions TransactionManager
 	detector     ObservationDetector
@@ -80,15 +84,28 @@ func NewIngest(
 	transactions TransactionManager,
 	detector ObservationDetector,
 	recorder IngestRecorder,
+	tracer trace.Tracer,
 ) *Ingest {
-	return &Ingest{repository: repository, transactions: transactions, detector: detector, recorder: recorder}
+	return &Ingest{
+		tracer:       tracer,
+		repository:   repository,
+		transactions: transactions,
+		detector:     detector,
+		recorder:     recorder,
+	}
 }
 
+//nolint:nonamedreturns // Span completion observes the returned error.
 func (i *Ingest) Ingest(
 	ctx context.Context,
 	deviceID, assignedMachineID, requestedMachineID string,
 	observation telemetry.Observation,
-) error {
+) (err error) {
+	ctx, span := i.tracer.Start(ctx, "telemetry.ingest")
+	defer func() {
+		spanutil.End(span, err, machine.ErrNotFound, ErrInvalidObservation, ErrObservationWindow,
+			ErrObservationOrder, telemetry.ErrEventConflict)
+	}()
 	if assignedMachineID == "" || assignedMachineID != requestedMachineID {
 		i.recorder.RecordIngest(IngestMachineMissing)
 		return machine.ErrNotFound
@@ -158,6 +175,7 @@ func (i *Ingest) store(ctx context.Context, event telemetry.Event) (ingestResult
 	}
 	if found {
 		if hash == event.PayloadHash {
+			trace.SpanFromContext(ctx).SetAttributes(attribute.String("outcome", "duplicate_replay"))
 			return ingestResult{replay: true}, nil
 		}
 		return ingestResult{}, telemetry.ErrEventConflict
