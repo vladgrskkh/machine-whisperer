@@ -4,9 +4,12 @@ package testutil
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -25,11 +28,33 @@ const (
 	cleanupTimeout = 10 * time.Second
 )
 
-func Postgres(t *testing.T) *pgxpool.Pool {
-	t.Helper()
+//nolint:gochecknoglobals // TestMain installs the shared fixture before running any tests.
+var postgresAdmin func() (*pgxpool.Pool, error)
+
+type postgresSuite struct {
+	container *postgres.PostgresContainer
+	admin     *pgxpool.Pool
+}
+
+func RunWithPostgres(m *testing.M) int {
+	var suite postgresSuite
+	// Test selections that do not use Postgres can run without Docker.
+	postgresAdmin = sync.OnceValues(suite.start)
+	code := m.Run()
+	if err := suite.close(); err != nil {
+		fmt.Fprintf(os.Stderr, "clean up integration PostgreSQL: %v\n", err)
+		if code == 0 {
+			return 1
+		}
+	}
+	return code
+}
+
+func (s *postgresSuite) start() (*pgxpool.Pool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
-	container, err := postgres.Run(
+	var err error
+	s.container, err = postgres.Run(
 		ctx,
 		"postgres:18-alpine",
 		postgres.WithDatabase("signup"),
@@ -37,15 +62,33 @@ func Postgres(t *testing.T) *pgxpool.Pool {
 		postgres.WithPassword("test-password"),
 		postgres.BasicWaitStrategies(),
 	)
-	testcontainers.CleanupContainer(t, container)
+	if err != nil {
+		return nil, fmt.Errorf("start integration PostgreSQL: %w", err)
+	}
+	dsn, err := s.container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		return nil, fmt.Errorf("get integration PostgreSQL URL: %w", err)
+	}
+	s.admin, err = pgxpool.New(ctx, dsn)
+	return s.admin, err
+}
+
+func (s *postgresSuite) close() error {
+	if s.admin != nil {
+		s.admin.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	return testcontainers.TerminateContainer(s.container, testcontainers.StopContext(ctx))
+}
+
+func Postgres(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	require.NotNil(t, postgresAdmin, "TestMain must call RunWithPostgres")
+	admin, err := postgresAdmin()
 	require.NoError(t, err)
-	url, err := container.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
-	config, err := pgxpool.ParseConfig(url)
-	require.NoError(t, err)
-	admin, err := pgxpool.NewWithConfig(ctx, config)
-	require.NoError(t, err)
-	t.Cleanup(admin.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), startupTimeout)
+	defer cancel()
 	schema := pgx.Identifier{"test_" + uuid.NewString()}.Sanitize()
 	_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
 	require.NoError(t, err)
@@ -55,8 +98,12 @@ func Postgres(t *testing.T) *pgxpool.Pool {
 		_, cleanupErr := admin.Exec(cleanupCtx, "DROP SCHEMA "+schema+" CASCADE")
 		assertCleanup(t, cleanupErr)
 	})
-	config.ConnConfig.RuntimeParams["search_path"] = schema
-	pool, err := pgxpool.NewWithConfig(ctx, config)
+	dsn, err := url.Parse(admin.Config().ConnString())
+	require.NoError(t, err)
+	query := dsn.Query()
+	query.Set("search_path", schema)
+	dsn.RawQuery = query.Encode()
+	pool, err := pgxpool.New(ctx, dsn.String())
 	require.NoError(t, err)
 	t.Cleanup(pool.Close)
 	_, err = PostgresMigrations(t, pool).Up(ctx)

@@ -63,10 +63,10 @@ make lint
 ```
 
 Unit tests use real HTTP connections and require permission to bind loopback
-ports. Integration tests use Testcontainers to start `postgres:18-alpine`, apply
-migrations and isolate each test in its own schema. They require a running Docker
-engine; missing Docker fails the tests. They do not use `DATABASE_URL` or a shared
-test database. `make test-integration` also runs the race detector. Lint includes
+ports. Database integration tests share one disposable `postgres:18-alpine`
+Testcontainer. Each test creates and migrates its own schema before using it.
+The fixture starts on first use and requires Docker. It ignores `DATABASE_URL`.
+`make test-integration` also runs the race detector. Lint includes
 integration-tagged code. To regenerate the hashing mock used by handler tests:
 
 ```sh
