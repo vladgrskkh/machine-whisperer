@@ -14,13 +14,12 @@ import (
 	handler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
 func TestSignupStoresExactEscapedUnicodePassword(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	hasher := password.Argon2id{}
 	server := httptest.NewServer(handler.New(auth.NewSignup(postgres.New(pool), hasher)))
 	t.Cleanup(server.Close)

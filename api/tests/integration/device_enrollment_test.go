@@ -55,7 +55,7 @@ type factoryEnrollment struct {
 
 func TestProvisioningRequiresSignedRoleAndStoresOnlyVerifiers(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	id, ordinary := signupEnrollmentUser(t, server, httpCredentials)
 
@@ -89,7 +89,7 @@ func TestProvisioningRequiresSignedRoleAndStoresOnlyVerifiers(t *testing.T) {
 
 func TestProvisioningStoresAuthenticatedSubject(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	provisionerID, ordinary := signupEnrollmentUser(t, server, httpCredentials)
 	require.NoError(t, userpostgres.New(pool).GrantRole(t.Context(), provisionerID, user.RoleDeviceProvisioner))
@@ -110,7 +110,7 @@ func TestProvisioningStoresAuthenticatedSubject(t *testing.T) {
 
 func TestDemoCleanupSerializesLateProvisioning(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	demoID, ordinary := signupEnrollmentUser(t, server, httpCredentials)
 	otherID, otherOrdinary := signupEnrollmentUser(
@@ -178,7 +178,7 @@ func TestDemoCleanupSerializesLateProvisioning(t *testing.T) {
 
 func TestProvisioningRoleRevocationFollowsAccessTokenExpiry(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, setElapsed := newSessionServer(t, pool)
 	id, ordinary := signupEnrollmentUser(t, server, httpCredentials)
 	roles := userpostgres.New(pool)
@@ -200,7 +200,7 @@ func TestProvisioningRoleRevocationFollowsAccessTokenExpiry(t *testing.T) {
 
 func TestProvisioningDatabaseFailureIsSanitized(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	factory := startFactorySession(t, pool, server)
 	_, err := pool.Exec(t.Context(), `ALTER TABLE devices ADD CONSTRAINT internal_enrollment_failure CHECK (false)`)
@@ -214,7 +214,7 @@ func TestProvisioningDatabaseFailureIsSanitized(t *testing.T) {
 
 func TestProvisioningEntropyFailureWritesNoDeviceOrSecret(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	apiSecret := bytes.Repeat([]byte{42}, sha256.Size)
 	generatorFailure := errors.New("private entropy error")
 	usecase := deviceusecase.NewProvision(
@@ -254,7 +254,7 @@ func TestProvisioningEntropyFailureWritesNoDeviceOrSecret(t *testing.T) {
 
 func TestMachineHTTPOwnershipAndValidation(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	_, owner := signupEnrollmentUser(t, server, httpCredentials)
 	_, other := signupEnrollmentUser(t, server, `{"email":"other@example.com","password":"long enough password"}`)
@@ -304,7 +304,7 @@ func TestMachineHTTPOwnershipAndValidation(t *testing.T) {
 
 func TestClaimHTTPIsAtomicAndUniform(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, setElapsed := newSessionServer(t, pool)
 	factory := startFactorySession(t, pool, server)
 	_, owner := signupEnrollmentUser(t, server, `{"email":"owner@example.com","password":"long enough password"}`)
@@ -390,7 +390,7 @@ func TestClaimHTTPChecksExpiryAfterWaitingForMachineLock(t *testing.T) {
 
 func assertClaimExpiryAfterLock(t *testing.T, lockMachine bool) {
 	t.Helper()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	// Keep time to observe expiry before the access-token middleware deadline.
 	const claimTTL = 8 * time.Second
 	server := newAuthServer(t, pool, application.Config{
@@ -455,7 +455,7 @@ func assertClaimExpiryAfterLock(t *testing.T, lockMachine bool) {
 
 func TestConcurrentHTTPClaimsBindToOneOwner(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	factory := startFactorySession(t, pool, server)
 	_, owner := signupEnrollmentUser(t, server, `{"email":"owner@example.com","password":"long enough password"}`)
@@ -504,7 +504,7 @@ func TestConcurrentHTTPClaimsBindToOneOwner(t *testing.T) {
 
 func TestEnrollmentSharesIPBudgetWithAuthentication(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{
 		RateLimits: application.RateLimitsConfig{IP: middleware.RateLimitConfig{Limit: 2}},
 	})

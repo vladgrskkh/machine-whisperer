@@ -28,29 +28,28 @@ const (
 	cleanupTimeout = 10 * time.Second
 )
 
-//nolint:gochecknoglobals // TestMain installs the shared fixture before running any tests.
-var postgresAdmin func() (*pgxpool.Pool, error)
-
-type postgresSuite struct {
+// PostgresSuite starts a shared server on first use. Its zero value is ready to use.
+type PostgresSuite struct {
+	startOnce sync.Once
+	startErr  error
 	container *postgres.PostgresContainer
 	admin     *pgxpool.Pool
 }
 
-func RunWithPostgres(m *testing.M) int {
-	var suite postgresSuite
-	// Test selections that do not use Postgres can run without Docker.
-	postgresAdmin = sync.OnceValues(suite.start)
+func RunWithPostgres(m *testing.M, suites ...*PostgresSuite) int {
 	code := m.Run()
-	if err := suite.close(); err != nil {
-		fmt.Fprintf(os.Stderr, "clean up integration PostgreSQL: %v\n", err)
-		if code == 0 {
-			return 1
+	for _, suite := range suites {
+		if err := suite.close(); err != nil {
+			fmt.Fprintf(os.Stderr, "clean up integration PostgreSQL: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
 		}
 	}
 	return code
 }
 
-func (s *postgresSuite) start() (*pgxpool.Pool, error) {
+func (s *PostgresSuite) start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
 	var err error
@@ -63,42 +62,44 @@ func (s *postgresSuite) start() (*pgxpool.Pool, error) {
 		postgres.BasicWaitStrategies(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("start integration PostgreSQL: %w", err)
+		return fmt.Errorf("start integration PostgreSQL: %w", err)
 	}
 	dsn, err := s.container.ConnectionString(ctx, "sslmode=disable")
 	if err != nil {
-		return nil, fmt.Errorf("get integration PostgreSQL URL: %w", err)
+		return fmt.Errorf("get integration PostgreSQL URL: %w", err)
 	}
 	s.admin, err = pgxpool.New(ctx, dsn)
-	return s.admin, err
+	return err
 }
 
-func (s *postgresSuite) close() error {
+func (s *PostgresSuite) close() error {
 	if s.admin != nil {
 		s.admin.Close()
+	}
+	if s.container == nil {
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	return testcontainers.TerminateContainer(s.container, testcontainers.StopContext(ctx))
 }
 
-func Postgres(t *testing.T) *pgxpool.Pool {
+func (s *PostgresSuite) Pool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
-	require.NotNil(t, postgresAdmin, "TestMain must call RunWithPostgres")
-	admin, err := postgresAdmin()
-	require.NoError(t, err)
+	s.startOnce.Do(func() { s.startErr = s.start() })
+	require.NoError(t, s.startErr)
 	ctx, cancel := context.WithTimeout(t.Context(), startupTimeout)
 	defer cancel()
 	schema := pgx.Identifier{"test_" + uuid.NewString()}.Sanitize()
-	_, err = admin.Exec(ctx, "CREATE SCHEMA "+schema)
+	_, err := s.admin.Exec(ctx, "CREATE SCHEMA "+schema)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), cleanupTimeout)
 		defer cleanupCancel()
-		_, cleanupErr := admin.Exec(cleanupCtx, "DROP SCHEMA "+schema+" CASCADE")
+		_, cleanupErr := s.admin.Exec(cleanupCtx, "DROP SCHEMA "+schema+" CASCADE")
 		assertCleanup(t, cleanupErr)
 	})
-	dsn, err := url.Parse(admin.Config().ConnString())
+	dsn, err := url.Parse(s.admin.Config().ConnString())
 	require.NoError(t, err)
 	query := dsn.Query()
 	query.Set("search_path", schema)

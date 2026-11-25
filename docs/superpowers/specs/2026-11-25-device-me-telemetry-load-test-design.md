@@ -9,8 +9,8 @@ Add the firmware-facing device-scoped telemetry URL, verify the full user,
 machine, device, and telemetry flow against the disposable Compose stack in CI,
 replace the ad-hoc shell test harness with a regular test suite, and add a
 local k6 load test for an already-running deployment. Reduce Testcontainers
-startup time by sharing one PostgreSQL container across the API integration
-package while keeping separate schemas per test.
+startup time by sharing one PostgreSQL container within each logical API
+integration suite while keeping separate schemas per test.
 
 ## Current state
 
@@ -62,10 +62,12 @@ package while keeping separate schemas per test.
 
 1. **Keep one PostgreSQL container per test.** It gives strong isolation but
    the current suite takes several minutes due to repeated container startup.
-2. **Share one package-scoped PostgreSQL Testcontainer (selected).** Start
-   it once in the integration test package; each test keeps its own connection
-   pool, unique schema, migrations, and schema cleanup. This retains test
-   isolation while avoiding one container start per test.
+2. **Share one PostgreSQL Testcontainer across the package.** The initial
+   trial took 74.2 seconds at `-parallel=4` with the race detector.
+3. **Share one PostgreSQL Testcontainer per logical suite (selected).** Each
+   suite starts a server on first use. Each test has its own pool and migrated
+   schema. This retains server isolation between suites and avoids one
+   container startup per test.
 
 ### Load-test execution
 
@@ -115,12 +117,14 @@ its random Compose project, volumes, images, and temporary credentials.
 
 ## Test-container lifecycle
 
-The API integration package starts one Testcontainers PostgreSQL instance in
-`TestMain`. Each test creates a random schema, runs migrations on that schema,
-uses a schema-scoped pool, and drops the schema during cleanup. Tests remain
-parallel and isolated. The shared container is terminated after the package
-finishes, including failure paths. The user asked to solve this optimization
-in this change rather than create a separate issue.
+The API integration package uses named PostgreSQL fixtures for account and
+auth, device enrollment, device telemetry, machine baselines, telemetry
+detection, telemetry history, telemetry storage, and outbox export. Each
+fixture starts its own container on first use. Tests create and migrate
+random schemas, use schema-scoped pools, and drop their schemas during cleanup.
+The package's `TestMain` closes every started container after the tests finish,
+including when a test fails. Tests keep their existing names and can run in
+parallel.
 
 ## Local k6 load test
 

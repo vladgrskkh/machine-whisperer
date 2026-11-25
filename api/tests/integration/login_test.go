@@ -25,7 +25,6 @@ import (
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth/authmock"
 )
@@ -45,7 +44,7 @@ type loginFixtures struct {
 
 func loginFixture(t *testing.T) loginFixtures {
 	t.Helper()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	hasher := password.Argon2id{}
 	dummy, err := hasher.Hash(t.Context(), dummyLoginPassword)
 	require.NoError(t, err)
@@ -249,7 +248,7 @@ func TestLoginCancellationRollsBack(t *testing.T) {
 
 func TestLoginRepositoryLookupsJoinTransaction(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	repository := userpostgres.New(pool)
 	expected := errors.New("rollback fixture")
 	var id string

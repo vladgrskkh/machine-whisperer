@@ -21,7 +21,6 @@ import (
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 const insertTelemetryIdentity = `INSERT INTO telemetry_events (device_id,event_id,machine_id,observed_at,payload_hash,expires_at)
@@ -29,7 +28,7 @@ const insertTelemetryIdentity = `INSERT INTO telemetry_events (device_id,event_i
 
 func TestTelemetryStorageConstraints(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := telemetryStoragePostgres.Pool(t)
 	event, target := telemetryStorageEvent(t, pool)
 	deviceID, eventID, machineID := event.DeviceID, event.EventID, event.MachineID
 	observedAt, payloadHash := event.ObservedAt, event.PayloadHash
@@ -67,7 +66,7 @@ func TestTelemetryStorageConstraints(t *testing.T) {
 
 func TestTelemetryEventAndOutboxInsertAtomically(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := telemetryStoragePostgres.Pool(t)
 	event, _ := telemetryStorageEvent(t, pool)
 	ctx := t.Context()
 	repository := telemetrypostgres.New()
@@ -116,7 +115,7 @@ func TestTelemetryEventAndOutboxInsertAtomically(t *testing.T) {
 
 func TestTelemetryMachineCursor(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := telemetryStoragePostgres.Pool(t)
 	event, target := telemetryStorageEvent(t, pool)
 	repository := telemetrypostgres.New()
 	manager := transactionpostgres.New(pool)
@@ -154,7 +153,7 @@ func TestTelemetryMachineCursor(t *testing.T) {
 
 func TestTelemetryMachineReceiptTimeIsSampledAfterLockWait(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := telemetryStoragePostgres.Pool(t)
 	target, _ := enrollmentMachines(t, pool)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
@@ -207,7 +206,7 @@ func telemetryLockHasWaiter(ctx context.Context, pool *pgxpool.Pool, blockerPID 
 
 func TestTelemetryExpiredIdempotencyCleanup(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := telemetryStoragePostgres.Pool(t)
 	event, _ := telemetryStorageEvent(t, pool)
 	active := event
 	active.EventID = uuid.NewString()

@@ -21,7 +21,6 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 	telemetryusecase "github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
 )
 
@@ -29,7 +28,7 @@ const outboxTestLease = time.Minute
 
 func TestOutboxLeaseClaimsRowsOnce(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	first := insertOutboxRow(t, pool, nil)
 	second := insertOutboxRow(t, pool, nil)
 	withoutLock := insertOutboxRow(t, pool, nil)
@@ -56,7 +55,7 @@ func TestOutboxLeaseClaimsRowsOnce(t *testing.T) {
 
 func TestOutboxLeaseCanBeReclaimed(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	event := insertOutboxRow(t, pool, nil)
 	repository := telemetrypostgres.NewOutbox(pool)
 	oldToken, events, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
@@ -79,7 +78,7 @@ func TestOutboxLeaseCanBeReclaimed(t *testing.T) {
 
 func TestOutboxStaleLeaseCannotAcknowledge(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	event := insertOutboxRow(t, pool, nil)
 	other := insertOutboxRow(t, pool, nil)
 	repository := telemetrypostgres.NewOutbox(pool)
@@ -108,7 +107,7 @@ func TestOutboxStaleLeaseCannotAcknowledge(t *testing.T) {
 
 func TestOutboxRetryBackoff(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	event := insertOutboxRow(t, pool, nil)
 	repository := telemetrypostgres.NewOutbox(pool)
 	token, _, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
@@ -141,7 +140,7 @@ func TestOutboxRetryBackoff(t *testing.T) {
 
 func TestOutboxDeliveredRetentionIsBounded(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	old := time.Now().AddDate(0, 0, -40)
 	recent := time.Now()
 	insertOutboxRow(t, pool, &old)
@@ -168,7 +167,7 @@ func TestOutboxDeliveredRetentionIsBounded(t *testing.T) {
 
 func TestApplicationRunsOutboxRelay(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	old := time.Now().AddDate(0, 0, -40)
 	insertOutboxRow(t, pool, &old)
 	insertOutboxRow(t, pool, nil)
@@ -214,7 +213,7 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 
 func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := outboxPostgres.Pool(t)
 	event := insertOutboxRow(t, pool, nil)
 	var storedPayload string
 	require.NoError(t, pool.QueryRow(t.Context(),

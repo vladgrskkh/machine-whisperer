@@ -39,18 +39,23 @@ type telemetryFixture struct {
 	observed  time.Time
 }
 
-func setupDeviceTelemetry(t *testing.T, options ...application.Option) telemetryFixture {
+func setupDeviceTelemetry(
+	t *testing.T,
+	postgresSuite *testutil.PostgresSuite,
+	options ...application.Option,
+) telemetryFixture {
 	t.Helper()
-	return setupDeviceTelemetryWithConfig(t, authConfig(t), options...)
+	return setupDeviceTelemetryWithConfig(t, postgresSuite, authConfig(t), options...)
 }
 
 func setupDeviceTelemetryWithConfig(
 	t *testing.T,
+	postgresSuite *testutil.PostgresSuite,
 	config application.Config,
 	options ...application.Option,
 ) telemetryFixture {
 	t.Helper()
-	pool := testutil.Postgres(t)
+	pool := postgresSuite.Pool(t)
 	options = append([]application.Option{application.WithPool(pool)}, options...)
 	app, err := application.New(t.Context(), config, options...)
 	require.NoError(t, err)
@@ -113,7 +118,7 @@ func (f telemetryFixture) assertStored(t *testing.T, identities, outbox int, cur
 }
 
 func TestDeviceTelemetryRejectsInvalidCredentials(t *testing.T) {
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	body := observationJSON(uuid.NewString(), f.observed)
 	otherKey := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	for name, headers := range map[string]http.Header{
@@ -144,7 +149,7 @@ func TestDeviceTelemetryRejectsInvalidCredentials(t *testing.T) {
 
 func TestDeviceTelemetryRejectsUnclaimedRevokedAndWrongMachine(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	unclaimed := provisionEnrollment(t, f.server, f.factory.AccessToken)
 	otherMachine := createEnrollmentMachine(t, f.server, f.factory.AccessToken)
 	body := observationJSON(uuid.NewString(), f.observed)
@@ -175,7 +180,7 @@ func TestDeviceTelemetryRejectsUnclaimedRevokedAndWrongMachine(t *testing.T) {
 
 func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	tx, err := f.pool.Begin(ctx)
@@ -241,7 +246,7 @@ func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testi
 
 func TestDeviceKeyCannotAuthenticateUserRoutes(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	for _, path := range []string{"/v1/users/me", machinesPath, machinesPath + "/" + f.machineID} {
 		response := authHTTPRequest(t, f.server, http.MethodGet, path, "", bearer(f.device.APIKey))
 		assert.Equal(t, http.StatusUnauthorized, response.status)
@@ -252,7 +257,7 @@ func TestDeviceKeyCannotAuthenticateUserRoutes(t *testing.T) {
 
 func TestDeviceKeyRoleAuthorization(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	authenticate := middleware.DeviceToken(device.NewAuthenticator(devicepostgres.New(f.pool)))
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
@@ -271,7 +276,7 @@ func TestDeviceKeyRoleAuthorization(t *testing.T) {
 }
 
 func TestDeviceTelemetryValidatesV1Payload(t *testing.T) {
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	body := observationJSON(eventID, f.observed)
 	for name, input := range map[string]string{
@@ -315,7 +320,7 @@ func TestDeviceTelemetryValidatesV1Payload(t *testing.T) {
 
 func TestDeviceTelemetryIdenticalRetryIsIdempotent(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	observed := f.observed.Add(123456 * time.Microsecond)
 	first := observationJSON(strings.ToUpper(eventID), observed.Add(100*time.Nanosecond))
@@ -348,7 +353,7 @@ func TestDeviceTelemetryIdenticalRetryIsIdempotent(t *testing.T) {
 
 func TestDeviceTelemetryConflictingEventIDReturnsConflict(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	body := observationJSON(uuid.NewString(), f.observed)
 	require.Equal(t, http.StatusAccepted, f.post(t, body).status)
 	response := f.post(t, strings.Replace(body, "0.043", "0.044", 1))
@@ -367,7 +372,7 @@ func seedExpiredTelemetryBacklog(t *testing.T, f telemetryFixture, observedAt ti
 
 func TestDeviceTelemetryCleanupIsBoundedAndMachineScoped(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	old := f.observed.Add(-30*24*time.Hour - time.Hour)
 	seedExpiredTelemetryBacklog(t, f, old)
 
@@ -392,7 +397,7 @@ func TestDeviceTelemetryCleanupIsBoundedAndMachineScoped(t *testing.T) {
 
 func TestDeviceTelemetryReusesExpiredSubmittedIDOutsideCleanupBatch(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	old := f.observed.Add(-30*24*time.Hour - time.Hour)
 	seedExpiredTelemetryBacklog(t, f, old)
 
@@ -412,7 +417,7 @@ func TestDeviceTelemetryReusesExpiredSubmittedIDOutsideCleanupBatch(t *testing.T
 
 func TestDeviceTelemetryOutboxKeyConflictReturnsConflict(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	old := f.observed.Add(-30*24*time.Hour - time.Minute)
 	_, err := f.pool.Exec(t.Context(), insertTelemetryIdentity, f.device.DeviceID, eventID,
@@ -431,7 +436,7 @@ func TestDeviceTelemetryOutboxKeyConflictReturnsConflict(t *testing.T) {
 }
 
 func TestDeviceTelemetryRejectsFutureStaleAndOutOfOrderEvents(t *testing.T) {
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	stale := f.observed.Add(-30*24*time.Hour - time.Second)
 	assert.Equal(t, http.StatusConflict, f.post(t, observationJSON(uuid.NewString(), stale)).status)
 	f.assertStored(t, 0, 0, nil)
@@ -459,7 +464,7 @@ func TestDeviceTelemetryRejectsFutureStaleAndOutOfOrderEvents(t *testing.T) {
 
 func TestDeviceTelemetryRejectsFutureUTCYearOverflow(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	at, err := time.Parse(time.RFC3339, "9999-12-31T23:59:59-01:00")
 	require.NoError(t, err)
 
@@ -470,7 +475,7 @@ func TestDeviceTelemetryRejectsFutureUTCYearOverflow(t *testing.T) {
 
 func TestDeviceTelemetryConcurrentEventsPreserveOrder(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	later := f.observed.Add(time.Microsecond)
 	olderBody := observationJSON(uuid.NewString(), f.observed)
 	laterBody := observationJSON(uuid.NewString(), later)
@@ -516,7 +521,7 @@ func TestDeviceTelemetryConcurrentEventsPreserveOrder(t *testing.T) {
 
 func TestDeviceTelemetryOutboxFailureRollsBack(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	body := observationJSON(eventID, f.observed)
 	_, err := f.pool.Exec(
@@ -540,7 +545,7 @@ func TestDeviceTelemetryLogsExcludeSecretsAndBody(t *testing.T) {
 	t.Parallel()
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	f := setupDeviceTelemetry(t, application.WithLogger(logger))
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres, application.WithLogger(logger))
 	eventID := uuid.NewString()
 	body := observationJSON(eventID, f.observed)
 	const queryValue = "private_query"

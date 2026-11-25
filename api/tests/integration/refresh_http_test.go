@@ -21,7 +21,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 const (
@@ -42,7 +41,7 @@ type httpTokenPair struct {
 
 func TestRefreshAndLogoutHTTP(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, setElapsed := newSessionServer(t, pool)
 	first := startHTTPSession(t, server)
 	other := loginHTTPSession(t, server)
@@ -78,7 +77,7 @@ func TestRefreshAndLogoutHTTP(t *testing.T) {
 
 func TestRefreshAndLogoutHTTPRejectInvalidBodiesBeforeStorage(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	pair := startHTTPSession(t, server)
 
@@ -139,7 +138,7 @@ func TestRefreshAndLogoutHTTPRejectInvalidBodiesBeforeStorage(t *testing.T) {
 
 func TestRefreshHTTPMethodErrorsDoNotCache(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	response := authHTTPRequest(t, server, http.MethodGet, refreshPath, "", nil)
 	assert.Equal(t, http.StatusMethodNotAllowed, response.status)

@@ -17,7 +17,7 @@ import (
 
 func TestEnrollmentSchemaConstraints(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	ctx := t.Context()
 	ownerID, machineID, deviceID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	now := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
@@ -71,7 +71,7 @@ func TestEnrollmentSchemaConstraints(t *testing.T) {
 
 func TestEnrollmentMigrationsCanBeReapplied(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	ctx := t.Context()
 	provider := testutil.PostgresMigrations(t, pool)
 	const sessionsMigration = 202611100002

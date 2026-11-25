@@ -16,7 +16,6 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 const provisionerRole = "device_provisioner"
@@ -104,7 +103,7 @@ func TestRefreshReadsRolesAfterConsumption(t *testing.T) {
 
 func TestUserRoleRepositoryTransactions(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	repository := userpostgres.New(pool)
 	ctx := t.Context()
 	account, err := repository.Create(ctx, "role-rollback@example.com", "test hash")

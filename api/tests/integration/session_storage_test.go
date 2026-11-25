@@ -20,13 +20,12 @@ import (
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 //nolint:tparallel // Subtests exercise the shared session lifecycle in order.
 func TestSessionStorage(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	repository := sessionpostgres.New(pool)
 	userRepo := userpostgres.New(pool)
 	manager := transactionpostgres.New(pool)

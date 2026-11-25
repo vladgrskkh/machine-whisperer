@@ -18,7 +18,7 @@ const deviceMeTelemetryPath = "/v1/devices/me/telemetry"
 
 func TestDeviceMeTelemetryRequiresAClaimedActiveDevice(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	body := observationJSON(uuid.NewString(), f.observed)
 	wrongSecret := base64.RawURLEncoding.EncodeToString(make([]byte, 32))
 	for name, headers := range map[string]http.Header{
@@ -47,7 +47,7 @@ func TestDeviceMeTelemetryRequiresAClaimedActiveDevice(t *testing.T) {
 
 func TestDeviceMeTelemetryRequiresStrictObservationBody(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	body := observationJSON(eventID, f.observed)
 	otherMachine := createEnrollmentMachine(t, f.server, f.factory.AccessToken)
@@ -66,7 +66,7 @@ func TestDeviceMeTelemetryRequiresStrictObservationBody(t *testing.T) {
 
 func TestDeviceMeTelemetryPersistsToBoundMachineOnceAcrossRoutes(t *testing.T) {
 	t.Parallel()
-	f := setupDeviceTelemetry(t)
+	f := setupDeviceTelemetry(t, &deviceTelemetryPostgres)
 	eventID := uuid.NewString()
 	body := observationJSON(eventID, f.observed)
 	headers := bearer(f.device.APIKey)

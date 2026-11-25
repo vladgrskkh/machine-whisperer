@@ -14,12 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 func TestRefreshHTTPSameTokenRaceRevokesTheOnlySuccessor(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, race := newAuthRaceServer(t, pool)
 	initial := startHTTPSession(t, server)
 	independent := loginHTTPSession(t, server)
@@ -45,7 +44,7 @@ func TestRefreshHTTPSameTokenRaceRevokesTheOnlySuccessor(t *testing.T) {
 
 func TestRefreshHTTPLogoutRaceAlwaysRevokesSession(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, race := newAuthRaceServer(t, pool)
 	initial := startHTTPSession(t, server)
 	independent := loginHTTPSession(t, server)

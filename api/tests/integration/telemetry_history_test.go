@@ -18,7 +18,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 const (
@@ -250,7 +249,7 @@ func startHistoryServer(t *testing.T, analyticsURL string) (*httptest.Server, ht
 		RetryMax:        time.Minute,
 		Retention:       time.Hour,
 	}}
-	server := newAuthServer(t, testutil.Postgres(t), config)
+	server := newAuthServer(t, telemetryHistoryPostgres.Pool(t), config)
 	t.Cleanup(server.Close)
 	owner := startHTTPSession(t, server)
 	return server, bearer(owner.AccessToken), createEnrollmentMachine(t, server, owner.AccessToken)

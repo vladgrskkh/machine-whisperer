@@ -21,12 +21,11 @@ import (
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 func TestMachineRepositoryOwnershipAndTransactions(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	first, other := enrollmentMachines(t, pool)
 	ctx := t.Context()
 	repository := machinepostgres.New(pool)
@@ -71,7 +70,7 @@ func TestMachineRepositoryOwnershipAndTransactions(t *testing.T) {
 
 func TestDeviceRepositoryConsumesClaimAtomically(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	owned, other := enrollmentMachines(t, pool)
 	ctx := t.Context()
 	repository := devicepostgres.New(pool)
@@ -133,7 +132,7 @@ func TestDeviceRepositoryConsumesClaimAtomically(t *testing.T) {
 
 func TestDeviceRepositoryRejectsRevokedAndMissingDevices(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := enrollmentPostgres.Pool(t)
 	owned, _ := enrollmentMachines(t, pool)
 	value, _, _ := enrollmentDevice(owned.CreatedAt)
 	ctx := t.Context()

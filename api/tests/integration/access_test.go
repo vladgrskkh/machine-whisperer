@@ -32,7 +32,7 @@ import (
 
 func TestLoginHTTP(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	post := func(path, body string) (int, http.Header, []byte) {
@@ -86,7 +86,7 @@ func TestLoginHTTP(t *testing.T) {
 
 func TestProtectedRouteRequiresUserBearer(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	for _, value := range []string{"", "device-key", "Bearer device-key", "Basic abc", "Bearer a b", "Bearer " + strings.Repeat("x", 8193)} {
@@ -123,7 +123,7 @@ func newAuthServer(t *testing.T, pool *pgxpool.Pool, config application.Config) 
 
 func TestLoginHTTPRejectsInvalidBodies(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	for _, body := range []string{
@@ -166,7 +166,7 @@ func TestLoginHTTPRejectsInvalidBodies(t *testing.T) {
 
 func TestSharedAuthIPBudget(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	var seconds atomic.Int64
 	now := func() time.Time { return time.Unix(seconds.Load(), 0) }
 	server := newAuthServer(
@@ -248,7 +248,7 @@ func TestSharedAuthIPBudget(t *testing.T) {
 
 func TestLoginFailuresUseIPBudget(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 
@@ -266,7 +266,7 @@ func TestLoginFailuresUseIPBudget(t *testing.T) {
 
 func TestAccessJWTHTTP(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	id, signing, verifying, private := testutil.AuthKeys(t)
 	oldPublic, oldPrivate, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -410,7 +410,7 @@ func TestAccessJWTHTTP(t *testing.T) {
 
 func TestLoginMethodErrorsDoNotCache(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	response, err := server.Client().Get(server.URL + "/v1/auth/login")
@@ -422,7 +422,7 @@ func TestLoginMethodErrorsDoNotCache(t *testing.T) {
 
 func TestAccessJWTsRemainValidAfterLogoutAndRefreshReuse(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server, setElapsed := newSessionServer(t, pool)
 	loggedOut := startHTTPSession(t, server)
 	reused := loginHTTPSession(t, server)

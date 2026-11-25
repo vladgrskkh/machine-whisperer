@@ -12,10 +12,13 @@ Use Superpowers subagent driven development with an independent review for each 
 - [x] Register POST /v1/devices/me/telemetry with the existing device middleware. Resolve its machine from the authenticated principal and run the same ingest code as the compatibility route. Preserve the existing owner history route.
 - [x] Switch demo k6 submissions to the new URL. Update the API README and run focused integration checks.
 
-## 2. Shared PostgreSQL test container
+## 2. PostgreSQL containers per integration suite
 
-- [x] Use package TestMain to manage one Testcontainer in api/tests/integration. Keep a separate pool and migrated schema per test and clean them up before termination.
-- [x] Verify schema isolation, go test selection and failure cleanup. Run the full race enabled integration suite and compare elapsed time with the 272.6 second baseline.
+- [x] Give each logical suite in `api/tests/integration` its own named PostgreSQL fixture. Start its container on first use and close every started container from the package's `TestMain`. Keep a separate pool and migrated schema per test.
+- [x] Verify server sharing within a suite, server isolation between suites, schema isolation, Go test selection, and cleanup. Compare the full race-enabled run at `-parallel=4` with the 272.6-second per-test-container baseline and the 74.2-second package-wide-container trial.
+
+The per-suite run took 108.2 seconds locally. It used a temporary in-memory
+PostgreSQL data mount because the Docker Desktop virtual disk was full.
 
 ## 3. Deployment tests and Compose E2E
 

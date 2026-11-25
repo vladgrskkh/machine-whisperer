@@ -43,7 +43,7 @@ type detectorFixture struct {
 
 func setupDetector(t *testing.T) detectorFixture {
 	t.Helper()
-	return detectorFixture{setupDeviceTelemetry(t)}
+	return detectorFixture{setupDeviceTelemetry(t, &telemetryDetectorPostgres)}
 }
 
 func (f detectorFixture) baseline(t *testing.T, stddev float64) machineBaselineResponse {
@@ -253,7 +253,7 @@ func TestTelemetryDetectorZeroRecoveryThresholdRequiresExactMean(t *testing.T) {
 		AlertZThreshold: 3, RecoveryZThreshold: 0,
 		AlertSustainedObservations: 3, RecoverySustainedObservations: 3,
 	}
-	f := detectorFixture{setupDeviceTelemetryWithConfig(t, config)}
+	f := detectorFixture{setupDeviceTelemetryWithConfig(t, &telemetryDetectorPostgres, config)}
 	readMachineBaseline(t, authHTTPRequest(t, f.server, http.MethodPut, machinesPath+"/"+f.machineID+"/baseline",
 		`{"mean_rms_g":0,"stddev_rms_g":1e300}`, bearer(f.factory.AccessToken)))
 

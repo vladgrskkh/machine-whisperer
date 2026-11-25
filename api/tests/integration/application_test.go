@@ -19,13 +19,12 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 )
 
 func TestAccountCreation(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	hasher := password.Argon2id{}
 	signup := auth.NewSignup(postgres.New(pool), hasher)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -68,7 +67,7 @@ func TestAccountCreation(t *testing.T) {
 
 func TestConcurrentSignup(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{})
 	results := make(chan error, 6)
 	start := make(chan struct{})
@@ -103,7 +102,7 @@ func TestConcurrentSignup(t *testing.T) {
 //nolint:tparallel // The database failure check must follow all signup error cases.
 func TestSignupHTTP(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	request := func(t *testing.T, body string) (int, map[string]json.RawMessage) {
@@ -174,7 +173,7 @@ func TestSignupHTTP(t *testing.T) {
 
 func TestApplicationWithDatabase(t *testing.T) {
 	t.Parallel()
-	existing := testutil.Postgres(t)
+	existing := accountPostgres.Pool(t)
 	config := authConfig(t)
 	config.Database.URL = existing.Config().ConnString()
 	app, err := application.New(t.Context(), config, application.WithDatabase(config.Database))
@@ -195,7 +194,7 @@ func TestApplicationWithDatabase(t *testing.T) {
 
 func TestSignupRateLimit(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := accountPostgres.Pool(t)
 	server := newAuthServer(
 		t,
 		pool,

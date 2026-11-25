@@ -12,13 +12,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 )
 
 func TestMachineBaselineHTTP(t *testing.T) {
 	t.Parallel()
-	pool := testutil.Postgres(t)
+	pool := machineBaselinePostgres.Pool(t)
 	server, _ := newSessionServer(t, pool)
 	_, owner := signupEnrollmentUser(t, server, httpCredentials)
 	_, other := signupEnrollmentUser(t, server, `{"email":"other@example.com","password":"long enough password"}`)
