@@ -4,8 +4,9 @@ components:
       properties:
         acknowledged_at:
           format: date-time
-          nullable: true
-          type: string
+          type:
+            - string
+            - "null"
         id:
           format: uuid
           type: string
@@ -22,21 +23,25 @@ components:
           type: number
         recovered_at:
           format: date-time
-          nullable: true
-          type: string
+          type:
+            - string
+            - "null"
         recovery_baseline_version:
           format: int64
           minimum: 1
-          nullable: true
-          type: integer
+          type:
+            - integer
+            - "null"
         recovery_device_id:
           format: uuid
-          nullable: true
-          type: string
+          type:
+            - string
+            - "null"
         recovery_event_id:
           format: uuid
-          nullable: true
-          type: string
+          type:
+            - string
+            - "null"
         trigger_baseline_version:
           format: int64
           minimum: 1
@@ -53,8 +58,7 @@ components:
           minimum: 0
           type: number
         trigger_stddev_rms_g:
-          description: Baseline RMS vibration standard deviation at the trigger, in
-            g. Strictly positive.
+          description: Baseline RMS vibration standard deviation at the trigger, in g. Strictly positive.
           format: double
           minimum: 0
           type: number
@@ -66,22 +70,22 @@ components:
           format: date-time
           type: string
       required:
-      - acknowledged_at
-      - id
-      - last_z_score
-      - machine_id
-      - peak_z_score
-      - recovered_at
-      - recovery_baseline_version
-      - recovery_device_id
-      - recovery_event_id
-      - trigger_baseline_version
-      - trigger_device_id
-      - trigger_event_id
-      - trigger_mean_rms_g
-      - trigger_stddev_rms_g
-      - trigger_z_score
-      - triggered_at
+        - acknowledged_at
+        - id
+        - last_z_score
+        - machine_id
+        - peak_z_score
+        - recovered_at
+        - recovery_baseline_version
+        - recovery_device_id
+        - recovery_event_id
+        - trigger_baseline_version
+        - trigger_device_id
+        - trigger_event_id
+        - trigger_mean_rms_g
+        - trigger_stddev_rms_g
+        - trigger_z_score
+        - triggered_at
       type: object
     Baseline:
       properties:
@@ -106,11 +110,11 @@ components:
           minimum: 1
           type: integer
       required:
-      - machine_id
-      - mean_rms_g
-      - stddev_rms_g
-      - updated_at
-      - version
+        - machine_id
+        - mean_rms_g
+        - stddev_rms_g
+        - updated_at
+        - version
       type: object
     BaselineInput:
       properties:
@@ -120,21 +124,18 @@ components:
           minimum: 0
           type: number
         stddev_rms_g:
-          description: Standard deviation of RMS vibration in g. Must be finite and
-            strictly positive.
-          exclusiveMinimum: true
+          description: Standard deviation of RMS vibration in g. Must be finite and strictly positive.
           format: double
-          minimum: 0
           type: number
+          exclusiveMinimum: 0
       required:
-      - mean_rms_g
-      - stddev_rms_g
+        - mean_rms_g
+        - stddev_rms_g
       type: object
     ClaimPayload:
       properties:
         claim_code:
-          description: Independent 32-byte claim secret encoded as canonical unpadded
-            base64url.
+          description: Independent 32-byte claim secret encoded as canonical unpadded base64url.
           maxLength: 43
           minLength: 43
           type: string
@@ -143,12 +144,12 @@ components:
           type: string
         v:
           enum:
-          - 1
+            - 1
           type: integer
       required:
-      - claim_code
-      - device_id
-      - v
+        - claim_code
+        - device_id
+        - v
       type: object
     ClaimedDevice:
       properties:
@@ -160,34 +161,31 @@ components:
           type: string
         status:
           enum:
-          - claimed
+            - claimed
           type: string
       required:
-      - device_id
-      - machine_id
-      - status
+        - device_id
+        - machine_id
+        - status
       type: object
     Credentials:
       properties:
         email:
-          description: Trimmed and lowercased before validation. The normalized address
-            is at most 254 bytes.
+          description: Trimmed and lowercased before validation. The normalized address is at most 254 bytes.
           type: string
         password:
-          description: Preserved verbatim. Requires 15–128 Unicode code points and
-            at most 512 bytes.
+          description: Preserved verbatim. Requires 15–128 Unicode code points and at most 512 bytes.
           maxLength: 128
           minLength: 15
           type: string
       required:
-      - email
-      - password
+        - email
+        - password
       type: object
     DeviceClaim:
       properties:
         claim_code:
-          description: Single-use claim code from the QR payload, a canonical unpadded
-            base64url encoding of 32 bytes.
+          description: Single-use claim code from the QR payload, a canonical unpadded base64url encoding of 32 bytes.
           maxLength: 43
           minLength: 43
           type: string
@@ -198,9 +196,9 @@ components:
           format: uuid
           type: string
       required:
-      - claim_code
-      - device_id
-      - machine_id
+        - claim_code
+        - device_id
+        - machine_id
       type: object
     ErrorDetail:
       properties:
@@ -211,15 +209,15 @@ components:
           description: Human-readable detail. The wording may change.
           type: string
       required:
-      - code
-      - message
+        - code
+        - message
       type: object
     ErrorResponse:
       properties:
         error:
           $ref: '#/components/schemas/ErrorDetail'
       required:
-      - error
+        - error
       type: object
     HistoryItem:
       properties:
@@ -227,8 +225,9 @@ components:
           description: RMS current in amperes, or null when absent.
           format: double
           minimum: 0
-          nullable: true
-          type: number
+          type:
+            - number
+            - "null"
         device_id:
           format: uuid
           type: string
@@ -236,8 +235,9 @@ components:
           description: Dominant frequency in Hz, or null when absent.
           format: double
           minimum: 0
-          nullable: true
-          type: number
+          type:
+            - number
+            - "null"
         event_id:
           format: uuid
           type: string
@@ -246,15 +246,15 @@ components:
           type: string
         operating_state:
           enum:
-          - running
-          - unknown
+            - running
+            - unknown
           type: string
         received_at:
           format: date-time
           type: string
         schema_version:
           enum:
-          - 1
+            - 1
           type: integer
         vibration_rms_g:
           description: RMS vibration in g.
@@ -262,15 +262,15 @@ components:
           minimum: 0
           type: number
       required:
-      - current_rms_a
-      - device_id
-      - dominant_frequency_hz
-      - event_id
-      - observed_at
-      - operating_state
-      - received_at
-      - schema_version
-      - vibration_rms_g
+        - current_rms_a
+        - device_id
+        - dominant_frequency_hz
+        - event_id
+        - observed_at
+        - operating_state
+        - received_at
+        - schema_version
+        - vibration_rms_g
       type: object
     HistoryPage:
       properties:
@@ -278,15 +278,16 @@ components:
           items:
             $ref: '#/components/schemas/HistoryItem'
           type: array
+          uniqueItems: false
         next_cursor:
-          description: Opaque cursor for the next page, or null at the end of the
-            history.
+          description: Opaque cursor for the next page, or null at the end of the history.
           maxLength: 512
-          nullable: true
-          type: string
+          type:
+            - string
+            - "null"
       required:
-      - items
-      - next_cursor
+        - items
+        - next_cursor
       type: object
     Machine:
       properties:
@@ -301,36 +302,35 @@ components:
           minLength: 1
           type: string
       required:
-      - created_at
-      - id
-      - name
+        - created_at
+        - id
+        - name
       type: object
     MachineName:
       properties:
         name:
-          description: After trimming, the name must contain 1–100 Unicode code points
-            and no control characters.
+          description: After trimming, the name must contain 1–100 Unicode code points and no control characters.
           minLength: 1
           type: string
       required:
-      - name
+        - name
       type: object
     Observation:
       properties:
         current_rms_a:
-          description: Finite, nonnegative RMS current in amperes when supplied. May
-            be omitted or null.
+          description: Finite, nonnegative RMS current in amperes when supplied. May be omitted or null.
           format: double
           minimum: 0
-          nullable: true
-          type: number
+          type:
+            - number
+            - "null"
         dominant_frequency_hz:
-          description: Finite, nonnegative dominant frequency in Hz when supplied.
-            May be omitted or null.
+          description: Finite, nonnegative dominant frequency in Hz when supplied. May be omitted or null.
           format: double
           minimum: 0
-          nullable: true
-          type: number
+          type:
+            - number
+            - "null"
         event_id:
           example: 77777777-7777-4777-8777-777777777777
           format: uuid
@@ -341,12 +341,12 @@ components:
           type: string
         operating_state:
           enum:
-          - running
-          - unknown
+            - running
+            - unknown
           type: string
         schema_version:
           enum:
-          - 1
+            - 1
           type: integer
         vibration_rms_g:
           description: Finite, nonnegative RMS vibration in g.
@@ -354,17 +354,16 @@ components:
           minimum: 0
           type: number
       required:
-      - event_id
-      - observed_at
-      - operating_state
-      - schema_version
-      - vibration_rms_g
+        - event_id
+        - observed_at
+        - operating_state
+        - schema_version
+        - vibration_rms_g
       type: object
     ProvisionedDevice:
       properties:
         api_key:
-          description: Issued once as <device_id>.<secret>. The secret is 32 bytes
-            encoded as unpadded base64url.
+          description: Issued once as <device_id>.<secret>. The secret is 32 bytes encoded as unpadded base64url.
           type: string
         claim_payload:
           $ref: '#/components/schemas/ClaimPayload'
@@ -372,9 +371,9 @@ components:
           format: uuid
           type: string
       required:
-      - api_key
-      - claim_payload
-      - device_id
+        - api_key
+        - claim_payload
+        - device_id
       type: object
     RefreshToken:
       properties:
@@ -384,7 +383,7 @@ components:
           minLength: 43
           type: string
       required:
-      - refresh_token
+        - refresh_token
       type: object
     TokenPair:
       properties:
@@ -392,8 +391,7 @@ components:
           description: User access JWT.
           type: string
         expires_in:
-          description: Access token lifetime in seconds. The current API issues tokens
-            for 900 seconds.
+          description: Access token lifetime in seconds. The current API issues tokens for 900 seconds.
           example: 900
           type: integer
         refresh_token:
@@ -403,13 +401,13 @@ components:
           type: string
         token_type:
           enum:
-          - Bearer
+            - Bearer
           type: string
       required:
-      - access_token
-      - expires_in
-      - refresh_token
-      - token_type
+        - access_token
+        - expires_in
+        - refresh_token
+        - token_type
       type: object
     User:
       properties:
@@ -424,29 +422,28 @@ components:
           format: uuid
           type: string
       required:
-      - created_at
-      - email
-      - id
+        - created_at
+        - email
+        - id
       type: object
   securitySchemes:
     DeviceBearer:
-      description: Send the device credential in <device_id>.<secret> form. The API
-        assigns the telemetry_writer capability to the authenticated device key.
+      description: Send the device credential in <device_id>.<secret> form. The device must be claimed. Authentication supplies the telemetry_writer role.
       scheme: bearer
       type: http
     UserAccessJWT:
       bearerFormat: JWT
-      description: Send the user access JWT. Refresh and logout use the refresh token
-        in the JSON body.
+      description: Send the user access JWT. Refresh and logout use the refresh token in the JSON body.
       scheme: bearer
       type: http
+externalDocs:
+  description: Machine Whisperer source repository.
+  url: https://github.com/vladgrskkh/machine-whisperer
 info:
-  contact: {}
-  description: HTTP API for user accounts, device enrollment, machines, alerts and
-    telemetry.
+  description: HTTP API for user accounts, device enrollment, machines, alerts and telemetry.
   title: Machine Whisperer API
   version: "1"
-openapi: 3.0.3
+openapi: 3.1.0
 paths:
   /healthz:
     get:
@@ -457,7 +454,7 @@ paths:
           description: Process is running.
       summary: Check process health
       tags:
-      - operational
+        - operational
   /internal/v1/device-provisioning:
     post:
       description: |-
@@ -530,23 +527,22 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Provision a device
       tags:
-      - internal
+        - internal
   /v1/alerts/{id}/acknowledge:
     post:
-      description: The alert must belong to the caller. Repeated acknowledgements
-        preserve the first timestamp and leave the recovery state unchanged.
+      description: The alert must belong to the caller. Repeated acknowledgements preserve the first timestamp and leave the recovery state unchanged.
       operationId: acknowledgeAlert
       parameters:
-      - description: Alert UUID.
-        in: path
-        name: id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Alert UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
       responses:
         "204":
           description: Alert acknowledged.
@@ -604,10 +600,10 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Acknowledge an alert
       tags:
-      - alerts
+        - alerts
   /v1/auth/login:
     post:
       description: |-
@@ -620,9 +616,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/Credentials'
+              description: Email and password.
+              summary: body
         description: Email and password.
         required: true
-        x-originalParamName: body
       responses:
         "200":
           content:
@@ -685,7 +682,7 @@ paths:
                 type: string
       summary: Start a user session
       tags:
-      - auth
+        - auth
   /v1/auth/logout:
     post:
       description: |-
@@ -698,9 +695,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RefreshToken'
+              description: Refresh token.
+              summary: body
         description: Refresh token.
         required: true
-        x-originalParamName: body
       responses:
         "204":
           description: Session revoked or already unavailable.
@@ -718,7 +716,7 @@ paths:
           description: Unexpected server error (`internal_error`).
       summary: Revoke a user session
       tags:
-      - auth
+        - auth
   /v1/auth/refresh:
     post:
       description: |-
@@ -732,9 +730,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RefreshToken'
+              description: Current refresh token.
+              summary: body
         description: Current refresh token.
         required: true
-        x-originalParamName: body
       responses:
         "200":
           content:
@@ -797,7 +796,7 @@ paths:
                 type: string
       summary: Rotate session tokens
       tags:
-      - auth
+        - auth
   /v1/auth/signup:
     post:
       description: |-
@@ -810,9 +809,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/Credentials'
+              description: Email and password.
+              summary: body
         description: Email and password.
         required: true
-        x-originalParamName: body
       responses:
         "201":
           content:
@@ -851,7 +851,7 @@ paths:
           description: Unexpected server error (`internal_error`).
       summary: Register a user
       tags:
-      - auth
+        - auth
   /v1/devices/claim:
     post:
       description: |-
@@ -864,9 +864,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/DeviceClaim'
+              description: QR claim credentials and selected machine ID.
+              summary: body
         description: QR claim credentials and selected machine ID.
         required: true
-        x-originalParamName: body
       responses:
         "200":
           content:
@@ -943,10 +944,10 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Claim a device for a machine
       tags:
-      - devices
+        - devices
   /v1/devices/me/telemetry:
     post:
       description: |-
@@ -962,13 +963,17 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/Observation'
+              description: Telemetry observation.
+              summary: body
         description: Telemetry observation.
         required: true
-        x-originalParamName: body
       responses:
         "202":
-          description: Observation durably queued for export or an exact accepted
-            retry.
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Observation durably queued for export or an exact accepted retry.
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1005,8 +1010,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: The device is unclaimed or revoked, or the machine is unavailable
-            to it (`machine_not_found`).
+          description: The device is unclaimed or revoked, or the machine is unavailable to it (`machine_not_found`).
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1017,8 +1021,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: The event ID was reused with different values, or the observation
-            is out of order or outside its acceptance window (`telemetry_conflict`).
+          description: The event ID was reused with different values, or the observation is out of order or outside its acceptance window (`telemetry_conflict`).
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1036,10 +1039,10 @@ paths:
               schema:
                 type: string
       security:
-      - DeviceBearer: []
+        - DeviceBearer: []
       summary: Submit a device telemetry observation
       tags:
-      - telemetry
+        - telemetry
   /v1/machines:
     get:
       description: Returns an empty array when the user owns no machines.
@@ -1085,10 +1088,10 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: List the user's machines
       tags:
-      - machines
+        - machines
     post:
       description: |-
         Creates a machine owned by the authenticated user.
@@ -1099,9 +1102,10 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/MachineName'
+              description: Machine name.
+              summary: body
         description: Machine name.
         required: true
-        x-originalParamName: body
       responses:
         "201":
           content:
@@ -1152,22 +1156,22 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Create a machine
       tags:
-      - machines
+        - machines
   /v1/machines/{id}:
     get:
       description: The machine must belong to the caller.
       operationId: getMachine
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
       responses:
         "200":
           content:
@@ -1229,23 +1233,22 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Get a machine
       tags:
-      - machines
+        - machines
   /v1/machines/{id}/alerts:
     get:
-      description: The machine must belong to the caller. Orders alerts by newest
-        trigger first and returns an empty array when none exist.
+      description: The machine must belong to the caller. Orders alerts by newest trigger first and returns an empty array when none exist.
       operationId: listMachineAlerts
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
       responses:
         "200":
           content:
@@ -1309,22 +1312,22 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: List machine alerts
       tags:
-      - alerts
+        - alerts
   /v1/machines/{id}/baseline:
     get:
       description: The machine must belong to the caller.
       operationId: getMachineBaseline
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
       responses:
         "200":
           content:
@@ -1386,31 +1389,32 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Get the current vibration baseline
       tags:
-      - machines
+        - machines
     put:
       description: |-
         The machine must belong to the caller. Repeating the same values preserves the version and timestamp.
         Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
       operationId: setMachineBaseline
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/BaselineInput'
+              description: RMS vibration mean and standard deviation in g.
+              summary: body
         description: RMS vibration mean and standard deviation in g.
         required: true
-        x-originalParamName: body
       responses:
         "200":
           content:
@@ -1472,10 +1476,10 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Set the current vibration baseline
       tags:
-      - machines
+        - machines
   /v1/machines/{machine_id}/telemetry:
     get:
       description: |-
@@ -1484,29 +1488,28 @@ paths:
         Provide each of limit and cursor at most once.
       operationId: listMachineTelemetry
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: machine_id
-        required: true
-        schema:
-          format: uuid
-          type: string
-      - description: Maximum number of observations.
-        in: query
-        name: limit
-        schema:
-          default: 100
-          maximum: 1000
-          minimum: 1
-          type: integer
-      - description: Opaque cursor bound to this machine. Use the previous next_cursor.
-          Maximum 512 bytes.
-        in: query
-        name: cursor
-        schema:
-          maxLength: 512
-          minLength: 1
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: machine_id
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - description: Maximum number of observations.
+          in: query
+          name: limit
+          schema:
+            default: 100
+            maximum: 1000
+            minimum: 1
+            type: integer
+        - description: Opaque cursor bound to this machine. Use the previous next_cursor. Maximum 512 bytes.
+          in: query
+          name: cursor
+          schema:
+            maxLength: 512
+            minLength: 1
+            type: string
       responses:
         "200":
           content:
@@ -1579,10 +1582,10 @@ paths:
               schema:
                 type: string
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Read machine telemetry history
       tags:
-      - telemetry
+        - telemetry
     post:
       deprecated: true
       description: |-
@@ -1594,25 +1597,29 @@ paths:
         Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
       operationId: ingestMachineTelemetry
       parameters:
-      - description: Machine UUID.
-        in: path
-        name: machine_id
-        required: true
-        schema:
-          format: uuid
-          type: string
+        - description: Machine UUID.
+          in: path
+          name: machine_id
+          required: true
+          schema:
+            format: uuid
+            type: string
       requestBody:
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/Observation'
+              description: Telemetry observation.
+              summary: body
         description: Telemetry observation.
         required: true
-        x-originalParamName: body
       responses:
         "202":
-          description: Observation durably queued for export or an exact accepted
-            retry.
+          content:
+            application/json:
+              schema:
+                type: object
+          description: Observation durably queued for export or an exact accepted retry.
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1649,8 +1656,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: The device is unclaimed or revoked, or the machine is unavailable
-            to it (`machine_not_found`).
+          description: The device is unclaimed or revoked, or the machine is unavailable to it (`machine_not_found`).
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1661,8 +1667,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: The event ID was reused with different values, or the observation
-            is out of order or outside its acceptance window (`telemetry_conflict`).
+          description: The event ID was reused with different values, or the observation is out of order or outside its acceptance window (`telemetry_conflict`).
           headers:
             Cache-Control:
               description: Always no-store.
@@ -1680,10 +1685,10 @@ paths:
               schema:
                 type: string
       security:
-      - DeviceBearer: []
+        - DeviceBearer: []
       summary: Submit a telemetry observation by machine ID
       tags:
-      - telemetry
+        - telemetry
   /v1/users/me:
     get:
       operationId: getCurrentUser
@@ -1699,8 +1704,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-          description: Invalid or missing bearer credentials, or the user no longer
-            exists (`authentication_failed`).
+          description: Invalid or missing bearer credentials, or the user no longer exists (`authentication_failed`).
           headers:
             WWW-Authenticate:
               description: Bearer
@@ -1713,14 +1717,14 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
           description: Unexpected server error (`internal_error`).
       security:
-      - UserAccessJWT: []
+        - UserAccessJWT: []
       summary: Get the current user
       tags:
-      - users
+        - users
 servers:
-- url: /
+  - url: /
 tags:
-- description: Restricted manufacturing operations.
-  name: internal
-- description: API listener health probes.
-  name: operational
+  - description: Restricted manufacturing operations.
+    name: internal
+  - description: API listener health probes.
+    name: operational

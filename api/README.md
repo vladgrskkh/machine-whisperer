@@ -2,7 +2,7 @@
 
 ## HTTP contract
 
-The generated [OpenAPI 3.0.3 YAML](docs/openapi/openapi.yaml) and
+The generated [OpenAPI 3.1 YAML](docs/openapi/openapi.yaml) and
 [Swagger 2.0 YAML](docs/openapi/swagger.yaml) describe all API operations,
 including restricted manufacturing and the process health probe. Both files
 come from the same Go handler annotations.
@@ -17,10 +17,11 @@ make swagger-check
 ```
 
 Commit both regenerated files with the change. CI runs `make swagger-check`
-to regenerate and compare both copies. The pinned Swaggo CLI first generates
-Swagger 2.0, then the Go tool in `tools/openapi` converts and validates OpenAPI
-3.0.3 with the same operation inventory. The commands use the module's Go
-toolchain and download generation dependencies on first use.
+to regenerate and compare both copies. Swaggo v1 generates Swagger 2.0, and Swaggo v2 generates OpenAPI 3.1 from the
+same handler comments. A pinned yq expression fixes the OpenAPI 3 schema
+keywords for nullable fields and the strictly positive standard deviation.
+The commands use the Go toolchain and download generation dependencies on
+first use.
 
 ## Local development
 
