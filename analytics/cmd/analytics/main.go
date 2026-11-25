@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -11,16 +12,20 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
 )
 
 const (
-	headerTimeout   = 5 * time.Second
-	readTimeout     = 15 * time.Second
-	writeTimeout    = 45 * time.Second
-	idleTimeout     = time.Minute
-	shutdownTimeout = 10 * time.Second
+	headerTimeout      = 5 * time.Second
+	readTimeout        = 15 * time.Second
+	writeTimeout       = 45 * time.Second
+	idleTimeout        = time.Minute
+	shutdownTimeout    = 10 * time.Second
+	metricsTimeout     = 5 * time.Second
+	metricsIdleTimeout = 30 * time.Second
 )
 
 func run(ctx context.Context, logger *slog.Logger) error {
@@ -33,33 +38,79 @@ func run(ctx context.Context, logger *slog.Logger) error {
 		return err
 	}
 	defer app.Close()
-	server := &http.Server{
+	return serveHTTP(ctx, logger, cfg, app.Routes(), app.MetricsHandler)
+}
+
+func serveHTTP(
+	ctx context.Context, logger *slog.Logger, cfg config.Config, businessHandler, metricsHandler http.Handler,
+) error {
+	metricsAddress, err := resolveMetricsAddress(cfg.MetricsAddress)
+	if err != nil {
+		return err
+	}
+	group, ctx := errgroup.WithContext(ctx)
+	baseContext := func(net.Listener) context.Context { return ctx }
+	business := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           app.Routes(),
-		BaseContext:       func(net.Listener) context.Context { return ctx },
+		Handler:           businessHandler,
+		BaseContext:       baseContext,
 		ReadHeaderTimeout: headerTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
 		IdleTimeout:       idleTimeout,
 	}
-	result := make(chan error, 1)
-	go func() { result <- server.ListenAndServe() }()
-	logger.InfoContext(ctx, "analytics server started")
-	select {
-	case err = <-result:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return errors.New("analytics HTTP server failed")
-		}
-	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
-		defer cancel()
-		if err = server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-			return errors.New("analytics HTTP shutdown failed")
-		}
+	metrics := &http.Server{
+		Addr:              metricsAddress,
+		Handler:           metricsHandler,
+		BaseContext:       baseContext,
+		ReadHeaderTimeout: metricsTimeout,
+		ReadTimeout:       metricsTimeout,
+		WriteTimeout:      metricsTimeout,
+		IdleTimeout:       metricsIdleTimeout,
 	}
-	logger.InfoContext(ctx, "analytics server stopped")
+	for _, listener := range []struct {
+		name   string
+		server *http.Server
+	}{{"analytics", business}, {"metrics", metrics}} {
+		group.Go(func() error {
+			if err := listener.server.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
+				return fmt.Errorf("serve %s HTTP: %w", listener.name, err)
+			}
+			return nil
+		})
+		group.Go(func() error {
+			<-ctx.Done()
+			shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+			defer cancel()
+			if err := listener.server.Shutdown(shutdown); err != nil {
+				_ = listener.server.Close()
+				return fmt.Errorf("shut down %s HTTP: %w", listener.name, err)
+			}
+			return nil
+		})
+	}
+
+	logger.InfoContext(ctx, "starting analytics servers")
+	if err := group.Wait(); err != nil {
+		return err
+	}
+	logger.InfoContext(ctx, "analytics servers stopped")
 	return nil
+}
+
+func resolveMetricsAddress(address string) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return "", errors.New("ANALYTICS_METRICS_ADDRESS must include a specific host and port")
+	}
+	resolved, err := net.ResolveTCPAddr("tcp", address)
+	if err != nil {
+		return "", fmt.Errorf("resolve ANALYTICS_METRICS_ADDRESS: %w", err)
+	}
+	if resolved.IP == nil || resolved.IP.IsUnspecified() {
+		return "", errors.New("ANALYTICS_METRICS_ADDRESS cannot use a wildcard address")
+	}
+	return resolved.String(), nil
 }
 
 func main() {

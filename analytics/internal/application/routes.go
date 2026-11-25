@@ -11,12 +11,16 @@ import (
 
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
+	bearer := middleware.Bearer(a.ingestKey)
+	if a.metrics != nil {
+		router.Use(middleware.HTTP(router, a.metrics))
+	}
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	router.With(middleware.Bearer(a.ingestKey)).
+	router.With(bearer).
 		Post("/internal/v1/telemetry-batches", telemetry.NewBatch(a.ingest).ServeHTTP)
-	router.With(middleware.Bearer(a.ingestKey)).
+	router.With(bearer).
 		Get("/internal/v1/machines/{machine_id}/telemetry", telemetry.NewHistory(a.history).ServeHTTP)
 	return router
 }

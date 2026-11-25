@@ -45,17 +45,24 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerID, machineID string)
 	return values, nil
 }
 
-func (r *Repository) Acknowledge(ctx context.Context, ownerID, alertID string) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE machine_alerts a
-		SET acknowledged_at=COALESCE(a.acknowledged_at,clock_timestamp())
-		FROM machines m WHERE m.id=a.machine_id AND m.owner_user_id=$1 AND a.id=$2`, ownerID, alertID)
+func (r *Repository) Acknowledge(ctx context.Context, ownerID, alertID string) (bool, error) {
+	var owned, changed bool
+	// Lock before testing acknowledgement so concurrent retries see the winning update.
+	err := r.pool.QueryRow(ctx, `WITH owned AS (
+		SELECT a.id,a.acknowledged_at FROM machine_alerts a JOIN machines m ON m.id=a.machine_id
+		WHERE m.owner_user_id=$1 AND a.id=$2 FOR UPDATE OF a
+	), acknowledged AS (
+		UPDATE machine_alerts a SET acknowledged_at=clock_timestamp()
+		FROM owned WHERE a.id=owned.id AND owned.acknowledged_at IS NULL RETURNING 1
+	)
+	SELECT EXISTS (SELECT FROM owned), EXISTS (SELECT FROM acknowledged)`, ownerID, alertID).Scan(&owned, &changed)
 	if err != nil {
-		return fmt.Errorf("acknowledge owner machine alert: %w", err)
+		return false, fmt.Errorf("acknowledge owner machine alert: %w", err)
 	}
-	if tag.RowsAffected() != 1 {
-		return alert.ErrNotFound
+	if !owned {
+		return false, alert.ErrNotFound
 	}
-	return nil
+	return changed, nil
 }
 
 func scanAlert(row pgx.CollectableRow) (alert.Alert, error) {

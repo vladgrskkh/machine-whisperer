@@ -27,7 +27,88 @@ func TestRunReturnsListenError(t *testing.T) {
 
 	assert.Error(t, run(context.Background(), listener.Addr().String(), http.NotFoundHandler(), func(context.Context) {
 		t.Error("worker started without an HTTP listener")
-	}))
+	}, testMetricsEndpoint()))
+}
+
+func TestRunReturnsMetricsBindErrorBeforeStartingWorkers(t *testing.T) {
+	t.Setenv("API_TLS_CERT_FILE", "")
+	t.Setenv("API_TLS_KEY_FILE", "")
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = occupied.Close() })
+
+	err = run(t.Context(), "127.0.0.1:0", http.NotFoundHandler(), func(context.Context) {
+		t.Error("worker started without a metrics listener")
+	}, metricsEndpoint{address: occupied.Addr().String(), handler: http.NotFoundHandler()})
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "metrics")
+}
+
+func TestRunServesMetricsSeparately(t *testing.T) {
+	t.Setenv("API_TLS_CERT_FILE", "")
+	t.Setenv("API_TLS_KEY_FILE", "")
+	business := availableAddress(t)
+	metrics := availableAddress(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	results := make(chan error, 1)
+	handler := http.NewServeMux()
+	handler.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	go func() {
+		results <- run(ctx, business, http.NotFoundHandler(), func(ctx context.Context) {
+			<-ctx.Done()
+		}, metricsEndpoint{address: metrics, handler: handler})
+	}()
+	t.Cleanup(cancel)
+	client := &http.Client{Timeout: time.Second}
+	status := func(address string) int {
+		response, err := client.Get("http://" + address + "/metrics")
+		if err != nil {
+			return 0
+		}
+		_ = response.Body.Close()
+		return response.StatusCode
+	}
+	require.Eventually(t, func() bool {
+		return status(metrics) == http.StatusNoContent && status(business) == http.StatusNotFound
+	}, 2*time.Second, 10*time.Millisecond)
+	cancel()
+	select {
+	case err := <-results:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("servers did not shut down")
+	}
+	assert.Zero(t, status(metrics))
+	assert.Zero(t, status(business))
+}
+
+func availableAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	address := listener.Addr().String()
+	require.NoError(t, listener.Close())
+	return address
+}
+
+func TestResolveMetricsAddressRejectsWildcardAddresses(t *testing.T) {
+	t.Parallel()
+	for _, address := range []string{":0", "0.0.0.0:0", "[::]:0", "[::ffff:0.0.0.0]:0", "[::%loopback]:0", "127.0.0.1:"} {
+		_, err := resolveMetricsAddress(address)
+		assert.Error(t, err, address)
+	}
+	address, err := resolveMetricsAddress("localhost:9091")
+	require.NoError(t, err)
+	host, port, err := net.SplitHostPort(address)
+	require.NoError(t, err)
+	assert.True(t, net.ParseIP(host).IsLoopback())
+	assert.Equal(t, "9091", port)
+}
+
+func testMetricsEndpoint() metricsEndpoint {
+	return metricsEndpoint{address: "127.0.0.1:0", handler: http.NotFoundHandler()}
 }
 
 func TestRunShutsDownOnCancellation(t *testing.T) {
@@ -52,7 +133,7 @@ func TestRunShutsDownOnCancellation(t *testing.T) {
 		<-workerCanStop
 	}
 	result := make(chan error, 1)
-	go func() { result <- run(ctx, address, http.NotFoundHandler(), runWorkers) }()
+	go func() { result <- run(ctx, address, http.NotFoundHandler(), runWorkers, testMetricsEndpoint()) }()
 	client := &http.Client{Timeout: time.Second}
 	require.Eventually(t, func() bool {
 		response, err := client.Get("http://" + address + "/unknown")
@@ -93,7 +174,7 @@ func TestRunRejectsIncompleteTLS(t *testing.T) {
 			defer cancel()
 			err := run(ctx, "127.0.0.1:0", http.NotFoundHandler(), func(context.Context) {
 				t.Error("worker started with incomplete TLS configuration")
-			})
+			}, testMetricsEndpoint())
 			require.Error(t, err)
 			assert.NotContains(t, err.Error(), "private-tls-path")
 		})
@@ -125,7 +206,9 @@ func TestRunServesHTTPS(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	result := make(chan error, 1)
-	go func() { result <- run(ctx, address, http.NotFoundHandler(), func(context.Context) {}) }()
+	go func() {
+		result <- run(ctx, address, http.NotFoundHandler(), func(context.Context) {}, testMetricsEndpoint())
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {

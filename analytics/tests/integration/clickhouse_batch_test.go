@@ -69,9 +69,14 @@ func TestClickHouseBatch(t *testing.T) {
 	t.Cleanup(app.Close)
 	srv := httptest.NewServer(app.Routes())
 	defer srv.Close()
+	metrics := httptest.NewServer(app.MetricsHandler)
+	defer metrics.Close()
+	status, reply := getHistory(t, srv, historyPath, bearer)
+	assert.Equal(t, http.StatusServiceUnavailable, status)
+	assert.NotContains(t, reply, "telemetry_events")
 	const body = `{"events":[` + firstEvent + "," + secondEvent + `]}`
 	assertRejectedBatches(t, srv, body)
-	status, reply := post(t, srv, body, bearer)
+	status, reply = post(t, srv, body, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "telemetry_events")
 
@@ -134,6 +139,9 @@ func TestClickHouseBatch(t *testing.T) {
 	status, reply = post(t, srv, body, bearer)
 	assert.Equal(t, http.StatusServiceUnavailable, status)
 	assert.NotContains(t, reply, "fixture_reject")
+	status, reply = getHistory(t, srv, historyPath, bearer)
+	require.Equal(t, http.StatusOK, status, reply)
+	assertClickHouseMetrics(t, metrics)
 
 	app.Close()
 	// This event satisfies the constraint, so a failure here verifies that the runtime connection was closed.

@@ -24,15 +24,18 @@ func TestLoadConfig(t *testing.T) {
 	assert.Equal(t, time.Minute, config.RateLimits.IP.Window)
 	assert.Equal(t, 10000, config.RateLimits.IP.MaxClients)
 	assert.Empty(t, config.RateLimits.IP.TrustedProxies)
+	assert.Equal(t, "127.0.0.1:9091", config.MetricsAddress)
 	t.Setenv("AUTH_RATE_LIMIT", "2")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "30s")
 	t.Setenv("AUTH_RATE_LIMIT_MAX_CLIENTS", "20")
 	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.0/8, ::1/128")
+	t.Setenv("API_METRICS_ADDRESS", "api-metrics:9091")
 	config, err = application.LoadConfig()
 	require.NoError(t, err)
 	assert.Equal(t, 2, config.RateLimits.IP.Limit)
 	assert.Equal(t, 30*time.Second, config.RateLimits.IP.Window)
 	assert.Equal(t, 20, config.RateLimits.IP.MaxClients)
+	assert.Equal(t, "api-metrics:9091", config.MetricsAddress)
 	assert.Equal(
 		t,
 		[]netip.Prefix{netip.MustParsePrefix("127.0.0.0/8"), netip.MustParsePrefix("::1/128")},
@@ -88,6 +91,7 @@ func TestLoadConfigAcceptsPlatformSizedIntegers(t *testing.T) {
 
 func configEnvironment(t *testing.T) {
 	t.Helper()
+	t.Setenv("API_METRICS_ADDRESS", "")
 	t.Setenv("DATABASE_URL_FILE", "")
 	t.Setenv("ANALYTICS_INGEST_API_KEY_FILE", "")
 	t.Setenv("AUTH_SIGNING_KEY_ID", "active")

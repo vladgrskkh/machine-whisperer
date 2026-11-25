@@ -2,11 +2,31 @@
 set -euo pipefail
 umask 077
 
-if [[ $# != 2 || $1 != --output-dir || -z $2 ]]; then
-    echo "Usage: $0 --output-dir DIR" >&2
+if [[ ${1:-} != --output-dir || -z ${2:-} || ( $# != 2 && ( $# != 3 || $3 != --postgres-exporter-only ) ) ]]; then
+    echo "Usage: $0 --output-dir DIR [--postgres-exporter-only]" >&2
     exit 2
 fi
 dir=$2
+exporter_secret=postgres-exporter-password
+
+if [[ ${3:-} == --postgres-exporter-only ]]; then
+    cd -- "$dir"
+    if [[ ! -e $exporter_secret && ! -L $exporter_secret ]]; then
+        stage=$(mktemp -d .postgres-exporter.XXXXXXXX)
+        trap 'rm -rf -- "$stage"' EXIT
+        openssl rand -hex 32 >"$stage/$exporter_secret"
+        chmod 0444 "$stage/$exporter_secret"
+        # Publish atomically, keeping any credential installed by a concurrent run.
+        ln -- "$stage/$exporter_secret" . 2>/dev/null || [[ -f $exporter_secret ]]
+    fi
+    if [[ ! -f $exporter_secret || -L $exporter_secret || ! -s $exporter_secret ]]; then
+        echo 'PostgreSQL exporter secret must be a nonempty regular file.' >&2
+        exit 1
+    fi
+    echo 'PostgreSQL exporter password file is ready.'
+    exit 0
+fi
+
 mkdir -p -- "$dir"
 cd -- "$dir"
 # Require a dedicated empty directory, including on retry after a partial copy.
@@ -23,6 +43,7 @@ trap 'rm -rf -- .generating' EXIT
 (
     cd .generating
     openssl rand -hex 32 >postgres-password
+    openssl rand -hex 32 >"$exporter_secret"
     printf 'postgres://machine_whisperer:%s@postgres:5432/machine_whisperer?sslmode=disable\n' \
         "$(cat postgres-password)" >database-url
     openssl rand -hex 32 >clickhouse-password
@@ -49,7 +70,7 @@ EXT
 
     # Compose file secrets are bind mounts; non-root container UIDs must read
     # the files. The host directory remains 0700, and the CA key stays 0600.
-    for file in postgres-password database-url clickhouse-password analytics-token \
+    for file in postgres-password "$exporter_secret" database-url clickhouse-password analytics-token \
                 auth-signing.pem auth-public-keys.json internal-ca.crt api.crt api.key; do
         chmod 0444 "$file"
         ln "$file" "../$file"

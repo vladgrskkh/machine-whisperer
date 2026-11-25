@@ -1,17 +1,28 @@
 global:
   scrape_interval: 15s
+  scrape_timeout: 5s
 
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["localhost:9090"]
 
-  # When application metrics are available, attach Prometheus to the private
-  # service networks and configure API TLS trust before enabling these jobs.
-  # - job_name: api
-  #   scheme: https
-  #   static_configs:
-  #     - targets: ["api:8443"]
-  # - job_name: analytics
-  #   static_configs:
-  #     - targets: ["analytics:8081"]
+  - job_name: api
+    static_configs:
+      - targets: ["api-metrics:9091"]
+
+  - job_name: analytics
+    static_configs:
+      - targets: ["analytics-metrics:9091"]
+
+  - job_name: nginx
+    static_configs:
+      - targets: ["nginx-metrics:9113"]
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-metrics:9187"]
+
+  - job_name: clickhouse
+    static_configs:
+      - targets: ["clickhouse-metrics:9363"]

@@ -9,6 +9,7 @@ import secrets
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
@@ -27,6 +28,10 @@ NETWORK_ERRORS = (OSError, http.client.HTTPException, URLError)
 INGEST = "/v1/devices/me/telemetry"
 PROVISION = "/internal/v1/device-provisioning"
 ACME_PROBE = "/.well-known/acme-challenge/probe"
+SCRAPE_TARGETS = {
+    "prometheus": "localhost:9090", "api": "api-metrics:9091", "analytics": "analytics-metrics:9091",
+    "nginx": "nginx-metrics:9113", "postgres": "postgres-metrics:9187", "clickhouse": "clickhouse-metrics:9363",
+}
 
 
 SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -66,12 +71,17 @@ class DeploymentEndToEndTest(unittest.TestCase):
             cleanup.callback(self.stack.cleanup)
             self.stack.prepare()
             self.stack.start()
+            self.prometheus_port = self.stack.port("prometheus", 9090)
 
             self.assert_migrations_and_health()
+            self.assert_prometheus_targets()
+            self.assert_private_metrics_paths()
             self.assert_ingress()
             self.assert_api_documentation()
             self.assert_owner_and_device_http()
+            self.assert_application_metrics()
             self.run_k6_scenarios()
+            self.assert_scrape_failure_and_recovery()
             self.assert_persistence_across_container_recreation()
             self.assert_proxy_rejects_untrusted_upstream()
 
@@ -79,11 +89,109 @@ class DeploymentEndToEndTest(unittest.TestCase):
         for service, key in (("nginx", "MW_PROXY_IP"), ("api", "MW_API_IP")):
             networks = self.stack.inspect(service)["NetworkSettings"]["Networks"]
             self.assertEqual(networks[self.stack.edge_network]["IPAddress"], self.stack.env[key], service)
-        for job in ("api-migrate", "analytics-migrate"):
+        for job in ("api-migrate", "analytics-migrate", "postgres-exporter-setup"):
             state = self.stack.inspect(job)["State"]
             self.assertEqual((state["Status"], state["ExitCode"]), ("exited", 0), job)
         for service in ("api", "analytics"):
             self.assertEqual(self.stack.inspect(service)["State"]["Health"]["Status"], "healthy", service)
+
+    def prometheus_data(self, path):
+        status, _, body = self.stack.http(self.prometheus_port, path)
+        self.assertEqual(status, 200, body)
+        response = json.loads(body)
+        self.assertEqual(response["status"], "success", response)
+        return response["data"]
+
+    def prometheus_value(self, expression):
+        rows = self.prometheus_data("/api/v1/query?" + urlencode({"query": expression}))["result"]
+        if not rows:
+            return None
+        self.assertEqual(len(rows), 1, expression)
+        return float(rows[0]["value"][1])
+
+    def assert_prometheus_targets(self):
+        expected = sorted((job, f"http://{target}/metrics") for job, target in SCRAPE_TARGETS.items())
+        targets = []
+
+        def targets_up():
+            nonlocal targets
+            targets = self.prometheus_data("/api/v1/targets?state=active")["activeTargets"]
+            actual = sorted((target["labels"]["job"], target["scrapeUrl"]) for target in targets)
+            return actual == expected and all(target["health"] == "up" for target in targets)
+
+        try:
+            eventually("one successful target per Prometheus job", targets_up, timeout=45, caught=NETWORK_ERRORS)
+        except AssertionError as error:
+            statuses = [(target["scrapeUrl"], target["health"], target["lastError"]) for target in targets]
+            raise AssertionError(f"{error}. Last target statuses: {statuses}") from error
+        for target in targets:
+            self.assertEqual((target["scrapeInterval"], target["scrapeTimeout"]), ("15s", "5s"))
+
+        for expression in ('nginx_up{job="nginx"}', 'pg_up{job="postgres"}'):
+            eventually(expression, lambda: self.prometheus_value(expression) == 1, timeout=45)
+        self.assertEqual(self.prometheus_value('pg_exporter_last_scrape_error{job="postgres"}'), 0)
+        self.assertGreater(self.prometheus_value('pg_database_size_bytes{job="postgres",datname="machine_whisperer"}'), 0)
+        for prefix in ("ClickHouseMetrics_", "ClickHouseProfileEvents_", "ClickHouseAsyncMetrics_"):
+            self.assertGreater(self.prometheus_value(f'count({{job="clickhouse", __name__=~"{prefix}.+"}})'), 0)
+
+    def assert_private_metrics_paths(self):
+        def assert_unreachable(network, address):
+            result = self.stack.network_probe(network, address)
+            self.assertIn(result.returncode, (7, 28), (address, result.stderr))
+            # A timeout after TCP connects still proves that the port can be reached.
+            self.assertEqual(result.stdout, " 000", address)
+
+        scrape = f"{self.stack.project}_scrape"
+        for service in ("api", "analytics"):
+            url = f"http://{service}-metrics:9091/metrics"
+            result = self.stack.network_probe(scrape, url)
+            self.assertEqual((result.returncode, result.stdout.rpartition(" ")[2]), (0, "200"), result.stderr)
+            networks = ("edge", "data") if service == "api" else ("data",)
+            for network in networks:
+                ip = self.stack.network_address(service, network)
+                assert_unreachable(f"{self.stack.project}_{network}", f"http://{ip}:9091/metrics")
+
+        nginx_edge = self.stack.network_address("nginx", "edge")
+        assert_unreachable(self.stack.edge_network, f"http://{nginx_edge}:8080/stub_status")
+
+        prometheus = self.stack.inspect("prometheus")["Id"]
+        for service, ports in (("postgres", (5432,)), ("clickhouse", (8123, 9000, 9363))):
+            ip = self.stack.network_address(service, "data")
+            for port in ports:
+                for network in (scrape, f"container:{prometheus}"):
+                    assert_unreachable(network, f"http://{ip}:{port}")
+
+        infra = f"{self.stack.project}_infra-scrape"
+        for service in ("clickhouse", "postgres"):
+            origin = "http://" + SCRAPE_TARGETS[service]
+            for method, path, expected in (
+                ("GET", "/metrics", "200"), ("POST", "/metrics", "405"),
+                ("GET", "/metrics?query=1", "404"), ("GET", "/probe", "404"),
+            ):
+                result = self.stack.network_probe(infra, origin + path, method)
+                self.assertEqual((result.returncode, result.stdout.rpartition(" ")[2]), (0, expected), result.stderr)
+
+    def assert_application_metrics(self):
+        for expression in (
+            'mw_telemetry_ingest_requests_total{job="api",outcome="accepted_new"}',
+            'mw_telemetry_batches_total{job="analytics",outcome="stored"}',
+        ):
+            eventually(expression, lambda: (self.prometheus_value(expression) or 0) >= 1, timeout=45)
+
+    def assert_scrape_failure_and_recovery(self):
+        self.stack.compose("stop", "analytics", "postgres", "clickhouse", timeout=90)
+        expressions = ('up{job="analytics"}', 'pg_up{job="postgres"}', 'up{job="clickhouse"}')
+        eventually("the stopped service and databases to appear down", lambda: all(
+            self.prometheus_value(expression) == 0 for expression in expressions
+        ), timeout=45)
+        self.assertEqual(self.prometheus_value('up{job="postgres"}'), 1)
+
+        start = ("up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "90")
+        self.stack.compose(*start, "postgres", "clickhouse", timeout=110)
+        self.stack.compose(*start, "analytics", timeout=110)
+        eventually("the service and both databases to recover within three scrapes", lambda: all(
+            self.prometheus_value(expression) == 1 for expression in expressions
+        ), timeout=45)
 
     def assert_ingress(self):
         http_port = self.stack.port("nginx", 80)
@@ -95,6 +203,10 @@ class DeploymentEndToEndTest(unittest.TestCase):
         eventually("the Nginx bootstrap ACME challenge", probe_received, caught=NETWORK_ERRORS)
         self.assertEqual(self.stack.http(http_port, "/v1/users/me")[0], 503)
         self.stack.enable_tls()
+        tls_started = time.time()
+        eventually("a successful Nginx status scrape after enabling TLS", lambda: (
+            self.prometheus_value('timestamp(nginx_up{job="nginx"} == 1)') or 0
+        ) >= tls_started, timeout=45)
         http_port = self.stack.port("nginx", 80)
         eventually("the Nginx TLS ACME challenge", probe_received, caught=NETWORK_ERRORS)
         status, location, _ = self.stack.http(http_port, "/v1/users/me")
@@ -103,7 +215,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.configure_tls_client()
         self.assert_auth_failed("GET", "/v1/users/me")
         self.request("POST", PROVISION, 403, headers={"X-Forwarded-For": "192.0.2.1"}, decode=False)
-        for private in ("/healthz", "/metrics", "/internal/v1/telemetry-batches"):
+        for private in ("/healthz", "/metrics", "/stub_status", "/internal/v1/telemetry-batches"):
             self.request("GET", private, 404, decode=False)
 
     def configure_tls_client(self):
@@ -304,12 +416,23 @@ exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --q
             self.assertNotEqual(self.stack.inspect(service)["Id"], before, service)
         for query in (postgres, clickhouse):
             self.assertEqual(query("SELECT value FROM smoke_marker"), self.stack.project)
+        self.stack.compose("run", "--rm", "--no-deps", "-T", "postgres-exporter-setup")
+        setup_completed = time.time()
+        self.assertEqual(postgres("""
+SELECT rolcanlogin AND NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolreplication OR rolbypassrls)
+    AND pg_has_role(oid, 'pg_monitor', 'member') AND NOT has_table_privilege(oid, 'smoke_marker', 'select')
+FROM pg_roles WHERE rolname = 'mw_postgres_exporter'
+"""), "t")
         prom_port = self.stack.port("prometheus", 9090)
+        self.prometheus_port = prom_port
         restored = eventually(
             "the original Prometheus sample after recreation", lambda: prometheus_sample(prom_port, sample),
             caught=NETWORK_ERRORS,
         )
         self.assertEqual(restored, sample)
+        eventually("PostgreSQL statistics after rerunning exporter setup", lambda: (
+            self.prometheus_value('timestamp(pg_up{job="postgres"} == 1)') or 0
+        ) >= setup_completed, timeout=45)
 
     def assert_proxy_rejects_untrusted_upstream(self):
         # Replace only the Nginx container's trust root while the API keeps its own.

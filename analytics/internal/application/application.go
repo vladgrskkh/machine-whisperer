@@ -3,20 +3,25 @@ package application
 import (
 	"context"
 	"errors"
+	"net/http"
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/metrics"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/usecase/telemetry"
 )
 
 const connectTimeout = 10 * time.Second
 
 type Application struct {
+	MetricsHandler http.Handler
+
 	ingestKey  string
 	clickHouse ch.Conn
+	metrics    *metrics.Metrics
 	ingest     *telemetry.IngestBatch
 	history    *telemetry.ListHistory
 }
@@ -34,8 +39,10 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 	if app.clickHouse == nil {
 		return nil, errors.New("telemetry repository is required")
 	}
-	repository := clickhouse.NewRepository(app.clickHouse)
-	app.ingest = telemetry.NewIngestBatch(repository)
+	app.metrics = metrics.New()
+	app.MetricsHandler = app.metrics.Handler()
+	repository := clickhouse.NewRepository(app.clickHouse, app.metrics)
+	app.ingest = telemetry.NewIngestBatch(repository, app.metrics)
 	app.history = telemetry.NewListHistory(repository)
 	return app, nil
 }

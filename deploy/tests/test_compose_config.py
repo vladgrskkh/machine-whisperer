@@ -5,6 +5,7 @@ from pathlib import Path, PurePosixPath
 import stat
 import tempfile
 import unittest
+from xml.etree import ElementTree
 
 from deploy.tests.support import REPO, run
 
@@ -30,14 +31,20 @@ class ComposeConfigTest(unittest.TestCase):
         ], env=env)
         return json.loads(result.stdout)
 
-    def test_only_ingress_and_prometheus_publish_ports_and_data_network_is_internal(self):
+    def test_only_ingress_and_prometheus_publish_ports_and_scrapers_use_private_bridges(self):
         networks = {
-            "certbot": {"acme"}, "nginx": {"edge"}, "api": {"edge", "data"},
-            "api-migrate": {"data"}, "postgres": {"data"}, "analytics": {"data"},
-            "analytics-migrate": {"data"}, "clickhouse": {"data"}, "prometheus": {"monitoring"},
+            "certbot": {"acme"}, "nginx": {"edge", "nginx-status"},
+            "nginx-exporter": {"nginx-status", "infra-scrape"},
+            "api": {"edge", "data", "scrape"}, "api-migrate": {"data"},
+            "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
+            "analytics": {"data", "scrape"}, "analytics-migrate": {"data"}, "clickhouse": {"data"},
+            "database-metrics-proxy": {"infra-scrape", "data"},
+            "prometheus": {"monitoring", "scrape", "infra-scrape"},
         }
         self.assertEqual(set(self.services), set(networks))
-        self.assertTrue(self.config["networks"]["data"]["internal"])
+        for network in ("data", "scrape", "infra-scrape", "nginx-status"):
+            with self.subTest(network=network):
+                self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
             with self.subTest(service=name):
                 self.assertEqual(set(self.services[name]["networks"]), expected)
@@ -51,12 +58,36 @@ class ComposeConfigTest(unittest.TestCase):
             ("prometheus", "127.0.0.1", "9090", 9090),
         })
 
+    def test_application_metrics_use_aliases_scoped_to_the_scrape_bridge(self):
+        for name in ("api", "analytics"):
+            with self.subTest(service=name):
+                alias = f"{name}-metrics"
+                service = self.services[name]
+                self.assertEqual(service["environment"][f"{name.upper()}_METRICS_ADDRESS"], f"{alias}:9091")
+                self.assertEqual([
+                    network for network, config in service["networks"].items()
+                    if alias in (config or {}).get("aliases", [])
+                ], ["scrape"])
+
+    def test_clickhouse_exposes_only_the_initial_metrics_families(self):
+        mount = next(volume for volume in self.services["clickhouse"]["volumes"]
+                     if volume["target"] == "/etc/clickhouse-server/config.d/metrics.xml")
+        self.assertTrue(mount["read_only"])
+        config = ElementTree.parse(mount["source"]).find("prometheus")
+        self.assertEqual({element.tag: element.text for element in config}, {
+            "endpoint": "/metrics", "port": "9363", "metrics": "true", "events": "true",
+            "asynchronous_metrics": "true", "info": "false", "errors": "false", "histograms": "false",
+            "dimensional_metrics": "false",
+        })
+
     def test_infrastructure_images_and_certbot_webroot_configuration(self):
         for name, image in {
             "certbot": "certbot/certbot:v5.10.0",
             "postgres": "postgres:18.7-alpine3.23",
             "clickhouse": "clickhouse/clickhouse-server:26.9.36.3",
             "nginx": "nginx:1.31.10-alpine3.24-slim",
+            "nginx-exporter": "nginx/nginx-prometheus-exporter:1.5.3",
+            "postgres-exporter": "quay.io/prometheuscommunity/postgres-exporter:v0.21.1",
             "prometheus": "prom/prometheus:v3.16.0",
         }.items():
             with self.subTest(service=name):
@@ -97,6 +128,11 @@ class ComposeConfigTest(unittest.TestCase):
 
         for name, dep in (("api", "analytics"), ("nginx", "api")):
             self.assertEqual(self.services[name]["depends_on"][dep]["condition"], "service_healthy")
+        setup = self.services["postgres-exporter-setup"]
+        self.assertEqual(setup["image"], self.services["postgres"]["image"])
+        self.assertEqual(setup["depends_on"]["postgres"]["condition"], "service_healthy")
+        self.assertEqual(self.services["postgres-exporter"]["depends_on"]["postgres-exporter-setup"]["condition"],
+                         "service_completed_successfully")
         for name, target in (
             ("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
             ("prometheus", "/prometheus"),
@@ -116,7 +152,11 @@ class ComposeConfigTest(unittest.TestCase):
             "analytics-migrate": {"clickhouse_password"},
             "clickhouse": {"clickhouse_password"},
             "postgres": {"postgres_password"},
+            "postgres-exporter-setup": {"postgres_password", "postgres_exporter_password"},
+            "postgres-exporter": {"postgres_exporter_password"},
             "nginx": {"internal_ca"},
+            "nginx-exporter": set(),
+            "database-metrics-proxy": set(),
             "certbot": set(),
             "prometheus": set(),
         }
@@ -131,6 +171,10 @@ class ComposeConfigTest(unittest.TestCase):
             "analytics-migrate": {"CLICKHOUSE_PASSWORD_FILE": "clickhouse_password"},
             "clickhouse": {"CLICKHOUSE_PASSWORD_FILE": "clickhouse_password"},
             "postgres": {"POSTGRES_PASSWORD_FILE": "postgres_password"},
+            "postgres-exporter-setup": {
+                "POSTGRES_PASSWORD_FILE": "postgres_password",
+                "POSTGRES_EXPORTER_PASSWORD_FILE": "postgres_exporter_password",
+            },
         }
         secrets_dir = PurePosixPath("/run/secrets")
         for name, expected in grants.items():
@@ -144,11 +188,15 @@ class ComposeConfigTest(unittest.TestCase):
                 env = service.get("environment", {})
                 self.assertTrue(env.keys().isdisjoint({
                     "DATABASE_URL", "ANALYTICS_INGEST_API_KEY", "CLICKHOUSE_PASSWORD", "POSTGRES_PASSWORD",
+                    "POSTGRES_EXPORTER_PASSWORD", "DATA_SOURCE_NAME", "DATA_SOURCE_PASS",
                 }))
                 self.assertEqual(
                     {key: value for key, value in env.items() if key.endswith("_FILE")},
                     {key: f"/run/secrets/{path}" for key, path in secret_files.get(name, {}).items()},
                 )
+        command = self.services["postgres-exporter"]["command"]
+        self.assertIn("--datasource.pass-file=/run/secrets/postgres_exporter_password", command)
+        self.assertIn("--no-collector.stat_statements", command)
         for secret in self.config["secrets"].values():
             self.assertIn("file", secret)
             self.assertFalse(secret.get("external"))
@@ -190,6 +238,9 @@ class CredentialsTest(unittest.TestCase):
                         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o444)
             password = (secrets / "postgres-password").read_text().strip()
             self.assertGreaterEqual(len(password), 32)
+            exporter = (secrets / "postgres-exporter-password").read_text().strip()
+            self.assertRegex(exporter, r"^[0-9a-f]{64}$")
+            self.assertTrue(exporter != password, "The statistics login must use its own password")
             url = (secrets / "database-url").read_text().strip()
             expected_url = f"postgres://machine_whisperer:{password}@postgres:5432/machine_whisperer?sslmode=disable"
             self.assertTrue(url == expected_url, "Generated database URL does not match the PostgreSQL credential")
@@ -203,3 +254,21 @@ class CredentialsTest(unittest.TestCase):
                 original_files == {path.name: path.read_bytes() for path in secrets.iterdir()},
                 "A repeated bootstrap changed existing credentials",
             )
+
+    def test_exporter_upgrade_preserves_existing_secrets(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            secrets = Path(scratch) / "secrets"
+            secrets.mkdir(mode=0o700)
+            existing = secrets / "postgres-password"
+            existing.write_text("existing-postgres-password\n")
+            upgrade = ["scripts/prepare-secrets.sh", "--output-dir", secrets, "--postgres-exporter-only"]
+
+            run(upgrade)
+            exporter = secrets / "postgres-exporter-password"
+            generated = exporter.read_text()
+            self.assertRegex(generated.strip(), r"^[0-9a-f]{64}$")
+            self.assertEqual(stat.S_IMODE(exporter.stat().st_mode), 0o444)
+            run(upgrade)
+            self.assertTrue(exporter.read_text() == generated, "The upgrade replaced the existing exporter password")
+            self.assertTrue(existing.read_text() == "existing-postgres-password\n", "The upgrade changed PostgreSQL credentials")
+            self.assertEqual(set(path.name for path in secrets.iterdir()), {existing.name, exporter.name})

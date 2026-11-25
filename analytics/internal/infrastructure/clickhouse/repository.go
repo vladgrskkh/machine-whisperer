@@ -2,6 +2,8 @@ package clickhouse
 
 import (
 	"context"
+	"errors"
+	"net"
 	"strconv"
 	"time"
 
@@ -15,17 +17,39 @@ const (
 	queryTimeout  = 10 * time.Second
 )
 
-type Repository struct {
-	conn ch.Conn
+const (
+	OperationInsertBatch = "insert_batch"
+	OperationListHistory = "list_history"
+
+	OutcomeSuccess  = "success"
+	OutcomeTimeout  = "timeout"
+	OutcomeCanceled = "canceled"
+	OutcomeError    = "error"
+)
+
+type OperationObserver interface {
+	RecordOperation(operation, outcome string, elapsed time.Duration)
 }
 
-func NewRepository(conn ch.Conn) *Repository {
-	return &Repository{conn: conn}
+type Repository struct {
+	conn     ch.Conn
+	observer OperationObserver
+}
+
+func NewRepository(conn ch.Conn, observer OperationObserver) *Repository {
+	return &Repository{conn: conn, observer: observer}
 }
 
 func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) error {
 	ctx, cancel := context.WithTimeout(ctx, insertTimeout)
 	defer cancel()
+	start := time.Now()
+	err := r.storeBatch(ctx, events)
+	r.observer.RecordOperation(OperationInsertBatch, operationOutcome(ctx, err), time.Since(start))
+	return err
+}
+
+func (r *Repository) storeBatch(ctx context.Context, events []domain.Event) error {
 	ctx = ch.Context(ctx, ch.WithSettings(ch.Settings{"async_insert": 0}))
 	batch, err := r.conn.PrepareBatch(ctx, `INSERT INTO telemetry_events
 		(schema_version, event_id, device_id, machine_id, observed_at, received_at, operating_state,
@@ -57,6 +81,13 @@ func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) erro
 func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) ([]domain.Event, error) {
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
+	start := time.Now()
+	events, err := r.list(ctx, query)
+	r.observer.RecordOperation(OperationListHistory, operationOutcome(ctx, err), time.Since(start))
+	return events, err
+}
+
+func (r *Repository) list(ctx context.Context, query domain.HistoryQuery) ([]domain.Event, error) {
 	sql := `SELECT schema_version, event_id, device_id, observed_at, received_at,
 		operating_state, vibration_rms_g, dominant_frequency_hz, current_rms_a
 		FROM telemetry_events FINAL WHERE machine_id = {machine_id:UUID}`
@@ -95,4 +126,20 @@ func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) ([]dom
 		return nil, err
 	}
 	return events, nil
+}
+
+func operationOutcome(ctx context.Context, err error) string {
+	switch {
+	case err == nil:
+		return OutcomeSuccess
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(ctx.Err(), context.DeadlineExceeded),
+		errors.Is(err, ch.ErrAcquireConnTimeout):
+		return OutcomeTimeout
+	case errors.Is(err, context.Canceled), errors.Is(ctx.Err(), context.Canceled):
+		return OutcomeCanceled
+	}
+	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
+		return OutcomeTimeout
+	}
+	return OutcomeError
 }

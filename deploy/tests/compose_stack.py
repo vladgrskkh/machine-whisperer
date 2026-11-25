@@ -97,6 +97,8 @@ class ComposeStack:
 
     def start(self):
         self.started = True
+        self.compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/promtool", "prometheus",
+                     "check", "config", "/etc/prometheus/prometheus.yml", timeout=120)
         self.compose("build", "api", "analytics", timeout=600)
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "240", timeout=300)
 
@@ -128,6 +130,9 @@ class ComposeStack:
         )
         if remaining_k6:
             docker_cleanup("container", "rm", "-f", *remaining_k6.splitlines())
+        probes = docker_cleanup("container", "ls", "-aq", "--filter", f"label=mw.e2e-network-probe={self.project}")
+        if probes:
+            docker_cleanup("container", "rm", "-f", *probes.splitlines())
         try:
             self.compose("down", "-v", "--remove-orphans", "--rmi", "local", "--timeout", "10", timeout=90)
         except Exception as error:
@@ -159,6 +164,18 @@ class ComposeStack:
         if host != "127.0.0.1":
             raise AssertionError(f"Unexpected host binding for {service}: {host}")
         return int(port)
+
+    def network_address(self, service, network):
+        return self.inspect(service)["NetworkSettings"]["Networks"][f"{self.project}_{network}"]["IPAddress"]
+
+    def network_probe(self, network, url, method="GET"):
+        return run([
+            "docker", "run", "--rm", "--pull", "never", "--network", network,
+            "--label", f"mw.e2e-network-probe={self.project}", "--entrypoint", "curl",
+            f"{self.namespace}/machine-whisperer-api:{self.project}",
+            "--silent", "--show-error", "--noproxy", "*", "--connect-timeout", "2", "--max-time", "5",
+            "--output", "/dev/null", "--write-out", "%{remote_ip} %{http_code}", "--request", method, url,
+        ], check=False)
 
     def http(self, port, path):
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)

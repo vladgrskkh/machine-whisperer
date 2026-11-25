@@ -2,12 +2,27 @@ package alert
 
 import "context"
 
-type Acknowledge struct{ repository Repository }
+type AcknowledgeRepository interface {
+	Acknowledge(ctx context.Context, ownerID, alertID string) (bool, error)
+}
 
-func NewAcknowledge(repository Repository) *Acknowledge {
-	return &Acknowledge{repository: repository}
+type AcknowledgeRecorder interface {
+	RecordAcknowledgement()
+}
+
+type Acknowledge struct {
+	repository AcknowledgeRepository
+	recorder   AcknowledgeRecorder
+}
+
+func NewAcknowledge(repository AcknowledgeRepository, recorder AcknowledgeRecorder) *Acknowledge {
+	return &Acknowledge{repository: repository, recorder: recorder}
 }
 
 func (a *Acknowledge) Execute(ctx context.Context, ownerID, alertID string) error {
-	return a.repository.Acknowledge(ctx, ownerID, alertID)
+	changed, err := a.repository.Acknowledge(ctx, ownerID, alertID)
+	if err == nil && changed {
+		a.recorder.RecordAcknowledgement()
+	}
+	return err
 }
