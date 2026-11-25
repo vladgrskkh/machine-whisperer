@@ -768,7 +768,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertNotEqual(worker["traceId"], producer["traceId"])
         link, = worker["links"]
         self.assertEqual((link["traceId"], link["spanId"]), (producer["traceId"], producer["spanId"]))
-        self.assertFalse(link.get("attributes"))
+        # The Badger storage adapter can restore links as legacy Jaeger references.
+        jaeger_link_marker = [{"key": "opentracing.ref_type", "value": {"stringValue": "follows_from"}}]
+        self.assertIn(link.get("attributes", []), ([], jaeger_link_marker))
         self.assertFalse(link.get("traceState"))
         batch = span_named(delivery, "api", "outbox.batch.deliver")
         receiver = span_named(delivery, "analytics", ANALYTICS_INGEST)
