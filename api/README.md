@@ -2,23 +2,25 @@
 
 ## HTTP contract
 
-The [generated Swagger 2.0 YAML](docs/openapi/swagger.yaml) describes all API
-operations, including the restricted manufacturing endpoint and the process
-health probe. Open it in a Swagger-compatible viewer.
+The generated [OpenAPI 3.0.3 YAML](docs/openapi/openapi.yaml) and
+[Swagger 2.0 YAML](docs/openapi/swagger.yaml) describe all API operations,
+including restricted manufacturing and the process health probe. Both files
+come from the same Go handler annotations.
 
 After changing an HTTP route or its contract, update the handler annotations and
 run these commands from `api/`.
 
 ```sh
 make swagger
-git diff -- docs/openapi/swagger.yaml
+git diff -- docs/openapi
 make swagger-check
 ```
 
-Commit the regenerated YAML with the change. CI runs `make swagger-check` to
-compare a fresh copy against the checked-in artifact. Both commands use the
-module's Go toolchain and download the pinned generator on first use. They run
-without starting the API or its dependencies.
+Commit both regenerated files with the change. CI runs `make swagger-check`
+to regenerate and compare both copies. The pinned Swaggo CLI first generates
+Swagger 2.0, then the Go tool in `tools/openapi` converts and validates OpenAPI
+3.0.3 with the same operation inventory. The commands use the module's Go
+toolchain and download generation dependencies on first use.
 
 ## Local development
 

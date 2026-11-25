@@ -1,0 +1,1726 @@
+components:
+  schemas:
+    Alert:
+      properties:
+        acknowledged_at:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          format: uuid
+          type: string
+        last_z_score:
+          format: double
+          minimum: 0
+          type: number
+        machine_id:
+          format: uuid
+          type: string
+        peak_z_score:
+          format: double
+          minimum: 0
+          type: number
+        recovered_at:
+          format: date-time
+          nullable: true
+          type: string
+        recovery_baseline_version:
+          format: int64
+          minimum: 1
+          nullable: true
+          type: integer
+        recovery_device_id:
+          format: uuid
+          nullable: true
+          type: string
+        recovery_event_id:
+          format: uuid
+          nullable: true
+          type: string
+        trigger_baseline_version:
+          format: int64
+          minimum: 1
+          type: integer
+        trigger_device_id:
+          format: uuid
+          type: string
+        trigger_event_id:
+          format: uuid
+          type: string
+        trigger_mean_rms_g:
+          description: Baseline RMS vibration mean at the trigger, in g.
+          format: double
+          minimum: 0
+          type: number
+        trigger_stddev_rms_g:
+          description: Baseline RMS vibration standard deviation at the trigger, in
+            g. Strictly positive.
+          format: double
+          minimum: 0
+          type: number
+        trigger_z_score:
+          format: double
+          minimum: 0
+          type: number
+        triggered_at:
+          format: date-time
+          type: string
+      required:
+      - acknowledged_at
+      - id
+      - last_z_score
+      - machine_id
+      - peak_z_score
+      - recovered_at
+      - recovery_baseline_version
+      - recovery_device_id
+      - recovery_event_id
+      - trigger_baseline_version
+      - trigger_device_id
+      - trigger_event_id
+      - trigger_mean_rms_g
+      - trigger_stddev_rms_g
+      - trigger_z_score
+      - triggered_at
+      type: object
+    Baseline:
+      properties:
+        machine_id:
+          format: uuid
+          type: string
+        mean_rms_g:
+          description: Mean RMS vibration in g.
+          format: double
+          minimum: 0
+          type: number
+        stddev_rms_g:
+          description: Standard deviation of RMS vibration in g. Strictly positive.
+          format: double
+          minimum: 0
+          type: number
+        updated_at:
+          format: date-time
+          type: string
+        version:
+          format: int64
+          minimum: 1
+          type: integer
+      required:
+      - machine_id
+      - mean_rms_g
+      - stddev_rms_g
+      - updated_at
+      - version
+      type: object
+    BaselineInput:
+      properties:
+        mean_rms_g:
+          description: Mean RMS vibration in g. Must be finite and nonnegative.
+          format: double
+          minimum: 0
+          type: number
+        stddev_rms_g:
+          description: Standard deviation of RMS vibration in g. Must be finite and
+            strictly positive.
+          exclusiveMinimum: true
+          format: double
+          minimum: 0
+          type: number
+      required:
+      - mean_rms_g
+      - stddev_rms_g
+      type: object
+    ClaimPayload:
+      properties:
+        claim_code:
+          description: Independent 32-byte claim secret encoded as canonical unpadded
+            base64url.
+          maxLength: 43
+          minLength: 43
+          type: string
+        device_id:
+          format: uuid
+          type: string
+        v:
+          enum:
+          - 1
+          type: integer
+      required:
+      - claim_code
+      - device_id
+      - v
+      type: object
+    ClaimedDevice:
+      properties:
+        device_id:
+          format: uuid
+          type: string
+        machine_id:
+          format: uuid
+          type: string
+        status:
+          enum:
+          - claimed
+          type: string
+      required:
+      - device_id
+      - machine_id
+      - status
+      type: object
+    Credentials:
+      properties:
+        email:
+          description: Trimmed and lowercased before validation. The normalized address
+            is at most 254 bytes.
+          type: string
+        password:
+          description: Preserved verbatim. Requires 15–128 Unicode code points and
+            at most 512 bytes.
+          maxLength: 128
+          minLength: 15
+          type: string
+      required:
+      - email
+      - password
+      type: object
+    DeviceClaim:
+      properties:
+        claim_code:
+          description: Single-use claim code from the QR payload, a canonical unpadded
+            base64url encoding of 32 bytes.
+          maxLength: 43
+          minLength: 43
+          type: string
+        device_id:
+          format: uuid
+          type: string
+        machine_id:
+          format: uuid
+          type: string
+      required:
+      - claim_code
+      - device_id
+      - machine_id
+      type: object
+    ErrorDetail:
+      properties:
+        code:
+          description: Machine-readable error code.
+          type: string
+        message:
+          description: Human-readable detail. The wording may change.
+          type: string
+      required:
+      - code
+      - message
+      type: object
+    ErrorResponse:
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+      required:
+      - error
+      type: object
+    HistoryItem:
+      properties:
+        current_rms_a:
+          description: RMS current in amperes, or null when absent.
+          format: double
+          minimum: 0
+          nullable: true
+          type: number
+        device_id:
+          format: uuid
+          type: string
+        dominant_frequency_hz:
+          description: Dominant frequency in Hz, or null when absent.
+          format: double
+          minimum: 0
+          nullable: true
+          type: number
+        event_id:
+          format: uuid
+          type: string
+        observed_at:
+          format: date-time
+          type: string
+        operating_state:
+          enum:
+          - running
+          - unknown
+          type: string
+        received_at:
+          format: date-time
+          type: string
+        schema_version:
+          enum:
+          - 1
+          type: integer
+        vibration_rms_g:
+          description: RMS vibration in g.
+          format: double
+          minimum: 0
+          type: number
+      required:
+      - current_rms_a
+      - device_id
+      - dominant_frequency_hz
+      - event_id
+      - observed_at
+      - operating_state
+      - received_at
+      - schema_version
+      - vibration_rms_g
+      type: object
+    HistoryPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/HistoryItem'
+          type: array
+        next_cursor:
+          description: Opaque cursor for the next page, or null at the end of the
+            history.
+          maxLength: 512
+          nullable: true
+          type: string
+      required:
+      - items
+      - next_cursor
+      type: object
+    Machine:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          format: uuid
+          type: string
+        name:
+          maxLength: 100
+          minLength: 1
+          type: string
+      required:
+      - created_at
+      - id
+      - name
+      type: object
+    MachineName:
+      properties:
+        name:
+          description: After trimming, the name must contain 1–100 Unicode code points
+            and no control characters.
+          minLength: 1
+          type: string
+      required:
+      - name
+      type: object
+    Observation:
+      properties:
+        current_rms_a:
+          description: Finite, nonnegative RMS current in amperes when supplied. May
+            be omitted or null.
+          format: double
+          minimum: 0
+          nullable: true
+          type: number
+        dominant_frequency_hz:
+          description: Finite, nonnegative dominant frequency in Hz when supplied.
+            May be omitted or null.
+          format: double
+          minimum: 0
+          nullable: true
+          type: number
+        event_id:
+          example: 77777777-7777-4777-8777-777777777777
+          format: uuid
+          type: string
+        observed_at:
+          description: Observation timestamp in RFC 3339.
+          format: date-time
+          type: string
+        operating_state:
+          enum:
+          - running
+          - unknown
+          type: string
+        schema_version:
+          enum:
+          - 1
+          type: integer
+        vibration_rms_g:
+          description: Finite, nonnegative RMS vibration in g.
+          format: double
+          minimum: 0
+          type: number
+      required:
+      - event_id
+      - observed_at
+      - operating_state
+      - schema_version
+      - vibration_rms_g
+      type: object
+    ProvisionedDevice:
+      properties:
+        api_key:
+          description: Issued once as <device_id>.<secret>. The secret is 32 bytes
+            encoded as unpadded base64url.
+          type: string
+        claim_payload:
+          $ref: '#/components/schemas/ClaimPayload'
+        device_id:
+          format: uuid
+          type: string
+      required:
+      - api_key
+      - claim_payload
+      - device_id
+      type: object
+    RefreshToken:
+      properties:
+        refresh_token:
+          description: Canonical unpadded base64url encoding of a 32-byte secret.
+          maxLength: 43
+          minLength: 43
+          type: string
+      required:
+      - refresh_token
+      type: object
+    TokenPair:
+      properties:
+        access_token:
+          description: User access JWT.
+          type: string
+        expires_in:
+          description: Access token lifetime in seconds. The current API issues tokens
+            for 900 seconds.
+          example: 900
+          type: integer
+        refresh_token:
+          description: Canonical unpadded base64url encoding of a 32-byte secret.
+          maxLength: 43
+          minLength: 43
+          type: string
+        token_type:
+          enum:
+          - Bearer
+          type: string
+      required:
+      - access_token
+      - expires_in
+      - refresh_token
+      - token_type
+      type: object
+    User:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        email:
+          format: email
+          maxLength: 254
+          type: string
+        id:
+          format: uuid
+          type: string
+      required:
+      - created_at
+      - email
+      - id
+      type: object
+  securitySchemes:
+    DeviceBearer:
+      description: Send the device credential in <device_id>.<secret> form. The API
+        assigns the telemetry_writer capability to the authenticated device key.
+      scheme: bearer
+      type: http
+    UserAccessJWT:
+      bearerFormat: JWT
+      description: Send the user access JWT. Refresh and logout use the refresh token
+        in the JSON body.
+      scheme: bearer
+      type: http
+info:
+  contact: {}
+  description: HTTP API for user accounts, device enrollment, machines, alerts and
+    telemetry.
+  title: Machine Whisperer API
+  version: "1"
+openapi: 3.0.3
+paths:
+  /healthz:
+    get:
+      description: Process probe on the API listener.
+      operationId: checkProcessHealth
+      responses:
+        "200":
+          description: Process is running.
+      summary: Check process health
+      tags:
+      - operational
+  /internal/v1/device-provisioning:
+    post:
+      description: |-
+        Requires the device_provisioner role. Deployment ingress restricts access to the configured manufacturing CIDR.
+        The API key is issued once. The separate claim payload is printed on the unit's QR label.
+        Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+      operationId: provisionDevice
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProvisionedDevice'
+          description: Device credentials and QR claim payload.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The user lacks the device_provisioner role (`forbidden`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The shared per-IP request budget was exceeded (`rate_limited`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            Retry-After:
+              description: Seconds until another attempt can be made.
+              schema:
+                type: integer
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Provision a device
+      tags:
+      - internal
+  /v1/alerts/{id}/acknowledge:
+    post:
+      description: The alert must belong to the caller. Repeated acknowledgements
+        preserve the first timestamp and leave the recovery state unchanged.
+      operationId: acknowledgeAlert
+      parameters:
+      - description: Alert UUID.
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        "204":
+          description: Alert acknowledged.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid alert ID (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The alert is unavailable to the caller (`alert_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Acknowledge an alert
+      tags:
+      - alerts
+  /v1/auth/login:
+    post:
+      description: |-
+        Starts an independent session and returns a user access JWT and refresh token.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown fields and trailing values return 400.
+        Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+      operationId: logIn
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+        description: Email and password.
+        required: true
+        x-originalParamName: body
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+          description: Session tokens.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid email, password or request body (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unknown email or incorrect password (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The shared per-IP request budget was exceeded (`rate_limited`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            Retry-After:
+              description: Seconds until another attempt can be made.
+              schema:
+                type: integer
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      summary: Start a user session
+      tags:
+      - auth
+  /v1/auth/logout:
+    post:
+      description: |-
+        Revokes the session for a current or consumed refresh token.
+        Unknown and already revoked well-formed tokens also succeed.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown fields and trailing values return 400.
+      operationId: logOut
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshToken'
+        description: Refresh token.
+        required: true
+        x-originalParamName: body
+      responses:
+        "204":
+          description: Session revoked or already unavailable.
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Malformed refresh token or request body (`invalid_input`).
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+      summary: Revoke a user session
+      tags:
+      - auth
+  /v1/auth/refresh:
+    post:
+      description: |-
+        Rotates the refresh token within the existing session and returns a replacement token pair.
+        Reusing a consumed token revokes its session if it is still active.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown fields and trailing values return 400.
+        Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+      operationId: refreshSession
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshToken'
+        description: Current refresh token.
+        required: true
+        x-originalParamName: body
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenPair'
+          description: Replacement session tokens.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Malformed refresh token or request body (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unknown, expired, revoked or reused refresh token (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The shared per-IP request budget was exceeded (`rate_limited`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            Retry-After:
+              description: Seconds until another attempt can be made.
+              schema:
+                type: integer
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      summary: Rotate session tokens
+      tags:
+      - auth
+  /v1/auth/signup:
+    post:
+      description: |-
+        Creates a user account without starting a session.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown fields and trailing values return 400.
+        Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+      operationId: signUp
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+        description: Email and password.
+        required: true
+        x-originalParamName: body
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: User created.
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid email, password or request body (`invalid_input`).
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Email is already registered (`email_exists`).
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The shared per-IP request budget was exceeded (`rate_limited`).
+          headers:
+            Retry-After:
+              description: Seconds until another attempt can be made.
+              schema:
+                type: integer
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+      summary: Register a user
+      tags:
+      - auth
+  /v1/devices/claim:
+    post:
+      description: |-
+        Binds the device to a machine owned by the caller and consumes the single-use claim code.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+        Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+      operationId: claimDevice
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceClaim'
+        description: QR claim credentials and selected machine ID.
+        required: true
+        x-originalParamName: body
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClaimedDevice'
+          description: Device claimed.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid device ID, machine ID, claim code or request body (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The device, claim code or machine is unavailable (`claim_unavailable`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "429":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The shared per-IP request budget was exceeded (`rate_limited`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            Retry-After:
+              description: Seconds until another attempt can be made.
+              schema:
+                type: integer
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Claim a device for a machine
+      tags:
+      - devices
+  /v1/devices/me/telemetry:
+    post:
+      description: |-
+        The API derives the machine from the claimed device's binding. Send only observation fields in the body.
+        The API assigns the telemetry_writer capability to the authenticated device key.
+        Send new observations in nondecreasing timestamp order for the machine. Reuse an event ID with the same values on retry.
+        The API normalizes observed_at to UTC microseconds. It accepts observations at most five minutes ahead of database time and strictly less than 30 days old.
+        Accepted observations appear in history after export.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+      operationId: ingestDeviceTelemetry
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Observation'
+        description: Telemetry observation.
+        required: true
+        x-originalParamName: body
+      responses:
+        "202":
+          description: Observation durably queued for export or an exact accepted
+            retry.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid telemetry observation (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The device is unclaimed or revoked, or the machine is unavailable
+            to it (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The event ID was reused with different values, or the observation
+            is out of order or outside its acceptance window (`telemetry_conflict`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - DeviceBearer: []
+      summary: Submit a device telemetry observation
+      tags:
+      - telemetry
+  /v1/machines:
+    get:
+      description: Returns an empty array when the user owns no machines.
+      operationId: listMachines
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Machine'
+                type: array
+          description: Owned machines.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: List the user's machines
+      tags:
+      - machines
+    post:
+      description: |-
+        Creates a machine owned by the authenticated user.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+      operationId: createMachine
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MachineName'
+        description: Machine name.
+        required: true
+        x-originalParamName: body
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+          description: Machine created.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine name or request body (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Create a machine
+      tags:
+      - machines
+  /v1/machines/{id}:
+    get:
+      description: The machine must belong to the caller.
+      operationId: getMachine
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Machine'
+          description: Machine details.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The machine is unavailable to the caller (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Get a machine
+      tags:
+      - machines
+  /v1/machines/{id}/alerts:
+    get:
+      description: The machine must belong to the caller. Orders alerts by newest
+        trigger first and returns an empty array when none exist.
+      operationId: listMachineAlerts
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: '#/components/schemas/Alert'
+                type: array
+          description: Machine alerts.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The machine is unavailable to the caller (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: List machine alerts
+      tags:
+      - alerts
+  /v1/machines/{id}/baseline:
+    get:
+      description: The machine must belong to the caller.
+      operationId: getMachineBaseline
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Baseline'
+          description: Current baseline.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: No baseline is available for this machine and owner (`baseline_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Get the current vibration baseline
+      tags:
+      - machines
+    put:
+      description: |-
+        The machine must belong to the caller. Repeating the same values preserves the version and timestamp.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+      operationId: setMachineBaseline
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BaselineInput'
+        description: RMS vibration mean and standard deviation in g.
+        required: true
+        x-originalParamName: body
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Baseline'
+          description: Stored baseline.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID, baseline values or request body (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The machine is unavailable to the caller (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Set the current vibration baseline
+      tags:
+      - machines
+  /v1/machines/{machine_id}/telemetry:
+    get:
+      description: |-
+        The machine must belong to the caller. Observations are available after export.
+        Orders by descending observation time, device ID and event ID. Empty pages have an empty items array. An exhausted page has a null next_cursor.
+        Provide each of limit and cursor at most once.
+      operationId: listMachineTelemetry
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: machine_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      - description: Maximum number of observations.
+        in: query
+        name: limit
+        schema:
+          default: 100
+          maximum: 1000
+          minimum: 1
+          type: integer
+      - description: Opaque cursor bound to this machine. Use the previous next_cursor.
+          Maximum 512 bytes.
+        in: query
+        name: cursor
+        schema:
+          maxLength: 512
+          minLength: 1
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryPage'
+          description: Telemetry history page.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID, limit or cursor (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The machine is unavailable to the caller (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: History could not be served. Retry later (`telemetry_unavailable`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - UserAccessJWT: []
+      summary: Read machine telemetry history
+      tags:
+      - telemetry
+    post:
+      deprecated: true
+      description: |-
+        Use POST /v1/devices/me/telemetry for new integrations. The path UUID must match the claimed device's assigned machine.
+        The API assigns the telemetry_writer capability to the authenticated device key.
+        Send new observations in nondecreasing timestamp order for the machine. Reuse an event ID with the same values on retry.
+        The API normalizes observed_at to UTC microseconds. It accepts observations at most five minutes ahead of database time and strictly less than 30 days old.
+        Accepted observations appear in history after export.
+        Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+      operationId: ingestMachineTelemetry
+      parameters:
+      - description: Machine UUID.
+        in: path
+        name: machine_id
+        required: true
+        schema:
+          format: uuid
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Observation'
+        description: Telemetry observation.
+        required: true
+        x-originalParamName: body
+      responses:
+        "202":
+          description: Observation durably queued for export or an exact accepted
+            retry.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID or observation (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The device is unclaimed or revoked, or the machine is unavailable
+            to it (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The event ID was reused with different values, or the observation
+            is out of order or outside its acceptance window (`telemetry_conflict`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+      - DeviceBearer: []
+      summary: Submit a telemetry observation by machine ID
+      tags:
+      - telemetry
+  /v1/users/me:
+    get:
+      operationId: getCurrentUser
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+          description: Current user.
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials, or the user no longer
+            exists (`authentication_failed`).
+          headers:
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+      security:
+      - UserAccessJWT: []
+      summary: Get the current user
+      tags:
+      - users
+servers:
+- url: /
+tags:
+- description: Restricted manufacturing operations.
+  name: internal
+- description: API listener health probes.
+  name: operational

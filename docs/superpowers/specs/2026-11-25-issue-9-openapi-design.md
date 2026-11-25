@@ -7,7 +7,7 @@
 
 Generate a machine-readable HTTP contract from Go comments and wire types. Mobile, firmware, manufacturing and API contributors can inspect the same operations and see contract changes in pull requests.
 
-The issue title and the request for comment-based generation establish the goal. This design proposes one checked-in YAML artifact for the `api` Go module. Cover every canonical operation registered by the API, including provisioning and the process health probe. Analytics has its own module and private contract. Interactive hosting, SDK generation, runtime schema validation and changes to HTTP behavior are outside this scope.
+The issue title and the request for comment-based generation establish the goal. This design proposes two checked-in YAML artifacts for the `api` Go module. Cover every canonical operation registered by the API, including provisioning and the process health probe. Analytics has its own module and private contract. Interactive hosting, SDK generation, runtime schema validation and changes to HTTP behavior are outside this scope.
 
 Use the [API router](../../../api/internal/application/http.go), handlers and [API README](../../../api/README.md) for the implemented contract. The device-scoped telemetry and load-test work adds `POST /v1/devices/me/telemetry` as the target ingest path in the [project architecture](../../machine-whisperer-project-design.md) and temporarily retains `POST /v1/machines/{machine_id}/telemetry` for compatibility. CI's Compose E2E and k6 clients will exercise the device-scoped route. Publish the target operation in generated YAML once it is wired into the API. The current router has 17 canonical operations, and the transition router will have 18 while both ingest paths are active.
 
@@ -70,7 +70,7 @@ Annotate required fields, formats, enums, bounds and units wherever Swagger 2.0 
 
 Put API metadata in `api/cmd/api/main.go` and operation annotations on handler declarations. Document the inline health probe on the `Routes` declaration where the probe is registered. Use the checked router paths in annotations and retain one operation per method and path. Reuse existing JSON structs when they describe the wire format, such as history and token responses. Use small documentation types for map-decoded request bodies or where the requiredness of a response differs from the request. Keep them in HTTP packages with the operation they describe. Verify Swaggo resolves internal types and required tags without modifying runtime JSON tags or domain behavior.
 
-Proposed output is `api/docs/openapi/swagger.yaml`, committed alongside the annotations. Generate YAML only. Set the API title and version in source comments, keep paths rooted at `/`, and leave the host deployment-specific. Keep generated output free of timestamps and machine-dependent paths. Review generated changes with their corresponding code or comment changes. An example generator invocation from `api/` is:
+Generate `api/docs/openapi/swagger.yaml` with Swaggo. Convert it to `api/docs/openapi/openapi.yaml` using the pinned Go tool and validate OpenAPI 3.0.3 before writing it. Both YAML files are committed alongside the annotations. Set the API title and version in source comments, keep paths rooted at `/`, and leave the host deployment-specific. Keep generated output free of timestamps and machine-dependent paths. Review generated changes with their corresponding code or comment changes. An example generator invocation from `api/` is:
 
 ```sh
 go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
@@ -79,11 +79,11 @@ go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
   --output docs/openapi --outputTypes yaml
 ```
 
-Use one pinned invocation behind a `make swagger` target. A developer runs `make swagger` after a route, wire shape, status or middleware contract change, reviews `git diff -- docs/openapi/swagger.yaml`, then runs `make swagger-check` before committing. Link the artifact and document both commands in `api/README.md`. A developer can open the YAML with a Swagger-compatible viewer. Generation and comparison require the API module's Go 1.26.5 toolchain and access to the pinned generator on first use. They run without a server, database, Docker or credentials.
+Use one pinned invocation behind a `make swagger` target. A developer runs `make swagger` after a route, wire shape, status or middleware contract change, reviews `git diff -- docs/openapi`, then runs `make swagger-check` against both outputs before committing. Link the artifact and document both commands in `api/README.md`. A developer can open the YAML with a Swagger-compatible viewer. Generation and comparison require the API module's Go 1.26.5 toolchain and access to the pinned generator on first use. They run without a server, database, Docker or credentials.
 
 ## CI and acceptance
 
-Add `make swagger-check` to the existing API `build` job in [CI](../../../.github/workflows/ci.yml). Reuse the Go setup and run the same pinned invocation to a temporary directory. Compare the new YAML byte-for-byte with the checkout's file, show the diff on a mismatch, and clean up the temporary directory on exit. Missing artifacts and failed generation both fail the check. This job already gates image publication on main. The comparison detects generated-file drift. Changes in routing or middleware still require matching annotation changes during review.
+Add `make swagger-check` to the existing API `build` job in [CI](../../../.github/workflows/ci.yml). Reuse the Go setup and run the same pinned invocation to a temporary directory. Compare both generated YAML files byte-for-byte with the checkout's files, show the diff on a mismatch, and clean up the temporary directory on exit. Missing artifacts and failed generation both fail the check. This job already gates image publication on main. The comparison detects generated-file drift. Changes in routing or middleware still require matching annotation changes during review.
 
 - Two consecutive generations from the same checkout yield identical YAML, and `make swagger-check` passes with the current artifact and fails with a stale or missing one.
 - Validate the first artifact with a Swagger 2.0 validator. Compare its method and path pairs against the router at the same revision. During coexistence, check both POST operations use `DeviceBearer`, share the Observation and response schemas, and use distinct operation IDs. Only the compatibility POST takes a path UUID and carries the deprecation marker. History stays on `GET /v1/machines/{machine_id}/telemetry` with `UserAccessJWT`. Check that only provisioning specifies the manufacturing role and that empty successes omit schemas.
@@ -93,7 +93,8 @@ Add `make swagger-check` to the existing API `build` job in [CI](../../../.githu
 ## Approved defaults
 
 Use the stable Swaggo v1 generator and publish the full API inventory as
-Swagger 2.0 YAML, including clearly tagged health and provisioning operations.
+Swagger 2.0 and OpenAPI 3.0.3 YAML, including clearly tagged health and provisioning operations.
 Use a local Swagger-compatible viewer. The pinned generator cannot express an
-exclusive minimum for the baseline standard deviation, so the schema describes
-the strictly positive constraint in the field text.
+exclusive minimum for the baseline standard deviation, so the Swagger schema describes
+the strictly positive constraint in the field text. OpenAPI 3 uses the native
+exclusive bound, nullable fields, and separate HTTP bearer security schemes.

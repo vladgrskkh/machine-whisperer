@@ -4,6 +4,7 @@ SWAGGER_DIR := docs/openapi
 SWAGGER_INIT := go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
 	--dir cmd/api,internal/application,internal/handler,internal/domain/telemetry \
 	--generalInfo main.go --parseInternal --outputTypes yaml
+OPENAPI_CONVERT := go -C tools/openapi run -mod=readonly .
 
 run:
 	go run ./cmd/api
@@ -13,6 +14,7 @@ build:
 
 swagger:
 	$(SWAGGER_INIT) --output "$(SWAGGER_DIR)"
+	$(OPENAPI_CONVERT) "$(abspath $(SWAGGER_DIR))/swagger.yaml" "$(abspath $(SWAGGER_DIR))/openapi.yaml"
 
 swagger-check:
 	@set -eu; \
@@ -20,7 +22,9 @@ swagger-check:
 	trap 'rm -rf "$$tmp"' EXIT; \
 	trap 'exit 1' HUP INT TERM; \
 	$(SWAGGER_INIT) --output "$$tmp"; \
-	diff -u "$(SWAGGER_DIR)/swagger.yaml" "$$tmp/swagger.yaml"
+	$(OPENAPI_CONVERT) "$$tmp/swagger.yaml" "$$tmp/openapi.yaml"; \
+	diff -u "$(SWAGGER_DIR)/swagger.yaml" "$$tmp/swagger.yaml"; \
+	diff -u "$(SWAGGER_DIR)/openapi.yaml" "$$tmp/openapi.yaml"
 
 test:
 	go test ./... -v -count=1
