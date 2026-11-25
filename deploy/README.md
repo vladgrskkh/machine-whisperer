@@ -221,10 +221,21 @@ python3 -B -m unittest -v deploy.tests.e2e
 ```
 
 The contract suite archives both k6 scripts with synthetic fixtures and Docker
-network access disabled. The end-to-end suite generates its own credentials
-and certificate, publishes random loopback ports, and starts one Compose
-project. It checks ingress and authentication, device claim, telemetry
-submission and history, k6 scenarios, and database persistence. The k6
+network access disabled. The end-to-end suite starts one Compose project with
+disposable credentials, a local TLS certificate, and random loopback ports.
+It populates a pre-Grafana deployment using the pinned release's Compose,
+Nginx, Prometheus, and secret generator files. It builds the API and Analytics
+images once from the working tree and reuses them on upgrade. The upgrade
+checks that the Grafana credential is additive, sign-in works, and application
+data and Prometheus samples survive. A shallow clone may need the baseline
+fetch command printed by the suite.
+
+The suite also tests ingress and authentication, device claim, telemetry
+submission and history, k6 scenarios, and database persistence. It fetches
+the provisioned dashboards and evaluates their PromQL through Grafana's data
+source with both Go services and their instance selections. The query sweep
+uses a two-minute rate interval and one-minute ranges sampled every 15 seconds.
+Known sparse targets may return empty results during the workload. The k6
 container joins the project's edge network and verifies TLS using the
 disposable certificate. The suite removes the project's containers, images,
 volumes, networks, and temporary fixtures when it finishes.
