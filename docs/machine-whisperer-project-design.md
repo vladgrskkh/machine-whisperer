@@ -77,16 +77,19 @@ sharing the API database is unnecessary.
 
 ```mermaid
 flowchart LR
-    services["Go API + Analytics<br/>OpenTelemetry SDKs"] --> collector["OpenTelemetry Collector"]
-    collector --> prometheus["Prometheus<br/>service metrics"]
+    services["Go API + Analytics"] -->|OTLP traces| collector["OpenTelemetry Collector"]
+    nginx["Nginx"] -->|OTLP traces| collector
+    prometheus["Prometheus<br/>service metrics"] -->|scrape /metrics| services
+    prometheus -->|scrape| infra["Nginx exporter<br/>PostgreSQL exporter<br/>ClickHouse metrics"]
     collector --> jaeger["Jaeger<br/>distributed traces"]
     prometheus --> alertmanager["Alertmanager<br/>service alert routing"]
-    prometheus --> grafana["Grafana<br/>dashboards"]
-    jaeger --> grafana
+    grafana["Grafana<br/>dashboards"] -->|queries| prometheus
+    grafana -->|queries| jaeger
 ```
 
-Prometheus evaluates service alert rules and sends firing alerts to Alertmanager
-for grouping and notification routing. Jaeger stores and displays distributed
+Prometheus scrapes private metrics endpoints for the API, Analytics, Nginx,
+PostgreSQL and ClickHouse. It evaluates service alert rules and sends firing
+alerts to Alertmanager for grouping and notification. Jaeger stores and displays distributed
 traces. Grafana queries Prometheus and Jaeger. Machine vibration alerts are
 created by the API and shown in the mobile app; they are separate from
 service-health alerts.
@@ -376,10 +379,10 @@ Renewal reloads Nginx after a successful certificate update.
 Provisioning is limited by a configurable manufacturing-network CIDR at Nginx
 and by the user's signed role in the API. PostgreSQL, ClickHouse and Prometheus
 data use persistent volumes with documented backup and restore procedures.
-Instrument the Go API and Analytics with OpenTelemetry SDKs and send OTLP data
-to an OpenTelemetry Collector. The Collector exports metrics to Prometheus and
-traces to Jaeger. Prometheus evaluates service alert rules and sends firing
-alerts to Alertmanager for grouping and notification routing. Grafana dashboards
+Instrument the Go API and Analytics with OpenTelemetry SDKs and send OTLP traces
+to an OpenTelemetry Collector that exports to Jaeger. Prometheus scrapes the Go
+services and infrastructure metrics on private networks. It evaluates service
+alert rules and sends firing alerts to Alertmanager for grouping and routing. Grafana dashboards
 query Prometheus and Jaeger. This observability stack monitors services; machine
 vibration alerts remain API records shown in the owner app. Nginx remains the
 public edge and the API upstream proxy.
