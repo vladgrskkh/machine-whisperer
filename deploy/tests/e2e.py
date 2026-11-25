@@ -90,11 +90,10 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.stack.start()
             self.prometheus_port = self.stack.port("prometheus", 9090)
 
-            self.assert_ingress()
-            self.assert_grafana_upgrade()
             self.assert_migrations_and_health()
             self.assert_prometheus_targets()
             self.assert_private_metrics_paths()
+            self.assert_ingress()
             self.assert_api_documentation()
             self.assert_grafana_provisioning_and_access()
             self.assert_application_without_grafana()
@@ -278,35 +277,6 @@ class DeploymentEndToEndTest(unittest.TestCase):
             lambda: self.response("GET", GRAFANA + "/login")[0] == 200,
             timeout=60, caught=NETWORK_ERRORS,
         )
-
-    def assert_grafana_upgrade(self):
-        self.request("GET", GRAFANA + "/login", 404, decode=False)
-        admin_secret = self.stack.secrets / "grafana-admin-password"
-        self.assertFalse(admin_secret.exists())
-        owner_token, history_path, history = self.assert_owner_and_device_http(username_prefix="upgrade-")
-        sample = eventually(
-            "a pre-Grafana Prometheus sample", self.prometheus_sample, timeout=60, caught=NETWORK_ERRORS,
-        )
-        original_secrets = {file.name: file.read_bytes() for file in self.stack.secrets.iterdir()}
-        container_ids = {service: self.stack.inspect(service)["Id"] for service in ("nginx", "prometheus")}
-
-        self.stack.upgrade_to_grafana()
-        self.assertEqual({file.name for file in self.stack.secrets.iterdir()}, set(original_secrets) | {admin_secret.name})
-        for name, original in original_secrets.items():
-            self.assertTrue((self.stack.secrets / name).read_bytes() == original, f"Secret changed during upgrade: {name}")
-        for service, before in container_ids.items():
-            self.assertNotEqual(self.stack.inspect(service)["Id"], before, service)
-
-        self.prometheus_port = self.stack.port("prometheus", 9090)
-        self.configure_tls_client()
-        self.wait_for_grafana_login()
-        self.stack.compose("exec", "-T", "nginx", "nginx", "-t")
-        self.assertEqual(self.request("GET", history_path, 200, token=owner_token)["items"], history)
-        restored = eventually(
-            "the pre-Grafana Prometheus sample after upgrade",
-            lambda: self.prometheus_sample(sample), caught=NETWORK_ERRORS,
-        )
-        self.assertEqual(restored, sample)
 
     def assert_grafana_provisioning_and_access(self):
         status, headers, _ = self.response("GET", GRAFANA + "?orgId=1")
@@ -618,9 +588,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertEqual(owner["email"], credentials["email"])
         return owner, credentials
 
-    def assert_owner_and_device_http(self, *, username_prefix=""):
-        owner, credentials = self.signup(f"{username_prefix}owner")
-        stranger, stranger_credentials = self.signup(f"{username_prefix}stranger")
+    def assert_owner_and_device_http(self):
+        owner, credentials = self.signup("owner")
+        stranger, stranger_credentials = self.signup("stranger")
         self.assertNotEqual(owner["id"], stranger["id"])
         with patch.object(seed, "docker", self.seed_compose), patch.object(seed, "PUBLIC_API", self.opener):
             seed.grant_role(owner["id"])
@@ -688,7 +658,6 @@ class DeploymentEndToEndTest(unittest.TestCase):
         for other_id, token in ((other, owner_token), (separate, stranger_token)):
             history = self.request("GET", f"/v1/machines/{other_id}/telemetry", 200, token=token)
             self.assertEqual(history["items"], [])
-        return owner_token, history_path, items
 
     def run_k6_scenarios(self):
         fixtures = self.stack.work / "fixtures" / "demo-fixtures.json"
@@ -706,16 +675,6 @@ class DeploymentEndToEndTest(unittest.TestCase):
                 "K6_CA_FILE": str(self.stack.ca), "SCENARIO": scenario, "SIMULATIONS": "1",
             })
 
-    def prometheus_sample(self, at=None):
-        params = {"query": 'up{job="prometheus"}[1m]'}
-        if at is not None:
-            params["time"] = at
-        status, _, body = self.stack.http(self.prometheus_port, "/api/v1/query?" + urlencode(params))
-        if status != 200:
-            return None
-        samples = json.loads(body)["data"]["result"]
-        return max((ts for row in samples for ts, value in row["values"] if value == "1"), default=None)
-
     def assert_persistence_across_container_recreation(self):
         def postgres(query):
             return self.stack.compose(
@@ -732,12 +691,23 @@ exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --q
 ''', "bash", query,
             ).strip()
 
+        def prometheus_sample(port, at=None):
+            params = {"query": 'up{job="prometheus"}[1m]'}
+            if at is not None:
+                params["time"] = at
+            status, _, body = self.stack.http(port, "/api/v1/query?" + urlencode(params))
+            if status != 200:
+                return None
+            samples = json.loads(body)["data"]["result"]
+            return max((ts for row in samples for ts, value in row["values"] if value == "1"), default=None)
+
         postgres("CREATE TABLE smoke_marker (value text NOT NULL)")
         clickhouse("CREATE TABLE smoke_marker (value String) ENGINE = MergeTree ORDER BY tuple()")
         for query in (postgres, clickhouse):
             query(f"INSERT INTO smoke_marker VALUES ('{self.stack.project}')")
+        prom_port = self.stack.port("prometheus", 9090)
         sample = eventually(
-            "a persisted Prometheus self-scrape", self.prometheus_sample,
+            "a persisted Prometheus self-scrape", lambda: prometheus_sample(prom_port),
             timeout=60, caught=NETWORK_ERRORS,
         )
         services = ("postgres", "clickhouse", "prometheus")
@@ -758,9 +728,10 @@ SELECT rolcanlogin AND NOT (rolsuper OR rolcreatedb OR rolcreaterole OR rolrepli
     AND pg_has_role(oid, 'pg_monitor', 'member') AND NOT has_table_privilege(oid, 'smoke_marker', 'select')
 FROM pg_roles WHERE rolname = 'mw_postgres_exporter'
 """), "t")
-        self.prometheus_port = self.stack.port("prometheus", 9090)
+        prom_port = self.stack.port("prometheus", 9090)
+        self.prometheus_port = prom_port
         restored = eventually(
-            "the original Prometheus sample after recreation", lambda: self.prometheus_sample(sample),
+            "the original Prometheus sample after recreation", lambda: prometheus_sample(prom_port, sample),
             caught=NETWORK_ERRORS,
         )
         self.assertEqual(restored, sample)

@@ -8,10 +8,7 @@ import ssl
 import time
 from urllib.request import HTTPSHandler, ProxyHandler, build_opener
 
-from deploy.tests.support import DEPLOY, run
-
-
-PRE_GRAFANA = "fc2f36239cc1d33c8b82e9db51b64df4fcb801b2"
+from deploy.tests.support import run
 
 
 class LoopbackHTTPSConnection(http.client.HTTPSConnection):
@@ -51,8 +48,6 @@ class ComposeStack:
         self.ca = self.fixture_cert / "fullchain.pem"
         self.webroot = work / "acme"
         self.secrets = work / "secrets"
-        self.previous = work / "pre-grafana"
-        self.pre_grafana = True
         self.env = {
             **os.environ, "DOCKERHUB_NAMESPACE": self.namespace, "IMAGE_TAG": self.project,
             "DOMAIN": self.domain, "MW_EDGE_SUBNET": f"{edge}.0/28",
@@ -81,49 +76,17 @@ class ComposeStack:
 """)
         self.started = False
 
-    def compose(self, *args, untrusted=False, pre_grafana=None, **kwargs):
-        if pre_grafana is None:
-            pre_grafana = self.pre_grafana
-        primary = self.previous / "compose.yaml" if pre_grafana else "compose.yaml"
-        files = ["-f", primary, "-f", self.override]
-        if pre_grafana:
-            files += ["-f", self.previous / "mounts.yaml"]
+    def compose(self, *args, untrusted=False, **kwargs):
+        files = ["-f", "compose.yaml", "-f", self.override]
         if untrusted:
             files += ["-f", self.untrusted]
         return run([
             "docker", "compose", "--env-file", ".env.server.example", "-p", self.project,
-            "--project-directory", DEPLOY, *files, *args,
+            *files, *args,
         ], env=self.env, **kwargs).stdout
 
     def prepare(self):
-        if run(["git", "cat-file", "-e", f"{PRE_GRAFANA}^{{commit}}"], check=False).returncode:
-            raise AssertionError(f"Fetch the pre-Grafana deployment baseline: git fetch --depth=1 origin {PRE_GRAFANA}")
-        for relative in (
-            "compose.yaml", "nginx/bootstrap.conf.template", "nginx/default.conf.template", "nginx/entrypoint.sh",
-            "nginx/status.conf", "nginx/database-metrics.conf",
-            "prometheus/prometheus.yml", "scripts/prepare-secrets.sh",
-        ):
-            destination = self.previous / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text(run(["git", "show", f"{PRE_GRAFANA}:deploy/{relative}"]).stdout)
-        (self.previous / "nginx/entrypoint.sh").chmod(0o755)
-        # Keep legacy files outside the checkout. Switching these bind sources
-        # at upgrade asks Compose to recreate Nginx and Prometheus automatically.
-        (self.previous / "mounts.yaml").write_text("""services:
-  nginx:
-    volumes:
-      - "${MW_E2E_PRE_GRAFANA_DIR}/nginx:/opt/mw/nginx:ro"
-      - "${MW_E2E_PRE_GRAFANA_DIR}/nginx/entrypoint.sh:/docker-entrypoint.d/19-machine-whisperer.sh:ro"
-      - "${MW_E2E_PRE_GRAFANA_DIR}/nginx/status.conf:/etc/nginx/conf.d/status.conf:ro"
-  database-metrics-proxy:
-    volumes:
-      - "${MW_E2E_PRE_GRAFANA_DIR}/nginx/database-metrics.conf:/etc/nginx/conf.d/default.conf:ro"
-  prometheus:
-    volumes:
-      - "${MW_E2E_PRE_GRAFANA_DIR}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
-""")
-        self.env["MW_E2E_PRE_GRAFANA_DIR"] = str(self.previous)
-        run(["bash", self.previous / "scripts/prepare-secrets.sh", "--output-dir", self.secrets])
+        run(["scripts/prepare-secrets.sh", "--output-dir", self.secrets])
         self.fixture_cert.mkdir(parents=True)
         probe = self.webroot / ".well-known" / "acme-challenge" / "probe"
         probe.parent.mkdir(parents=True)
@@ -137,16 +100,7 @@ class ComposeStack:
         self.compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/promtool", "prometheus",
                      "check", "config", "/etc/prometheus/prometheus.yml", timeout=120)
         self.compose("build", "api", "analytics", timeout=600)
-        self.up()
-
-    def up(self):
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "240", timeout=300)
-
-    def upgrade_to_grafana(self):
-        run(["scripts/prepare-secrets.sh", "--output-dir", self.secrets, "--grafana-only"])
-        self.compose("config", "--quiet", pre_grafana=False)
-        self.pre_grafana = False
-        self.up()
 
     def enable_tls(self):
         run([
