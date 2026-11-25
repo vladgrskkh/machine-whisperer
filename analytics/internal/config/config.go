@@ -15,9 +15,10 @@ type ClickHouse struct {
 }
 
 type Config struct {
-	ClickHouse ClickHouse
-	Address    string
-	IngestKey  string
+	ClickHouse     ClickHouse
+	Address        string
+	MetricsAddress string
+	IngestKey      string
 }
 
 func Load() (Config, error) {
@@ -36,7 +37,11 @@ func Load() (Config, error) {
 	if addr == "" {
 		addr = ":8081"
 	}
-	return Config{ClickHouse: db, Address: addr, IngestKey: key}, nil
+	metricsAddr := os.Getenv("ANALYTICS_METRICS_ADDRESS")
+	if metricsAddr == "" {
+		metricsAddr = "127.0.0.1:9091"
+	}
+	return Config{ClickHouse: db, Address: addr, MetricsAddress: metricsAddr, IngestKey: key}, nil
 }
 
 const clickHousePasswordLength = 64

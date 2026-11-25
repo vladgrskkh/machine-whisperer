@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/felixge/httpsnoop"
+
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
 )
 
@@ -32,7 +34,8 @@ type BatchIngester interface {
 
 func NewBatch(ingest BatchIngester) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		reader := http.MaxBytesReader(w, r.Body, maxBodyBytes)
+		// MaxBytesReader signals an oversized request directly to the server's response writer.
+		reader := http.MaxBytesReader(httpsnoop.Unwrap(w), r.Body, maxBodyBytes)
 		events, err := decodeBatch(reader)
 		_, oversized := errors.AsType[*http.MaxBytesError](err)
 		switch {

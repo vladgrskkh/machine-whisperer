@@ -20,10 +20,16 @@ func TestServiceConfiguration(t *testing.T) {
 	t.Setenv("CLICKHOUSE_USER", "ingest")
 	t.Setenv("CLICKHOUSE_PASSWORD", "secret")
 	t.Setenv("ANALYTICS_ADDRESS", "")
+	t.Setenv("ANALYTICS_METRICS_ADDRESS", "")
 	t.Setenv("ANALYTICS_INGEST_API_KEY", "relay")
 	cfg, err := config.Load()
 	require.NoError(t, err)
 	assert.Equal(t, ":8081", cfg.Address)
+	assert.Equal(t, "127.0.0.1:9091", cfg.MetricsAddress)
+	t.Setenv("ANALYTICS_METRICS_ADDRESS", "analytics-metrics:9091")
+	cfg, err = config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "analytics-metrics:9091", cfg.MetricsAddress)
 	for _, name := range []string{"CLICKHOUSE_ADDRESS", "CLICKHOUSE_DATABASE", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "ANALYTICS_INGEST_API_KEY"} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(name, "")

@@ -25,6 +25,7 @@ the migration.
 | `CLICKHOUSE_PASSWORD` | Password for that account |
 | `ANALYTICS_INGEST_API_KEY` | Dedicated service token shared with the API |
 | `ANALYTICS_ADDRESS` | HTTP listen address, defaults to `:8081` |
+| `ANALYTICS_METRICS_ADDRESS` | Private Prometheus listen address, defaults to `127.0.0.1:9091`. Use a specific host and port. |
 
 1. Run `make migrate` with a ClickHouse account that can create the table.
    The command applies the embedded, idempotent
@@ -60,6 +61,15 @@ Invalid limits, machine IDs or cursors return HTTP 400.
 The query uses ClickHouse `FINAL` so observations retried by the relay appear
 once before background merges. ClickHouse query failures return HTTP 503
 without storage details.
+
+## Prometheus metrics
+
+Scrape `GET /metrics` on the private listener. The endpoint reports Go and
+process metrics, business HTTP traffic, batch outcomes, ClickHouse operation
+counts and durations, and the native connection pool state.
+`mw_telemetry_batch_events_stored_total` counts rows acknowledged by
+ClickHouse. Successful retries add to this counter even when history returns
+a single observation.
 
 ## Checks
 
