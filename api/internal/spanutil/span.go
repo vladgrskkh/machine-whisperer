@@ -18,14 +18,14 @@ func End(span trace.Span, err error, expected ...error) {
 			}
 		}
 	}
-	end(span, err, "internal")
+	EndWithErrorType(span, err, "internal")
 }
 
 func EndDatabase(span trace.Span, err error) {
-	end(span, err, "database_error")
+	EndWithErrorType(span, err, "database_error")
 }
 
-func end(span trace.Span, err error, failure string) {
+func EndWithErrorType(span trace.Span, err error, failure string) {
 	if err != nil && span.IsRecording() {
 		switch {
 		case errors.Is(err, context.Canceled):

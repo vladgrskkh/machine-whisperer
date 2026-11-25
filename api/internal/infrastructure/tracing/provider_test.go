@@ -37,6 +37,34 @@ func TestProviderStartsWithCollectorUnavailable(t *testing.T) {
 	assert.NoError(t, runtime.Shutdown(t.Context()))
 }
 
+func TestProviderSamplesDeliveryRootsWithSampledLinks(t *testing.T) {
+	t.Setenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", "http://127.0.0.1:0")
+	t.Setenv("OTEL_TRACES_SAMPLER_ARG", "0")
+	runtime, err := tracing.New(t.Context(), "api")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, runtime.Shutdown(t.Context())) })
+	tracer := runtime.Provider.Tracer("test")
+	sampled := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID: trace.TraceID{1}, SpanID: trace.SpanID{1}, TraceFlags: trace.FlagsSampled, Remote: true,
+	})
+
+	for _, test := range []struct {
+		name  string
+		links []trace.Link
+		want  bool
+	}{
+		{name: "outbox.deliver", links: []trace.Link{{SpanContext: sampled}}, want: true},
+		{name: "outbox.deliver", links: []trace.Link{{SpanContext: sampled.WithTraceFlags(0)}}},
+		{name: "outbox.deliver", links: []trace.Link{{SpanContext: trace.SpanContext{}}}},
+		{name: "outbox.deliver"},
+		{name: "ordinary.root", links: []trace.Link{{SpanContext: sampled}}},
+	} {
+		_, span := tracer.Start(t.Context(), test.name, trace.WithLinks(test.links...))
+		assert.Equal(t, test.want, span.SpanContext().IsSampled(), test.name)
+		span.End()
+	}
+}
+
 func TestProviderFlushesSampledSpansAfterApplicationCancellation(t *testing.T) {
 	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)

@@ -15,6 +15,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 	transaction "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 	telemetryusecase "github.com/vladgrskkh/machine-whisperer/api/internal/usecase/telemetry"
 )
 
@@ -159,8 +160,17 @@ func (r *Repository) InsertTelemetryOutbox(ctx context.Context, event telemetry.
 	if err != nil {
 		return fmt.Errorf("encode telemetry outbox payload: %w", err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO telemetry_outbox (device_id,event_id,machine_id,payload,created_at)
-		VALUES ($1,$2,$3,$4,$5)`, event.DeviceID, event.EventID, event.MachineID, payload, event.ReceivedAt)
+	_, err = tx.Exec(
+		ctx,
+		`INSERT INTO telemetry_outbox (device_id,event_id,machine_id,payload,created_at,traceparent)
+		VALUES ($1,$2,$3,$4,$5,NULLIF($6,''))`,
+		event.DeviceID,
+		event.EventID,
+		event.MachineID,
+		payload,
+		event.ReceivedAt,
+		spanutil.SampledLocalTraceparent(ctx),
+	)
 	if err != nil {
 		return telemetryInsertError("insert telemetry outbox", err)
 	}

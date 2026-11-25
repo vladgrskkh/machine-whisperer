@@ -15,6 +15,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
+
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 const (
@@ -64,7 +66,7 @@ func New(ctx context.Context, serviceName string) (Runtime, error) {
 		sdktrace.WithResource(resource.NewSchemaless(semconv.ServiceName(serviceName),
 			semconv.ServiceNamespace("machine-whisperer"))),
 		sdktrace.WithoutPanicRecording(),
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))),
+		sdktrace.WithSampler(sdktrace.ParentBased(outboxLinkSampler{fallback: sdktrace.TraceIDRatioBased(ratio)})),
 		sdktrace.WithBatcher(exporter,
 			sdktrace.WithMaxQueueSize(maxQueuedSpans),
 			sdktrace.WithMaxExportBatchSize(maxBatchSpans),
@@ -72,6 +74,23 @@ func New(ctx context.Context, serviceName string) (Runtime, error) {
 		),
 	)
 	return Runtime{Provider: provider, shutdown: provider.Shutdown}, nil
+}
+
+type outboxLinkSampler struct{ fallback sdktrace.Sampler }
+
+func (s outboxLinkSampler) ShouldSample(params sdktrace.SamplingParameters) sdktrace.SamplingResult {
+	if params.Name == spanutil.OutboxDeliverSpan {
+		for _, link := range params.Links {
+			if link.SpanContext.IsValid() && link.SpanContext.IsSampled() {
+				return sdktrace.SamplingResult{Decision: sdktrace.RecordAndSample}
+			}
+		}
+	}
+	return s.fallback.ShouldSample(params)
+}
+
+func (s outboxLinkSampler) Description() string {
+	return "OutboxLinkSampler{" + s.fallback.Description() + "}"
 }
 
 func (r Runtime) Shutdown(ctx context.Context) error {

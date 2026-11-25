@@ -45,6 +45,7 @@ type OutboxEvent struct {
 	ReceivedAt   time.Time       `json:"received_at"`
 	Payload      json.RawMessage `json:"payload"`
 	AttemptCount int64           `json:"-"`
+	Traceparent  string          `json:"-"`
 }
 
 type OutboxSnapshot struct {

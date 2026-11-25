@@ -244,8 +244,10 @@ func (a *Application) setupRelay(config RelayConfig, outbox *telemetrypostgres.O
 		},
 		a.logger,
 		a.metrics,
+		a.tracerProvider.Tracer(instrumentationScope+"usecase/telemetry"),
 	)
-	a.telemetryWorker = telemetryworker.New(export, config.BatchSize, config.PollInterval, a.logger)
+	a.telemetryWorker = telemetryworker.New(export, config.BatchSize, config.PollInterval, a.logger,
+		a.tracerProvider.Tracer(instrumentationScope+"worker/telemetry"))
 }
 
 func (a *Application) RunWorkers(ctx context.Context) {
