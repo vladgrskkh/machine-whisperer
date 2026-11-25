@@ -106,6 +106,7 @@ class CertificateHelperTest(unittest.TestCase):
             self.assertIn("return 503;", bootstrap)
             self.assertIn("root /var/www/acme;", bootstrap)
             self.assertNotRegex(bootstrap, r"listen 443|proxy_pass")
+            self.assertNotIn("/grafana/", bootstrap)
             run([
                 "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1",
                 "-subj", f"/CN={domain}", "-keyout", cert_dir / "privkey.pem",
@@ -115,6 +116,11 @@ class CertificateHelperTest(unittest.TestCase):
             tls = output.read_text()
             self.assertIn(f"ssl_certificate /etc/letsencrypt/live/{domain}/fullchain.pem;", tls)
             self.assertIn("proxy_ssl_verify on;", tls)
+            self.assertIn(f"return 308 https://{domain}/grafana/$is_args$args;", tls)
+            self.assertIn("set $grafana_endpoint grafana:3000;", tls)
+            self.assertIn("proxy_pass http://$grafana_endpoint;", tls)
+            self.assertIn("proxy_set_header Upgrade $http_upgrade;", tls)
+            self.assertIn("proxy_set_header Connection $grafana_connection_upgrade;", tls)
 
     def test_bootstrap_and_renewal_call_compose_in_order(self):
         with tempfile.TemporaryDirectory() as scratch:

@@ -25,6 +25,7 @@ services:
         ipv4_address: ${MW_PROXY_IP:-172.30.48.2}
       nginx-status:
         aliases: [nginx-status]
+      grafana-proxy: {}
     volumes:
       - ./nginx:/opt/mw/nginx:ro
       - ./nginx/entrypoint.sh:/docker-entrypoint.d/19-machine-whisperer.sh:ro
@@ -222,6 +223,29 @@ services:
       - prometheus-data:/prometheus
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
+  grafana:
+    image: grafana/grafana:13.3.2
+    restart: unless-stopped
+    networks: [grafana-proxy, monitoring]
+    environment:
+      GF_SERVER_ROOT_URL: https://${DOMAIN:-onerep.mooo.com}/grafana/
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_SECURITY_COOKIE_SECURE: "true"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_PUBLIC_DASHBOARDS_ENABLED: "false"
+      GF_SNAPSHOTS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_AUTO_ASSIGN_ORG_ROLE: Viewer
+      GF_METRICS_ENABLED: "false"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
+    secrets: [grafana_admin_password]
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./grafana/dashboards:/etc/grafana/dashboards:ro
+
 networks:
   edge:
     ipam:
@@ -235,6 +259,8 @@ networks:
     internal: true
   nginx-status:
     internal: true
+  grafana-proxy:
+    internal: true
   monitoring: {}
   acme: {}
 
@@ -242,6 +268,7 @@ volumes:
   postgres-data: {}
   clickhouse-data: {}
   prometheus-data: {}
+  grafana-data: {}
 
 secrets:
   database_url:
@@ -264,3 +291,5 @@ secrets:
     file: ${MW_SECRETS_DIR:-./secrets}/api.crt
   api_key:
     file: ${MW_SECRETS_DIR:-./secrets}/api.key
+  grafana_admin_password:
+    file: ${MW_SECRETS_DIR:-./secrets}/grafana-admin-password

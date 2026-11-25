@@ -2,28 +2,39 @@
 set -euo pipefail
 umask 077
 
-if [[ ${1:-} != --output-dir || -z ${2:-} || ( $# != 2 && ( $# != 3 || $3 != --postgres-exporter-only ) ) ]]; then
-    echo "Usage: $0 --output-dir DIR [--postgres-exporter-only]" >&2
+usage() {
+    echo "Usage: $0 --output-dir DIR [--postgres-exporter-only | --grafana-only]" >&2
     exit 2
+}
+
+if [[ ${1:-} != --output-dir || -z ${2:-} || $# -gt 3 ]]; then
+    usage
 fi
 dir=$2
 exporter_secret=postgres-exporter-password
+grafana_secret=grafana-admin-password
+case "${3:-}" in
+    --postgres-exporter-only) secret=$exporter_secret ;;
+    --grafana-only) secret=$grafana_secret ;;
+    "") [[ $# == 2 ]] || usage ;;
+    *) usage ;;
+esac
 
-if [[ ${3:-} == --postgres-exporter-only ]]; then
+if [[ $# == 3 ]]; then
     cd -- "$dir"
-    if [[ ! -e $exporter_secret && ! -L $exporter_secret ]]; then
-        stage=$(mktemp -d .postgres-exporter.XXXXXXXX)
+    if [[ ! -e $secret && ! -L $secret ]]; then
+        stage=$(mktemp -d ".${secret}.XXXXXXXX")
         trap 'rm -rf -- "$stage"' EXIT
-        openssl rand -hex 32 >"$stage/$exporter_secret"
-        chmod 0444 "$stage/$exporter_secret"
+        openssl rand -hex 32 >"$stage/$secret"
+        chmod 0444 "$stage/$secret"
         # Publish atomically, keeping any credential installed by a concurrent run.
-        ln -- "$stage/$exporter_secret" . 2>/dev/null || [[ -f $exporter_secret ]]
+        ln -- "$stage/$secret" . 2>/dev/null || [[ -f $secret ]]
     fi
-    if [[ ! -f $exporter_secret || -L $exporter_secret || ! -s $exporter_secret ]]; then
-        echo 'PostgreSQL exporter secret must be a nonempty regular file.' >&2
+    if [[ ! -f $secret || -L $secret || ! -s $secret ]]; then
+        printf '%s must be a nonempty regular file.\n' "$secret" >&2
         exit 1
     fi
-    echo 'PostgreSQL exporter password file is ready.'
+    printf 'The %s file is ready.\n' "$secret"
     exit 0
 fi
 
@@ -48,6 +59,7 @@ trap 'rm -rf -- .generating' EXIT
         "$(cat postgres-password)" >database-url
     openssl rand -hex 32 >clickhouse-password
     openssl rand -hex 32 >analytics-token
+    openssl rand -hex 32 >"$grafana_secret"
 
     openssl genpkey -algorithm ED25519 -out auth-signing.pem
     # Ed25519 SubjectPublicKeyInfo ends with the 32 raw public-key bytes.
@@ -71,10 +83,10 @@ EXT
     # Compose file secrets are bind mounts; non-root container UIDs must read
     # the files. The host directory remains 0700, and the CA key stays 0600.
     for file in postgres-password "$exporter_secret" database-url clickhouse-password analytics-token \
-                auth-signing.pem auth-public-keys.json internal-ca.crt api.crt api.key; do
+                "$grafana_secret" auth-signing.pem auth-public-keys.json internal-ca.crt api.crt api.key; do
         chmod 0444 "$file"
         ln "$file" "../$file"
     done
     ln internal-ca.key ../internal-ca.key
 )
-echo 'Generated database credentials, signing keys and internal TLS material.'
+echo 'Generated database and Grafana credentials, signing keys and internal TLS material.'
