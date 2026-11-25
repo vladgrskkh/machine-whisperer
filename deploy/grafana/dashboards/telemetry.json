@@ -1,0 +1,1234 @@
+{
+  "uid": "mw-telemetry",
+  "title": "Telemetry pipeline",
+  "description": "Follow device requests from API acceptance through outbox delivery and ClickHouse acknowledgement.",
+  "tags": [
+    "telemetry"
+  ],
+  "editable": false,
+  "schemaVersion": 40,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [
+    {
+      "type": "link",
+      "title": "Nginx",
+      "url": "/grafana/d/mw-nginx/nginx",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "type": "link",
+      "title": "API",
+      "url": "/grafana/d/mw-go-services/go-services?var-job=api&var-instance=All",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "type": "link",
+      "title": "Analytics",
+      "url": "/grafana/d/mw-go-services/go-services?var-job=analytics&var-instance=All",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "type": "link",
+      "title": "PostgreSQL",
+      "url": "/grafana/d/mw-postgres/postgresql",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    },
+    {
+      "type": "link",
+      "title": "ClickHouse",
+      "url": "/grafana/d/mw-clickhouse/clickhouse",
+      "icon": "dashboard",
+      "keepTime": true,
+      "includeVars": false,
+      "targetBlank": false
+    }
+  ],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Device ingest",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 0
+      },
+      "panels": [],
+      "id": 1
+    },
+    {
+      "type": "timeseries",
+      "title": "Accepted device requests",
+      "description": "Requests that committed a new device observation and accepted replays. Five-minute average rates.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: req/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(mw_telemetry_ingest_requests_total{job=\"api\",outcome=\"accepted_new\"}[5m]))",
+          "legendFormat": "New observation",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(mw_telemetry_ingest_requests_total{job=\"api\",outcome=\"accepted_replay\"}[5m]))",
+          "legendFormat": "Accepted replay",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 2
+    },
+    {
+      "type": "timeseries",
+      "title": "Device ingest rejections and errors",
+      "description": "Ingest use-case rejections and errors. Five-minute average rates. The Go services dashboard shows HTTP status classes, including requests rejected during authentication, authorization or decoding.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 1
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: req/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(mw_telemetry_ingest_requests_total{job=\"api\",outcome!~\"accepted_new|accepted_replay\"}[5m]))",
+          "legendFormat": "{{outcome}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 3
+    },
+    {
+      "type": "row",
+      "title": "Outbox backlog and delivery",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 9
+      },
+      "panels": [],
+      "id": 4
+    },
+    {
+      "type": "stat",
+      "title": "Pending rows",
+      "description": "Undelivered rows, including leased and delayed rows. Requires a successful snapshot less than 90 seconds old.",
+      "gridPos": {
+        "w": 6,
+        "h": 4,
+        "x": 0,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_pending_events{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1))) or on() vector(-1)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "id": 5
+    },
+    {
+      "type": "stat",
+      "title": "Retry rows",
+      "description": "Undelivered rows with a recorded send failure. Requires a successful snapshot less than 90 seconds old.",
+      "gridPos": {
+        "w": 6,
+        "h": 4,
+        "x": 6,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_retry_events{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1))) or on() vector(-1)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "id": 6
+    },
+    {
+      "type": "stat",
+      "title": "Oldest pending row",
+      "description": "Time since the oldest undelivered row was enqueued. Requires a successful snapshot less than 90 seconds old.",
+      "gridPos": {
+        "w": 6,
+        "h": 4,
+        "x": 12,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_oldest_pending_age_seconds{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1))) or on() vector(-1)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "id": 7
+    },
+    {
+      "type": "stat",
+      "title": "Oldest retry row",
+      "description": "Time since the oldest row with a recorded send failure was enqueued. Requires a successful snapshot less than 90 seconds old.",
+      "gridPos": {
+        "w": 6,
+        "h": 4,
+        "x": 18,
+        "y": 10
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_oldest_retry_age_seconds{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1))) or on() vector(-1)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "id": 8
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox depth",
+      "description": "Maximum across fresh API snapshots of the shared database. Gaps indicate no recent snapshot from a live API.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_pending_events{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1)))",
+          "legendFormat": "pending",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_retry_events{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1)))",
+          "legendFormat": "retry",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 9
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest queued row age",
+      "description": "Age since enqueue. Gaps indicate no recent snapshot from a live API.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 14
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_oldest_pending_age_seconds{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1)))",
+          "legendFormat": "pending",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "max(mw_outbox_oldest_retry_age_seconds{job=\"api\"} and on(job, instance) ((mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) >= 0) and ((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) < 90) and on(job, instance) (up{job=\"api\"} == 1)))",
+          "legendFormat": "retry",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 10
+    },
+    {
+      "type": "stat",
+      "title": "Latest outbox snapshot age",
+      "description": "Age of the newest snapshot from the latest scrape of each live API instance. Unknown if none returned a snapshot. Values of 90 seconds or more are stale.",
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 0,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "Unknown",
+                  "color": "gray"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "min((time() - mw_outbox_snapshot_timestamp_seconds{job=\"api\"}) and (mw_outbox_snapshot_timestamp_seconds{job=\"api\"} > 0) and on(job, instance) (up{job=\"api\"} == 1)) or on() vector(-1)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
+      },
+      "id": 11
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox snapshot failures",
+      "description": "Failed outbox snapshot reads during scrapes, by API instance.",
+      "gridPos": {
+        "w": 16,
+        "h": 8,
+        "x": 8,
+        "y": 22
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: failures/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "rate(mw_outbox_snapshot_errors_total{job=\"api\"}[$__rate_interval])",
+          "legendFormat": "{{instance}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 12
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox delivery",
+      "description": "Rows successfully marked delivered under the active lease.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(mw_outbox_delivered_events_total{job=\"api\"}[$__rate_interval]))",
+          "legendFormat": "Delivered",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 13
+    },
+    {
+      "type": "timeseries",
+      "title": "Outbox reschedules",
+      "description": "Rows rescheduled after a failed relay send, by bounded reason.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 30
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (reason) (rate(mw_outbox_retried_events_total{job=\"api\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 14
+    },
+    {
+      "type": "row",
+      "title": "Analytics and ClickHouse",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 38
+      },
+      "panels": [],
+      "id": 15
+    },
+    {
+      "type": "timeseries",
+      "title": "Analytics batch storage outcomes",
+      "description": "Batches acknowledged by ClickHouse and batches that failed during storage. The Go services dashboard shows HTTP status classes, including batch requests rejected before storage.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: req/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(mw_telemetry_batches_total{job=\"analytics\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 16
+    },
+    {
+      "type": "timeseries",
+      "title": "Event rows acknowledged by ClickHouse",
+      "description": "Physical event rows in batches acknowledged by ClickHouse. A replayed batch can write its rows again.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 39
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: rows/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(mw_telemetry_batch_events_stored_total{job=\"analytics\"}[$__rate_interval]))",
+          "legendFormat": "Stored event rows",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 17
+    },
+    {
+      "type": "timeseries",
+      "title": "ClickHouse client operations",
+      "description": "Analytics repository calls for inserts and history reads, by outcome.",
+      "gridPos": {
+        "w": 24,
+        "h": 8,
+        "x": 0,
+        "y": 47
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: operations/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (operation, outcome) (rate(mw_clickhouse_operations_total{job=\"analytics\"}[$__rate_interval]))",
+          "legendFormat": "{{operation}} {{outcome}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 18
+    },
+    {
+      "type": "timeseries",
+      "title": "ClickHouse client p95 latency",
+      "description": "Duration of Analytics repository operations. Idle windows appear as gaps.",
+      "gridPos": {
+        "w": 16,
+        "h": 8,
+        "x": 0,
+        "y": 55
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(mw_clickhouse_operation_duration_seconds_bucket{job=\"analytics\"}[$__rate_interval]))) >= 0",
+          "legendFormat": "{{operation}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 19
+    },
+    {
+      "type": "table",
+      "title": "Current ClickHouse client p95",
+      "description": "Current p95 over the Prometheus rate interval.",
+      "gridPos": {
+        "w": 8,
+        "h": 8,
+        "x": 16,
+        "y": 55
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "-1": {
+                  "text": "No observations"
+                },
+                "-2": {
+                  "text": "Unknown"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(mw_clickhouse_operation_duration_seconds_bucket{job=\"analytics\"}[$__rate_interval]))) >= 0 or on() ((sum(up{job=\"analytics\"}) > 0) * 0 - 1) or on() vector(-2)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "operation": "Operation",
+              "Value": "p95"
+            }
+          }
+        }
+      ],
+      "id": 20
+    },
+    {
+      "type": "row",
+      "title": "Detector and alerts",
+      "collapsed": false,
+      "gridPos": {
+        "w": 24,
+        "h": 1,
+        "x": 0,
+        "y": 63
+      },
+      "panels": [],
+      "id": 21
+    },
+    {
+      "type": "timeseries",
+      "title": "Detector observations",
+      "description": "New committed observations by detector outcome.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 0,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: observations/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(mw_detector_observations_total{job=\"api\"}[$__rate_interval]))",
+          "legendFormat": "{{outcome}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 22
+    },
+    {
+      "type": "timeseries",
+      "title": "Alert transitions",
+      "description": "Committed opens, recoveries, and first acknowledgements.",
+      "gridPos": {
+        "w": 12,
+        "h": 8,
+        "x": 12,
+        "y": 64
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "mw-prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "suffix: transitions/s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "mw-prometheus"
+          },
+          "editorMode": "code",
+          "expr": "sum by (transition) (rate(mw_alert_transitions_total{job=\"api\"}[$__rate_interval]))",
+          "legendFormat": "{{transition}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 23
+    }
+  ]
+}

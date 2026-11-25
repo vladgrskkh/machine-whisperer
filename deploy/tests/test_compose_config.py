@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from xml.etree import ElementTree
 
-from deploy.tests.support import REPO, run
+from deploy.tests.support import DEPLOY, REPO, run
 
 
 class ComposeConfigTest(unittest.TestCase):
@@ -33,16 +33,17 @@ class ComposeConfigTest(unittest.TestCase):
 
     def test_only_ingress_and_prometheus_publish_ports_and_scrapers_use_private_bridges(self):
         networks = {
-            "certbot": {"acme"}, "nginx": {"edge", "nginx-status"},
+            "certbot": {"acme"}, "nginx": {"edge", "nginx-status", "grafana-proxy"},
             "nginx-exporter": {"nginx-status", "infra-scrape"},
             "api": {"edge", "data", "scrape"}, "api-migrate": {"data"},
             "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
             "analytics": {"data", "scrape"}, "analytics-migrate": {"data"}, "clickhouse": {"data"},
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
+            "grafana": {"grafana-proxy", "monitoring"},
         }
         self.assertEqual(set(self.services), set(networks))
-        for network in ("data", "scrape", "infra-scrape", "nginx-status"):
+        for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -89,6 +90,7 @@ class ComposeConfigTest(unittest.TestCase):
             "nginx-exporter": "nginx/nginx-prometheus-exporter:1.5.3",
             "postgres-exporter": "quay.io/prometheuscommunity/postgres-exporter:v0.21.1",
             "prometheus": "prom/prometheus:v3.16.0",
+            "grafana": "grafana/grafana:13.3.2",
         }.items():
             with self.subTest(service=name):
                 self.assertEqual(self.services[name]["image"], image)
@@ -136,6 +138,7 @@ class ComposeConfigTest(unittest.TestCase):
         for name, target in (
             ("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
             ("prometheus", "/prometheus"),
+            ("grafana", "/var/lib/grafana"),
         ):
             with self.subTest(volume_service=name):
                 self.assertTrue(any(
@@ -159,6 +162,7 @@ class ComposeConfigTest(unittest.TestCase):
             "database-metrics-proxy": set(),
             "certbot": set(),
             "prometheus": set(),
+            "grafana": {"grafana_admin_password"},
         }
         secret_files = {
             "api": {
@@ -175,6 +179,7 @@ class ComposeConfigTest(unittest.TestCase):
                 "POSTGRES_PASSWORD_FILE": "postgres_password",
                 "POSTGRES_EXPORTER_PASSWORD_FILE": "postgres_exporter_password",
             },
+            "grafana": {"GF_SECURITY_ADMIN_PASSWORD__FILE": "grafana_admin_password"},
         }
         secrets_dir = PurePosixPath("/run/secrets")
         for name, expected in grants.items():
@@ -189,6 +194,7 @@ class ComposeConfigTest(unittest.TestCase):
                 self.assertTrue(env.keys().isdisjoint({
                     "DATABASE_URL", "ANALYTICS_INGEST_API_KEY", "CLICKHOUSE_PASSWORD", "POSTGRES_PASSWORD",
                     "POSTGRES_EXPORTER_PASSWORD", "DATA_SOURCE_NAME", "DATA_SOURCE_PASS",
+                    "GF_SECURITY_ADMIN_PASSWORD",
                 }))
                 self.assertEqual(
                     {key: value for key, value in env.items() if key.endswith("_FILE")},
@@ -200,6 +206,35 @@ class ComposeConfigTest(unittest.TestCase):
         for secret in self.config["secrets"].values():
             self.assertIn("file", secret)
             self.assertFalse(secret.get("external"))
+
+    def test_grafana_serves_provisioned_dashboards_on_the_authenticated_https_subpath(self):
+        self.assertIn("grafana", self.services)
+        grafana = self.services["grafana"]
+        environment = grafana["environment"]
+        for key, expected in {
+            "GF_SERVER_ROOT_URL": "https://fixture.test/grafana/",
+            "GF_SERVER_SERVE_FROM_SUB_PATH": "true",
+            "GF_SECURITY_COOKIE_SECURE": "true",
+            "GF_AUTH_ANONYMOUS_ENABLED": "false",
+            "GF_PUBLIC_DASHBOARDS_ENABLED": "false",
+            "GF_SNAPSHOTS_ENABLED": "false",
+            "GF_USERS_ALLOW_SIGN_UP": "false",
+            "GF_USERS_AUTO_ASSIGN_ORG_ROLE": "Viewer",
+            "GF_METRICS_ENABLED": "false",
+            "GF_PLUGINS_PREINSTALL_DISABLED": "true",
+        }.items():
+            self.assertEqual(environment.get(key), expected, key)
+        mounts = {mount["target"]: mount for mount in grafana["volumes"]}
+        for target, source in {
+            "/etc/grafana/provisioning/dashboards": "grafana/provisioning/dashboards",
+            "/etc/grafana/provisioning/datasources": "grafana/provisioning/datasources",
+            "/etc/grafana/dashboards": "grafana/dashboards",
+        }.items():
+            with self.subTest(target=target):
+                mount = mounts[target]
+                self.assertEqual(Path(mount["source"]), DEPLOY / source)
+                self.assertTrue(mount["read_only"])
+        self.assertEqual(mounts["/var/lib/grafana"]["source"], "grafana-data")
 
     def test_api_trusts_only_its_proxy_and_provisioning_cidr_can_be_overridden(self):
         nginx = self.services["nginx"]
@@ -241,6 +276,11 @@ class CredentialsTest(unittest.TestCase):
             exporter = (secrets / "postgres-exporter-password").read_text().strip()
             self.assertRegex(exporter, r"^[0-9a-f]{64}$")
             self.assertTrue(exporter != password, "The statistics login must use its own password")
+            grafana = secrets / "grafana-admin-password"
+            self.assertTrue(grafana.is_file(), "Fresh bootstrap omitted the Grafana credential")
+            grafana_password = grafana.read_text().strip()
+            self.assertRegex(grafana_password, r"^[0-9a-f]{64}$")
+            self.assertTrue(grafana_password not in (password, exporter), "Grafana must use its own password")
             url = (secrets / "database-url").read_text().strip()
             expected_url = f"postgres://machine_whisperer:{password}@postgres:5432/machine_whisperer?sslmode=disable"
             self.assertTrue(url == expected_url, "Generated database URL does not match the PostgreSQL credential")
@@ -255,20 +295,27 @@ class CredentialsTest(unittest.TestCase):
                 "A repeated bootstrap changed existing credentials",
             )
 
-    def test_exporter_upgrade_preserves_existing_secrets(self):
+    def test_monitoring_upgrades_add_credentials_without_overwriting_existing_secrets(self):
         with tempfile.TemporaryDirectory() as scratch:
             secrets = Path(scratch) / "secrets"
             secrets.mkdir(mode=0o700)
             existing = secrets / "postgres-password"
             existing.write_text("existing-postgres-password\n")
-            upgrade = ["scripts/prepare-secrets.sh", "--output-dir", secrets, "--postgres-exporter-only"]
-
-            run(upgrade)
-            exporter = secrets / "postgres-exporter-password"
-            generated = exporter.read_text()
-            self.assertRegex(generated.strip(), r"^[0-9a-f]{64}$")
-            self.assertEqual(stat.S_IMODE(exporter.stat().st_mode), 0o444)
-            run(upgrade)
-            self.assertTrue(exporter.read_text() == generated, "The upgrade replaced the existing exporter password")
-            self.assertTrue(existing.read_text() == "existing-postgres-password\n", "The upgrade changed PostgreSQL credentials")
-            self.assertEqual(set(path.name for path in secrets.iterdir()), {existing.name, exporter.name})
+            existing.chmod(0o444)
+            files = {existing.name: existing.read_bytes()}
+            modes = (
+                ("--postgres-exporter-only", "postgres-exporter-password"),
+                ("--grafana-only", "grafana-admin-password"),
+            )
+            for mode, filename in modes:
+                with self.subTest(mode=mode):
+                    upgrade = ["scripts/prepare-secrets.sh", "--output-dir", secrets, mode]
+                    run(upgrade)
+                    credential = secrets / filename
+                    self.assertRegex(credential.read_text().strip(), r"^[0-9a-f]{64}$")
+                    files[filename] = credential.read_bytes()
+                    run(upgrade)
+                    self.assertTrue(files == {path.name: path.read_bytes() for path in secrets.iterdir()},
+                                    "The upgrade changed existing secrets")
+                    for path in secrets.iterdir():
+                        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o444)

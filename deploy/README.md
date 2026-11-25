@@ -98,7 +98,7 @@ mw() {
 ```
 
 Use the following project name for the initial deployment. The project name
-determines the names of the three persistent volumes. Keep it stable across
+determines the names of the four persistent volumes. Keep it stable across
 restarts and upgrades.
 
 ```bash
@@ -137,6 +137,9 @@ unauthenticated request should return HTTP 401.
 curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
     https://onerep.mooo.com/v1/users/me
 ```
+
+Set up the named dashboard account after public HTTPS is available. See
+[Grafana sign-in and accounts](#grafana-sign-in-and-accounts).
 
 ## Seed synthetic demo data
 
@@ -229,13 +232,45 @@ volumes, networks, and temporary fixtures when it finishes.
 See the [local k6 load profile](k6/README.md) for running the longer telemetry
 workload from your machine.
 
+## Grafana sign-in and accounts
+
+Open `https://<DOMAIN>/grafana/` in a browser. On a new Grafana volume, sign
+in as `admin` using the password in
+`deploy/secrets/grafana-admin-password` (or the equivalent file in the
+configured `MW_SECRETS_DIR`).
+
+1. Open **Administration → Users and access → Users**, then choose **New user**.
+2. Enter the operator's name, unique username, email and a temporary password.
+   Select **Create user** and check that the account has the **Viewer** role
+   in the default organization and that **Grafana Admin** is disabled.
+3. Share the sign-in details through your password manager. Have the operator
+   sign in, change the temporary password, and open the **Machine Whisperer**
+   folder under **Dashboards**. It contains Nginx, Go services, PostgreSQL,
+   ClickHouse and Telemetry pipeline. The Go services links select API or
+   Analytics while carrying the time range.
+
+Use the named Viewer for day-to-day dashboard access. Use `admin` for
+administration. Change passwords through the account's profile or the
+server admin user settings, and store the current credentials in your password
+manager. Keep the bootstrap file in the deployment's secret directory.
+Grafana initializes the admin password from it once when creating its
+database. The passwords and account roles in `grafana-data` survive a
+restart, upgrade or restore of that volume.
+[Grafana server user management](https://grafana.com/docs/grafana/latest/administration/user-management/server-user-management/)
+
+Dashboard JSON and the default Prometheus data source are provisioned from
+Git. Change dashboards in the checkout and deploy the updated release.
+Grafana scans the mounted dashboard directory every 30 seconds and reconciles
+additions, changes and removals. Dashboard defaults are six hours and a
+30-second refresh. [Grafana file provisioning](https://grafana.com/docs/grafana/latest/administration/provisioning/)
+
 ## Logs and Prometheus
 
 ```bash
 mw ps -a
 mw logs --tail=100 api-migrate analytics-migrate postgres clickhouse
 mw logs --tail=100 postgres-exporter-setup postgres-exporter database-metrics-proxy nginx-exporter
-mw logs --follow --tail=100 nginx api analytics
+mw logs --follow --tail=100 nginx api analytics grafana
 ```
 
 Prometheus listens on host loopback at `127.0.0.1:9090` and scrapes `prometheus`,
@@ -259,14 +294,35 @@ to zero. Check `scrape_duration_seconds` and `scrape_samples_scraped` per job.
 ssh -N -L 127.0.0.1:9090:127.0.0.1:9090 operator@onerep.mooo.com
 ```
 
+Prometheus has a 15-day time limit for metrics in `prometheus-data`. To size a storage
+cap, measure the volume's size at several points under representative load
+and check free space on the filesystem that backs Docker's volumes. Use
+`mw exec -T prometheus du -sm /prometheus` to measure the volume. Allocate
+space for Prometheus alongside the database volumes and backups. Allow room
+for the write-ahead log, memory-mapped head chunks, and temporary
+compaction files. Set `storage.tsdb.retention.size` in
+`deploy/prometheus/prometheus.yml` to at most 80% of the space allocated to
+Prometheus. The time or size limit that is reached first determines how much
+history is available.
+[Prometheus storage and retention](https://prometheus.io/docs/prometheus/3.16/storage/#right-sizing-retention-size)
+
+After editing the config, validate the file and recreate Prometheus to mount
+the updated config.
+
+```bash
+mw run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
+mw up -d --no-deps --force-recreate prometheus
+```
+
 ## Upgrade and public TLS renewal
 
 Take a backup before changing releases. Check out the intended release commit
 or tag. If upgrading a checkout that used local builds, add
 `DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
 [First startup](#first-startup). The commands below pin both images to the
-checked-out commit and add the exporter password if it is missing. Set
-`secrets_dir` to the existing secret directory for this deployment.
+checked-out commit and add any missing PostgreSQL exporter and Grafana
+bootstrap credentials. Set `secrets_dir` to the existing host directory
+configured by `MW_SECRETS_DIR`.
 
 ```bash
 git fetch origin
@@ -274,6 +330,7 @@ git checkout --detach RELEASE_COMMIT_OR_TAG
 sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
 secrets_dir=deploy/secrets
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
+deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
 mw config --quiet
 mw pull
 mw up -d --no-build
@@ -281,12 +338,19 @@ mw ps -a
 mw logs --tail=100 api-migrate analytics-migrate postgres-exporter-setup
 ```
 
-Verify the migration and exporter setup exit codes and the public HTTPS request
-after upgrading. Install the example systemd units after successful issuance.
-Set both paths in the service to the absolute location of a root-controlled
-deployment checkout and, for a custom project, add
-`Environment=COMPOSE_PROJECT_NAME=...` under `[Service]`. The timer checks daily.
-After a successful Certbot run the
+The two credential commands preserve existing secrets. On the first upgrade
+that adds Grafana, follow the [named Viewer setup](#grafana-sign-in-and-accounts).
+
+When a release changes the Prometheus configuration, [validate it and recreate
+the Prometheus container](#logs-and-prometheus). This loads the updated file
+and keeps the existing metrics volume.
+
+Verify both migration exit codes and the exporter setup exit code. Check the
+public HTTPS API request and Grafana sign-in after upgrading.
+Install the example systemd units after successful issuance. Set both paths
+in the service to the absolute location of a root-controlled deployment
+checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`
+under `[Service]`. The timer checks daily. After a successful Certbot run the
 helper checks the Nginx configuration and reloads the certificate files.
 
 ```bash
@@ -400,7 +464,7 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
     }
     trap 'restart_after_backup "$?"' EXIT
     mw stop --timeout 120
-    for name in postgres-data clickhouse-data prometheus-data; do
+    for name in postgres-data clickhouse-data prometheus-data grafana-data; do
         volume="${project}_${name}"
         docker volume inspect "$volume" >/dev/null
         docker run --rm --network none --user 0:0 --entrypoint tar \
@@ -414,6 +478,7 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
 )
 ```
 
+The Grafana archive includes its SQLite database, accounts and preferences.
 The archive commands cover the example layout. For custom `MW_SECRETS_DIR` or
 `MW_CERT_DIR`, substitute those directories in backup and restore. Archive
 the entire Certbot directory to preserve account keys, symlinks, and renewal
@@ -459,21 +524,23 @@ project=machine-whisperer-restored
 ```
 
 Use a fresh Compose project to preserve the original volumes. The restore
-creates the three volumes with the names and labels Compose expects.
+creates the four volumes with the names and labels Compose expects. For a
+backup that predates Grafana, use the restore commands from the recorded
+revision, then upgrade the restored stack.
 [Compose volume labels](https://docs.docker.com/reference/compose-file/volumes/#labels)
 
 ```bash
 (
     set -eu
     : "${project:?set the selected restore project}"
-    for name in postgres-data clickhouse-data prometheus-data; do
+    for name in postgres-data clickhouse-data prometheus-data grafana-data; do
         tar -tf "$backup/$name.tar" >/dev/null
         if docker volume inspect "${project}_${name}" >/dev/null 2>&1; then
             printf 'Choose a fresh project name. Volume exists: %s\n' "${project}_${name}" >&2
             exit 1
         fi
     done
-    for name in postgres-data clickhouse-data prometheus-data; do
+    for name in postgres-data clickhouse-data prometheus-data grafana-data; do
         volume=$(docker volume create \
             --label "com.docker.compose.project=$project" \
             --label "com.docker.compose.volume=$name" "${project}_${name}")
@@ -522,8 +589,10 @@ mw() {
 ```
 
 Verify migration and container status, then confirm the expected data through
-the API. Update the renewal service checkout and project to match the restored
-deployment, then run `sudo systemctl daemon-reload`.
+the API. Sign in at `/grafana/` as the restored Viewer and confirm the
+**Machine Whisperer** dashboards are available. Update the renewal service
+checkout and project to match the restored deployment, then run
+`sudo systemctl daemon-reload`.
 
 ## Shutdown
 

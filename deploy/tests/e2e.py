@@ -1,23 +1,27 @@
+import base64
 from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
+from http.cookiejar import CookieJar
 import http.client
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import secrets
 import signal
+import ssl
 import subprocess
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request
+from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.request import HTTPCookieProcessor, Request
 from uuid import UUID, uuid4
 
-from deploy.tests.compose_stack import ComposeStack, eventually
+from deploy.tests.compose_stack import ComposeStack, LoopbackHTTPSConnection, eventually
 from deploy.tests.support import DEPLOY, run
 
 
@@ -32,6 +36,10 @@ SCRAPE_TARGETS = {
     "prometheus": "localhost:9090", "api": "api-metrics:9091", "analytics": "analytics-metrics:9091",
     "nginx": "nginx-metrics:9113", "postgres": "postgres-metrics:9187", "clickhouse": "clickhouse-metrics:9363",
 }
+GRAFANA = "/grafana"
+GRAFANA_DATASOURCE = GRAFANA + "/api/datasources/uid/mw-prometheus"
+GRAFANA_PROMETHEUS = GRAFANA + "/api/datasources/proxy/uid/mw-prometheus"
+GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry")
 
 
 SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -78,9 +86,12 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assert_private_metrics_paths()
             self.assert_ingress()
             self.assert_api_documentation()
-            self.assert_owner_and_device_http()
+            self.assert_grafana_provisioning_and_access()
+            self.assert_application_without_grafana()
             self.assert_application_metrics()
+            # The p95 panels need requests between two scrapes of the same histogram.
             self.run_k6_scenarios()
+            self.assert_dashboard_queries()
             self.assert_scrape_failure_and_recovery()
             self.assert_persistence_across_container_recreation()
             self.assert_proxy_rejects_untrusted_upstream()
@@ -94,6 +105,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assertEqual((state["Status"], state["ExitCode"]), ("exited", 0), job)
         for service in ("api", "analytics"):
             self.assertEqual(self.stack.inspect(service)["State"]["Health"]["Status"], "healthy", service)
+        self.stack.compose("exec", "-T", "prometheus", "promtool", "check", "config", "/etc/prometheus/prometheus.yml")
 
     def prometheus_data(self, path):
         status, _, body = self.stack.http(self.prometheus_port, path)
@@ -151,14 +163,16 @@ class DeploymentEndToEndTest(unittest.TestCase):
                 ip = self.stack.network_address(service, network)
                 assert_unreachable(f"{self.stack.project}_{network}", f"http://{ip}:9091/metrics")
 
-        nginx_edge = self.stack.network_address("nginx", "edge")
-        assert_unreachable(self.stack.edge_network, f"http://{nginx_edge}:8080/stub_status")
+        for network in ("edge", "grafana-proxy"):
+            nginx = self.stack.network_address("nginx", network)
+            assert_unreachable(f"{self.stack.project}_{network}", f"http://{nginx}:8080/stub_status")
 
         prometheus = self.stack.inspect("prometheus")["Id"]
+        grafana = self.stack.inspect("grafana")["Id"]
         for service, ports in (("postgres", (5432,)), ("clickhouse", (8123, 9000, 9363))):
             ip = self.stack.network_address(service, "data")
             for port in ports:
-                for network in (scrape, f"container:{prometheus}"):
+                for network in (scrape, f"container:{prometheus}", f"container:{grafana}"):
                     assert_unreachable(network, f"http://{ip}:{port}")
 
         infra = f"{self.stack.project}_infra-scrape"
@@ -179,19 +193,44 @@ class DeploymentEndToEndTest(unittest.TestCase):
             eventually(expression, lambda: (self.prometheus_value(expression) or 0) >= 1, timeout=45)
 
     def assert_scrape_failure_and_recovery(self):
-        self.stack.compose("stop", "analytics", "postgres", "clickhouse", timeout=90)
-        expressions = ('up{job="analytics"}', 'pg_up{job="postgres"}', 'up{job="clickhouse"}')
-        eventually("the stopped service and databases to appear down", lambda: all(
+        self.stack.compose("stop", "analytics", "postgres", "clickhouse", "nginx-exporter", timeout=90)
+        expressions = ('up{job="analytics"}', 'pg_up{job="postgres"}', 'up{job="clickhouse"}', 'up{job="nginx"}')
+
+        def dashboard_status():
+            panels = (
+                ("mw-go-services", "Service scrape", {"job": "analytics", "instance": SCRAPE_TARGETS["analytics"]}),
+                ("mw-postgres", "PostgreSQL availability", {}),
+                ("mw-clickhouse", "Native endpoint scrape", {}),
+                ("mw-nginx", "Exporter scrape", {}),
+            )
+            return [
+                self.dashboard_values(self.dashboard_panel(uid, title)["targets"][0], **variables)
+                for uid, title, variables in panels
+            ]
+
+        eventually("the stopped targets to appear down", lambda: all(
             self.prometheus_value(expression) == 0 for expression in expressions
         ), timeout=45)
         self.assertEqual(self.prometheus_value('up{job="postgres"}'), 1)
+        self.assertEqual(dashboard_status(), [[0]] * len(expressions))
 
         start = ("up", "-d", "--no-build", "--no-deps", "--wait", "--wait-timeout", "90")
-        self.stack.compose(*start, "postgres", "clickhouse", timeout=110)
+        self.stack.compose(*start, "postgres", "clickhouse", "nginx-exporter", timeout=110)
         self.stack.compose(*start, "analytics", timeout=110)
-        eventually("the service and both databases to recover within three scrapes", lambda: all(
+        eventually("the stopped targets to recover within three scrapes", lambda: all(
             self.prometheus_value(expression) == 1 for expression in expressions
         ), timeout=45)
+        self.assertEqual(dashboard_status(), [[1]] * len(expressions))
+
+        pending = self.dashboard_panel("mw-telemetry", "Pending rows")["targets"][0]
+        self.stack.compose("pause", "api")
+        try:
+            eventually("the queue panel to report an unknown snapshot while API is paused",
+                       lambda: self.dashboard_values(pending) == [-1], timeout=45)
+        finally:
+            self.stack.compose("unpause", "api")
+        eventually("the queue panel to use the live API snapshot again",
+                   lambda: any(value >= 0 for value in self.dashboard_values(pending)), timeout=45)
 
     def assert_ingress(self):
         http_port = self.stack.port("nginx", 80)
@@ -201,7 +240,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
             return status == 200 and body.strip() == b"acme-ok"
 
         eventually("the Nginx bootstrap ACME challenge", probe_received, caught=NETWORK_ERRORS)
+        self.stack.compose("exec", "-T", "nginx", "nginx", "-t")
         self.assertEqual(self.stack.http(http_port, "/v1/users/me")[0], 503)
+        self.assertEqual(self.stack.http(http_port, GRAFANA + "/")[0], 503)
         self.stack.enable_tls()
         tls_started = time.time()
         eventually("a successful Nginx status scrape after enabling TLS", lambda: (
@@ -209,6 +250,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         ) >= tls_started, timeout=45)
         http_port = self.stack.port("nginx", 80)
         eventually("the Nginx TLS ACME challenge", probe_received, caught=NETWORK_ERRORS)
+        self.stack.compose("exec", "-T", "nginx", "nginx", "-t")
         status, location, _ = self.stack.http(http_port, "/v1/users/me")
         self.assertEqual((status, location), (308, f"https://{self.stack.domain}/v1/users/me"))
 
@@ -217,6 +259,181 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.request("POST", PROVISION, 403, headers={"X-Forwarded-For": "192.0.2.1"}, decode=False)
         for private in ("/healthz", "/metrics", "/stub_status", "/internal/v1/telemetry-batches"):
             self.request("GET", private, 404, decode=False)
+
+    def wait_for_grafana_login(self):
+        eventually(
+            "Grafana's sign-in page through Nginx",
+            lambda: self.response("GET", GRAFANA + "/login")[0] == 200,
+            timeout=60, caught=NETWORK_ERRORS,
+        )
+
+    def assert_grafana_provisioning_and_access(self):
+        status, headers, _ = self.response("GET", GRAFANA + "?orgId=1")
+        self.assertEqual(status, 308)
+        self.assertEqual(headers["Location"], self.base_url + GRAFANA + "/?orgId=1")
+        self.wait_for_grafana_login()
+        status, headers, _ = self.response("GET", GRAFANA + "/")
+        self.assertEqual(status, 302)
+        self.assertEqual(urlsplit(headers["Location"]).path, GRAFANA + "/login")
+        self.request("GET", GRAFANA + "/api/dashboards/uid/mw-telemetry", 401, decode=False)
+        self.request("GET", GRAFANA_DATASOURCE, 401, decode=False)
+        self.request("POST", GRAFANA + "/api/ds/query", 401, {"queries": []}, decode=False)
+
+        initial_password = (self.stack.secrets / "grafana-admin-password").read_text().strip()
+        admin_credentials = base64.b64encode(f"admin:{initial_password}".encode()).decode()
+        origin = {"Origin": self.base_url}
+        user = "monitoring-operator"
+        password = secrets.token_urlsafe(24)
+        self.request("POST", GRAFANA + "/api/admin/users", 200, {
+            "name": "Monitoring Operator", "login": user,
+            "email": f"{user}@{self.stack.domain}", "password": password,
+        }, headers={**origin, "Authorization": f"Basic {admin_credentials}"})
+
+        def sign_in():
+            cookies = CookieJar()
+            opener = self.stack.https_opener(seed.RejectRedirects(), HTTPCookieProcessor(cookies))
+            login = self.request(
+                "POST", GRAFANA + "/login", 200, {"user": user, "password": password},
+                headers=origin, opener=opener,
+            )
+            self.assertEqual(login["redirectUrl"], GRAFANA + "/")
+            session = [cookie for cookie in cookies if cookie.name == "grafana_session"]
+            self.assertEqual(len(session), 1)
+            self.assertTrue(session[0].secure)
+            self.assertTrue(session[0].has_nonstandard_attr("HttpOnly"))
+            self.assertEqual(session[0].path, GRAFANA)
+            return opener, session[0]
+
+        viewer, session = sign_in()
+        self.grafana_viewer = viewer
+        orgs = self.request("GET", GRAFANA + "/api/user/orgs", 200, opener=viewer)
+        self.assertEqual([org["role"] for org in orgs], ["Viewer"])
+        self.request("GET", GRAFANA + "/api/org/users", 403, opener=viewer)
+        self.request("GET", GRAFANA + "/api/admin/settings", 403, opener=viewer)
+        self.request("POST", GRAFANA + "/api/dashboards/db", 403, {
+            "dashboard": {"title": "Viewer cannot create dashboards"},
+        }, headers=origin, opener=viewer)
+        health = self.request("GET", GRAFANA_DATASOURCE + "/health", 200, opener=viewer)
+        self.assertEqual(health["status"], "OK")
+
+        def prometheus_scrape_is_up():
+            samples = self.grafana_prometheus_data("/query", {"query": 'up{job="prometheus"}'})["result"]
+            return any(sample["value"][1] == "1" for sample in samples)
+
+        eventually(
+            "a Prometheus self-scrape through the Viewer session",
+            prometheus_scrape_is_up,
+            timeout=60, caught=NETWORK_ERRORS,
+        )
+        dashboards = {
+            uid: self.request("GET", GRAFANA + "/api/dashboards/uid/" + uid, 200, opener=viewer)
+            for uid in GRAFANA_DASHBOARDS
+        }
+        for uid, dashboard in dashboards.items():
+            self.assertEqual(dashboard["dashboard"]["uid"], uid)
+            self.assertEqual(dashboard["meta"]["folderTitle"], "Machine Whisperer")
+        self.grafana_dashboards = {uid: result["dashboard"] for uid, result in dashboards.items()}
+        links = {
+            link["title"]: link["url"]
+            for link in self.grafana_dashboards["mw-go-services"]["links"]
+        }
+        for title, job in (("API", "api"), ("Analytics", "analytics")):
+            link = links[title]
+            self.assertEqual(parse_qs(urlsplit(link).query)["var-job"], [job])
+            self.request("GET", link, 200, decode=False, opener=viewer)
+
+        context = ssl.create_default_context(cafile=str(self.stack.ca))
+        conn = LoopbackHTTPSConnection(
+            self.stack.domain, loopback_port=self.stack.port("nginx", 443), context=context, timeout=10,
+        )
+        try:
+            conn.request("GET", GRAFANA + "/api/live/ws", headers={
+                **origin, "Cookie": f"{session.name}={session.value}", "Connection": "Upgrade",
+                "Upgrade": "websocket", "Sec-WebSocket-Version": "13",
+                "Sec-WebSocket-Key": base64.b64encode(secrets.token_bytes(16)).decode(),
+            })
+            with conn.getresponse() as response:
+                self.assertEqual(response.status, 101)
+        finally:
+            conn.close()
+
+        before = self.stack.inspect("grafana")["Id"]
+        self.stack.compose("up", "-d", "--no-deps", "--force-recreate", "--no-build", "grafana")
+        self.assertNotEqual(self.stack.inspect("grafana")["Id"], before)
+        self.wait_for_grafana_login()
+        self.grafana_viewer, _ = sign_in()
+        results = self.request("GET", GRAFANA + "/api/search?type=dash-db", 200, opener=self.grafana_viewer)
+        self.assertCountEqual([entry["uid"] for entry in results], GRAFANA_DASHBOARDS)
+
+    def assert_application_without_grafana(self):
+        self.stack.compose("stop", "grafana")
+        eventually(
+            "Grafana's route to return 502 while it is stopped",
+            lambda: self.response("GET", GRAFANA + "/login")[0] == 502, caught=NETWORK_ERRORS,
+        )
+        self.assert_owner_and_device_http()
+        self.stack.compose("start", "grafana")
+        self.wait_for_grafana_login()
+
+    def grafana_prometheus_data(self, path, params):
+        endpoint = GRAFANA_PROMETHEUS + "/api/v1" + path + "?" + urlencode(params)
+        response = self.request("GET", endpoint, 200, opener=self.grafana_viewer)
+        self.assertEqual(response["status"], "success", response)
+        return response["data"]
+
+    def dashboard_panel(self, uid, title):
+        panels = [panel for panel in self.grafana_dashboards[uid]["panels"] if panel["title"] == title]
+        self.assertEqual(len(panels), 1, f"{uid}: {title}")
+        return panels[0]
+
+    def dashboard_values(self, target, *, job="", instance="", labels=None):
+        self.assertEqual(target["datasource"], {"type": "prometheus", "uid": "mw-prometheus"})
+        # Use a two-minute rate window for the disposable stack's 15-second scrapes.
+        expression = target["expr"].replace("$__rate_interval", "2m")
+        expression = expression.replace("$job", job).replace("${instance:regex}", instance)
+        samples = self.grafana_prometheus_data("/query", {"query": expression})["result"]
+        return [
+            float(sample["value"][1]) for sample in samples
+            if all(sample["metric"].get(key) == value for key, value in (labels or {}).items())
+        ]
+
+    def assert_dashboard_queries(self):
+        def check(uid, title, unit, *, positive=False, **variables):
+            panel = self.dashboard_panel(uid, title)
+            self.assertEqual(panel["fieldConfig"]["defaults"]["unit"], unit, f"{uid}: {title}")
+
+            def valid_values():
+                for target in panel["targets"]:
+                    values = self.dashboard_values(target, **variables)
+                    if (not values or any(not math.isfinite(value) or value < 0 for value in values)
+                            or (positive and max(values) == 0)):
+                        return False
+                return True
+
+            eventually(f"finite values from {uid}: {title}", valid_values, timeout=45, caught=NETWORK_ERRORS)
+
+        for uid, title, unit in (
+            ("mw-nginx", "HTTP requests", "suffix: req/s"),
+            ("mw-postgres", "Database size", "bytes"),
+            ("mw-clickhouse", "Tracked memory", "bytes"),
+            ("mw-telemetry", "Accepted device requests", "suffix: req/s"),
+            ("mw-telemetry", "Outbox delivery", "suffix: rows/s"),
+            ("mw-telemetry", "Event rows acknowledged by ClickHouse", "suffix: rows/s"),
+        ):
+            check(uid, title, unit, positive=True)
+        check("mw-telemetry", "Pending rows", "suffix: rows")
+        check("mw-telemetry", "ClickHouse client operations", "suffix: operations/s", positive=True,
+              labels={"operation": "list_history", "outcome": "success"})
+
+        variables = self.grafana_dashboards["mw-go-services"]["templating"]["list"]
+        instance_query = next(variable["query"]["query"] for variable in variables if variable["name"] == "instance")
+        self.assertEqual(instance_query, 'label_values(up{job="$job"}, instance)')
+        for job in ("api", "analytics"):
+            selector = instance_query.removeprefix("label_values(").removesuffix(", instance)").replace("$job", job)
+            instances = self.grafana_prometheus_data("/label/instance/values", {"match[]": selector})
+            self.assertEqual(instances, [SCRAPE_TARGETS[job]])
+            check("mw-go-services", "Goroutines", "short", job=job, instance=instances[0], positive=True)
+            check("mw-go-services", "HTTP p95 latency by route", "s", job=job, instance=instances[0])
 
     def configure_tls_client(self):
         self.base_url = f"https://{self.stack.domain}"
@@ -244,7 +461,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assertIn(headers.get_content_type(), media_types, asset)
             self.assertTrue(body, f"Empty Swagger UI asset {asset}")
 
-    def response(self, method, path, body=None, token=None, headers=None):
+    def response(self, method, path, body=None, token=None, headers=None, *, opener=None):
         headers = dict(headers or {})
         data = None
         if body is not None:
@@ -254,14 +471,14 @@ class DeploymentEndToEndTest(unittest.TestCase):
             headers["Authorization"] = f"Bearer {token}"
         request = Request(self.base_url + path, method=method, data=data, headers=headers)
         try:
-            with self.opener.open(request, timeout=10) as response:
+            with (opener or self.opener).open(request, timeout=10) as response:
                 return response.status, response.headers, response.read()
         except HTTPError as error:
             with error:
                 return error.code, error.headers, error.read()
 
-    def request(self, method, path, expected, body=None, token=None, *, headers=None, decode=True):
-        status, _, raw = self.response(method, path, body, token, headers)
+    def request(self, method, path, expected, body=None, token=None, *, headers=None, decode=True, opener=None):
+        status, _, raw = self.response(method, path, body, token, headers, opener=opener)
         self.assertEqual(status, expected, f"{method} {path}")
         return json.loads(raw) if decode and raw else None
 
@@ -408,6 +625,7 @@ exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --q
         )
         services = ("postgres", "clickhouse", "prometheus")
         container_ids = {service: self.stack.inspect(service)["Id"] for service in services}
+        recreation_started = time.time()
         self.stack.compose(
             "up", "-d", "--no-build", "--no-deps", "--force-recreate", "--wait",
             "--wait-timeout", "240", *services, timeout=300,
@@ -430,6 +648,9 @@ FROM pg_roles WHERE rolname = 'mw_postgres_exporter'
             caught=NETWORK_ERRORS,
         )
         self.assertEqual(restored, sample)
+        eventually("a fresh ClickHouse scrape after recreation", lambda: (
+            self.prometheus_value('timestamp(up{job="clickhouse"} == 1)') or 0
+        ) >= recreation_started, timeout=45)
         eventually("PostgreSQL statistics after rerunning exporter setup", lambda: (
             self.prometheus_value('timestamp(pg_up{job="postgres"} == 1)') or 0
         ) >= setup_completed, timeout=45)

@@ -141,6 +141,11 @@ class RestoreTest(unittest.TestCase):
                     self.assertEqual(operations, ["stop --timeout 120", "up -d --no-build"])
                     self.assertEqual(next(self.scratch.glob("mw-backup.*/env.server")).read_text(),
                                      f"DOCKERHUB_NAMESPACE=org\nIMAGE_TAG={tag}\n")
+                    archives = {path.name for path in self.scratch.glob("mw-backup.*/*.tar")}
+                    self.assertEqual(archives, {
+                        "postgres-data.tar", "clickhouse-data.tar", "prometheus-data.tar",
+                        "grafana-data.tar", "secrets.tar", "letsencrypt.tar",
+                    })
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(operations, [])
