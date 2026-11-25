@@ -32,6 +32,7 @@ CREATED_AT = "2026-11-25T00:00:00Z"
 class Deployment:
     def __init__(self):
         self.email = None
+        self.owners = {"existing@example.test": EXISTING_ID}
         self.password = None
         self.has_provisioner_role = False
         self.machines = {}
@@ -45,7 +46,7 @@ class Deployment:
         assert 0 < timeout <= 30
         route = request.full_url.removeprefix(PUBLIC_URL)
         self.calls.append(route)
-        data = json.loads(request.data)
+        data = json.loads(request.data) if request.data is not None else None
         if self.fail == "truncated claim" and route == "/v1/devices/claim":
             raise IncompleteRead(CLAIM_CODE.encode())
         if self.fail == route:
@@ -54,17 +55,26 @@ class Deployment:
         if route == "/v1/auth/signup":
             assert method == "POST"
             assert set(data) == {"email", "password"}
-            if data["email"] == "existing@example.test":
+            if data["email"].lower() in self.owners:
                 raise HTTPError(request.full_url, 409, TOKEN, {}, None)
             self.email = data["email"].lower()
             self.password = data["password"]
+            self.owners[self.email] = OWNER_ID
+            if self.fail == "truncated signup":
+                raise IncompleteRead(CLAIM_CODE.encode())
+            if self.fail == "malformed signup":
+                return self.response(201, id=None, email=self.email, created_at=CREATED_AT)
             return self.response(201, id=OWNER_ID, email=self.email, created_at=CREATED_AT)
         if route == "/v1/auth/login":
-            assert method == "POST" and self.has_provisioner_role
+            assert method == "POST"
+            assert self.has_provisioner_role == (self.fail not in ("truncated signup", "malformed signup"))
             assert data == {"email": self.email, "password": self.password}
             return self.response(200, access_token=TOKEN, token_type="Bearer", expires_in=900, refresh_token="S" * 43)
 
         assert request.get_header("Authorization") == f"Bearer {TOKEN}"
+        if route == "/v1/users/me":
+            assert method == "GET" and data is None
+            return self.response(200, id=OWNER_ID, email=self.email, created_at=CREATED_AT)
         if route == "/v1/machines":
             assert method == "POST" and set(data) == {"name"}
             machine_id = str(UUID(int=100 + len(self.machines)))
@@ -129,6 +139,8 @@ class Deployment:
         for device_id, machine_id in self.devices.items():
             if machine_id is None:
                 assert "DELETE FROM devices" in sql and "machine_id IS NULL" in sql and device_id in sql
+        assert f"DELETE FROM users WHERE id = '{OWNER_ID}'" in sql
+        del self.owners[self.email]
         self.email = None
         self.machines.clear()
         self.devices.clear()
@@ -232,7 +244,20 @@ class SeedDemoTest(unittest.TestCase):
             self.run_seed(1)
 
         self.assertEqual(self.deployment.calls, ["/v1/auth/signup"])
+        self.assertEqual(self.deployment.owners, {"existing@example.test": EXISTING_ID})
         self.assertFalse(self.fixture_path.exists())
+
+    def test_ambiguous_signup_removes_only_the_owner_authenticated_with_the_generated_password(self):
+        for failure in ("truncated signup", "malformed signup"):
+            with self.subTest(failure=failure):
+                self.deployment.calls.clear()
+                self.deployment.fail = failure
+                self.run_seed(1)
+                self.assertEqual(self.deployment.calls, [
+                    "/v1/auth/signup", "/v1/auth/login", "/v1/users/me", "cleanup",
+                ])
+                self.assertEqual(self.deployment.owners, {"existing@example.test": EXISTING_ID})
+                self.assertFalse(self.fixture_path.exists())
 
     def test_api_failure_removes_demo_owner_and_orphaned_device(self):
         self.deployment.fail = "/v1/devices/claim"
@@ -268,6 +293,53 @@ class SeedDemoTest(unittest.TestCase):
 
         self.assert_aborted(expect_fixture=True)
         self.assertEqual(self.fixture_path.read_text(), "concurrent fixture")
+
+    def test_staging_close_failure_prevents_fixture_publication(self):
+        named_temp_file = tempfile.NamedTemporaryFile
+
+        @contextlib.contextmanager
+        def failing_close(*args, **kwargs):
+            with named_temp_file(*args, **kwargs) as staging:
+                yield staging
+            self.assertFalse(self.fixture_path.exists(), "fixture was published before closing staging")
+            raise OSError("staging close failed")
+
+        with patch.object(seed.tempfile, "NamedTemporaryFile", side_effect=failing_close):
+            self.run_seed(1)
+
+        self.assert_aborted()
+
+    def test_interruption_after_publication_preserves_fixture_and_owner(self):
+        real_link = os.link
+
+        def interrupted_link(source, destination):
+            real_link(source, destination)
+            raise KeyboardInterrupt
+
+        with patch.object(seed.os, "link", side_effect=interrupted_link):
+            self.run_seed(1)
+
+        self.assertTrue(self.fixture_path.is_file())
+        self.assertEqual(self.deployment.owners.get("demo@machine-whisperer.test"), OWNER_ID)
+        self.assertNotIn("cleanup", self.deployment.calls)
+
+    def test_staging_unlink_failure_after_publication_preserves_fixture_and_owner(self):
+        real_unlink = Path.unlink
+        failed = []
+
+        def failing_unlink(path, *args, **kwargs):
+            if path.parent == self.secrets and path != self.fixture_path:
+                failed.append(path)
+                raise OSError("staging unlink failed")
+            return real_unlink(path, *args, **kwargs)
+
+        with patch.object(Path, "unlink", autospec=True, side_effect=failing_unlink):
+            self.run_seed(0)
+
+        self.assertEqual(len(failed), 1)
+        self.assertTrue(self.fixture_path.is_file())
+        self.assertEqual(self.deployment.owners.get("demo@machine-whisperer.test"), OWNER_ID)
+        self.assertNotIn("cleanup", self.deployment.calls)
 
     def assert_aborted(self, expect_fixture=False):
         self.assertIsNone(self.deployment.email)

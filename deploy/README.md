@@ -155,17 +155,19 @@ Each machine starts with a baseline mean of 0.04 g and standard deviation of
 
 The script uses the public HTTPS origin from the Compose `DOMAIN` for the
 owner routes. It grants the new owner the `device_provisioner` role before
-login and revokes it when provisioning finishes. Provisioning runs inside
-the API container over verified internal TLS. Keep the existing Nginx
-provisioning allowlist in place.
+login and revokes it when provisioning finishes. An issued access token
+retains its signed role until its 15-minute lifetime and 30-second clock
+skew allowance end. Provisioning runs inside the API container over verified
+internal TLS. Keep the existing Nginx provisioning allowlist in place.
 
 The script writes the generated owner password and device keys to
 `deploy/secrets/k6-demo-fixtures.json` with mode `0600`. Keep this file out of
 Git, terminal output, and shared logs. An existing fixture file or an email
 already registered with the API stops the seed. On failure, the script uses
 the IDs returned by the API to roll back the new owner and its fixtures.
-If a creation response is lost or the script reports a rollback failure,
-inspect the deployment before retrying.
+If signup has an uncertain outcome, the script uses the generated password
+to identify the new owner for rollback. Inspect the deployment before
+retrying after a lost provisioning response or a reported rollback failure.
 
 ## Logs and Prometheus
 

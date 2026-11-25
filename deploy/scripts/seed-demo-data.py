@@ -25,6 +25,12 @@ class SeedError(Exception):
     pass
 
 
+class HTTPStatusError(SeedError):
+    def __init__(self, method, route, status):
+        self.status = status
+        super().__init__(f"{method} {route} returned HTTP {status}.")
+
+
 class RejectRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -52,20 +58,44 @@ def api_base_url():
 
 
 def request(base_url, method, route, data, expected, token=None):
-    headers = {"Content-Type": "application/json"}
+    headers = {}
+    body = None
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(data).encode()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = Request(base_url + route, data=json.dumps(data).encode(), headers=headers, method=method)
+    req = Request(base_url + route, data=body, headers=headers, method=method)
     try:
         with PUBLIC_API.open(req, timeout=TIMEOUT) as response:
             if response.status != expected:
-                raise SeedError(f"{method} {route} returned HTTP {response.status}.")
+                raise HTTPStatusError(method, route, response.status)
             return json.load(response)
     except HTTPError as exc:
         exc.close()
-        raise SeedError(f"{method} {route} returned HTTP {exc.code}.") from None
+        raise HTTPStatusError(method, route, exc.code) from None
     except (OSError, HTTPException):
         raise SeedError(f"{method} {route} request failed.") from None
+
+
+def login(base_url, credentials):
+    result = request(base_url, "POST", "/v1/auth/login", credentials, 200)
+    token = result["access_token"]
+    if not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", token):
+        raise SeedError("Public API returned an invalid access token.")
+    return token
+
+
+def recover_owner_id(base_url, credentials):
+    # The fresh run-generated password proves ownership if signup committed
+    # before its response was lost. Resolve the ID through the signed session.
+    try:
+        token = login(base_url, credentials)
+        owner = request(base_url, "GET", "/v1/users/me", None, 200, token)
+        return str(UUID(owner["id"]))
+    except (SeedError, ValueError, TypeError, KeyError, AttributeError):
+        print("Could not confirm a new demo owner for rollback.", file=sys.stderr)
+        return None
 
 
 def sql(statement):
@@ -137,23 +167,60 @@ def create_fixture(base_url, token, name, provisioned_devices):
     }
 
 
+def discard_staging_file(path):
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        print("Could not remove the private demo fixture staging file.", file=sys.stderr)
+
+
+def stage_fixture(path, fixtures):
+    staging_path = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as staging:
+            staging_path = Path(staging.name)
+            os.fchmod(staging.fileno(), 0o600)
+            json.dump(fixtures, staging, indent=2)
+            staging.write("\n")
+    except BaseException:
+        if staging_path is not None:
+            discard_staging_file(staging_path)
+        raise
+    return staging_path
+
+
+def fixture_was_published(staging_path, path):
+    if staging_path is None:
+        return False
+    try:
+        return path.samefile(staging_path)
+    except FileNotFoundError:
+        return False
+
+
 def seed_demo(path, simulations):
     base_url = api_base_url()
-    email = os.environ.get("DEMO_OWNER_EMAIL", "demo@machine-whisperer.test")
-    password = secrets.token_urlsafe(24)
+    credentials = {
+        "email": os.environ.get("DEMO_OWNER_EMAIL", "demo@machine-whisperer.test"),
+        "password": secrets.token_urlsafe(24),
+    }
     path.parent.mkdir(mode=0o700, exist_ok=True)
 
-    owner = request(base_url, "POST", "/v1/auth/signup", {"email": email, "password": password}, 201)
-    owner_id = str(UUID(owner["id"]))
+    owner_id = None
+    staging_path = None
     provisioned_devices = []
     try:
         try:
+            owner = request(base_url, "POST", "/v1/auth/signup", credentials, 201)
+            owner_id = str(UUID(owner["id"]))
+        except (SeedError, ValueError, TypeError, KeyError, AttributeError, KeyboardInterrupt) as exc:
+            if not isinstance(exc, HTTPStatusError) or not 400 <= exc.status < 500:
+                owner_id = recover_owner_id(base_url, credentials)
+            raise
+
+        try:
             grant_role(owner_id)
-            login = request(base_url, "POST", "/v1/auth/login",
-                            {"email": owner["email"], "password": password}, 200)
-            token = login["access_token"]
-            if not re.fullmatch(r"[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+", token):
-                raise SeedError("Public API returned an invalid access token.")
+            token = login(base_url, {**credentials, "email": owner["email"]})
             scenarios = {
                 scenario: [
                     create_fixture(base_url, token, f"Demo {scenario} {index}", provisioned_devices)
@@ -164,22 +231,23 @@ def seed_demo(path, simulations):
         finally:
             revoke_role(owner_id)
 
-        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent) as staging:
-            os.fchmod(staging.fileno(), 0o600)
-            json.dump({
-                "api_base_url": base_url, "owner_email": owner["email"], "owner_password": password,
-                "simulations": simulations, "scenarios": scenarios,
-            }, staging, indent=2)
-            staging.write("\n")
-            staging.flush()
-            # Publish complete credentials atomically while preserving any existing fixture.
-            os.link(staging.name, path)
+        staging_path = stage_fixture(path, {
+            "api_base_url": base_url, "owner_email": owner["email"], "owner_password": credentials["password"],
+            "simulations": simulations, "scenarios": scenarios,
+        })
+        # Publish only after close succeeds. The hard link preserves any existing fixture.
+        os.link(staging_path, path)
     except BaseException:
-        try:
-            remove_demo_owner(owner_id, provisioned_devices)
-        except SeedError:
-            print(f"Demo seed rollback failed for owner UUID {owner_id}.", file=sys.stderr)
+        # A signal can interrupt the caller after the link was created.
+        if owner_id is not None and not fixture_was_published(staging_path, path):
+            try:
+                remove_demo_owner(owner_id, provisioned_devices)
+            except SeedError:
+                print(f"Demo seed rollback failed for owner UUID {owner_id}.", file=sys.stderr)
         raise
+    finally:
+        if staging_path is not None:
+            discard_staging_file(staging_path)
 
 
 def main():
