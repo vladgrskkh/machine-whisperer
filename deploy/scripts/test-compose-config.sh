@@ -4,7 +4,8 @@ cd "$(dirname "$0")/.."
 [[ -f compose.yaml ]] || { echo 'Missing server Compose topology' >&2; exit 1; }
 config=$(mktemp)
 trap 'rm -f "$config"' EXIT
-ACME_EMAIL=fixture@example.invalid MW_PROVISIONING_CIDR= MW_PROXY_IP= MW_API_IP= \
+DOCKERHUB_NAMESPACE=mw-fixture IMAGE_TAG=sha-123abc \
+    ACME_EMAIL=fixture@example.invalid MW_PROVISIONING_CIDR= MW_PROXY_IP= MW_API_IP= \
     docker compose --env-file .env.server.example --profile certbot -f compose.yaml config --format json >"$config"
 python3 - "$config" <<'PY'
 import json
@@ -49,6 +50,10 @@ for job, db in [("api-migrate", "postgres"), ("analytics-migrate", "clickhouse")
     assert svc[job]["entrypoint"] == ["/usr/local/bin/migrate"]
     assert svc[job]["depends_on"][db]["condition"] == "service_healthy"
     app = job.removesuffix("-migrate")
+    image = f"docker.io/mw-fixture/machine-whisperer-{app}:sha-123abc"
+    assert svc[app].get("image") == image, (app, svc[app].get("image"))
+    assert svc[job].get("image") == image, (job, svc[job].get("image"))
+    assert pathlib.Path(svc[app]["build"]["context"]) == pathlib.Path("..", app).resolve()
     assert svc[app]["depends_on"][job]["condition"] == "service_completed_successfully"
     gate = svc[app]["depends_on"].get(db, {})
     assert gate.get("condition") == "service_healthy" and gate.get("required", True), (app, db, gate)

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-Use a Linux host with Docker Engine 28 or newer, the Docker Compose v2 plugin,
+Use an x86-64 Linux host with Docker Engine 28 or newer, the Docker Compose v2 plugin,
 Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands from the
 monorepo root on the Docker host. The operator account needs Docker access and
 access to the secret files. Docker Engine 28 or newer keeps localhost-published
@@ -18,6 +18,23 @@ Certbot uses HTTP-01 validation. From outside the host network, check that the
 A record resolves to the host's public IPv4 address and that Nginx is reachable
 on port 80 during both issuance and renewal.
 
+## Docker Hub images
+
+After all checks pass on a push to `main`, GitHub Actions publishes
+`machine-whisperer-api` and `machine-whisperer-analytics` to Docker Hub.
+Set the repository Actions secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
+to the publishing account and its write token. Set the optional repository
+Actions variable `DOCKERHUB_NAMESPACE` when publishing to an organization.
+The default namespace is the publishing account's username.
+
+Public images can be pulled anonymously. For private images, configure a
+Docker credential store for the VPS operator, run
+`docker login --username YOUR_PULL_USERNAME`, and enter a separate read-only
+pull token at the password prompt. Keep registry tokens in their respective
+credential stores. The VPS generates its application credentials with
+`prepare-secrets.sh`. Keep both registry tokens out of `deploy/.env.server`
+and the application secret files.
+
 ## First startup
 
 ```bash
@@ -26,6 +43,11 @@ chmod 0600 deploy/.env.server
 deploy/scripts/prepare-secrets.sh --output-dir deploy/secrets
 install -d -m 0755 deploy/acme-webroot
 ```
+
+Set `DOCKERHUB_NAMESPACE` in `deploy/.env.server` to the Docker Hub user or
+organization that owns both repositories. For a release, check out the published
+commit and set `IMAGE_TAG` to `sha-` followed by its full 40-character Git SHA.
+The example value `latest` tracks the moving tag.
 
 Set `ACME_EMAIL` in `deploy/.env.server` to the operator's email address for
 the Let's Encrypt account. The default `DOMAIN` is `onerep.mooo.com`. Set it
@@ -71,7 +93,8 @@ restarts and upgrades.
 ```bash
 project=machine-whisperer
 mw config --quiet
-mw up --build -d
+mw pull
+mw up -d --no-build
 mw ps -a
 ```
 
@@ -119,13 +142,18 @@ ssh -N -L 127.0.0.1:9090:127.0.0.1:9090 operator@onerep.mooo.com
 ## Upgrade and public TLS renewal
 
 Take a backup before changing releases. Check out the intended release commit
-or tag, then rebuild and start using the saved env file and secrets.
+or tag. If upgrading a checkout that used local builds, add
+`DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
+[First startup](#first-startup). The commands below pin both images to the
+checked-out commit. Keep the existing runtime secrets.
 
 ```bash
 git fetch origin
 git checkout --detach RELEASE_COMMIT_OR_TAG
+sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
 mw config --quiet
-mw up --build -d
+mw pull
+mw up -d --no-build
 mw ps -a
 mw logs --tail=100 api-migrate analytics-migrate
 ```
@@ -336,7 +364,8 @@ mw() {
     "${project:?set the Compose project used to restore the volumes}" &&
     cd -- "$restore_checkout" &&
     mw config --quiet &&
-    mw up --build -d &&
+    mw pull &&
+    mw up -d --no-build &&
     mw ps -a
 ```
 

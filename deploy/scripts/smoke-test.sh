@@ -4,6 +4,7 @@ trap 'echo "Smoke check failed at line $LINENO" >&2' ERR
 cd "$(dirname "$0")/.."
 work=$(mktemp -d)
 project="mw-smoke-$(openssl rand -hex 10)"
+export DOCKERHUB_NAMESPACE=example IMAGE_TAG="$project"
 export DOMAIN=smoke.test MW_SECRETS_DIR="$work/secrets" MW_ACME_WEBROOT="$work/acme"
 export MW_CERT_DIR="$work/certs"
 fixture="$MW_CERT_DIR/live/$DOMAIN"
@@ -20,6 +21,12 @@ cleanup() {
     trap - EXIT
     if "$started"; then
         "${compose[@]}" down -v --remove-orphans --rmi local --timeout 10 || rc=1
+        for app in api analytics; do
+            image="docker.io/$DOCKERHUB_NAMESPACE/machine-whisperer-$app:$IMAGE_TAG"
+            if docker image inspect "$image" >/dev/null 2>&1; then
+                docker image rm "$image" >/dev/null || rc=1
+            fi
+        done
         for resource in volume network; do
             local remaining
             remaining=$(docker "$resource" ls -q --filter "label=com.docker.compose.project=$project") || rc=1
@@ -52,7 +59,8 @@ echo acme-ok >"$MW_ACME_WEBROOT/.well-known/acme-challenge/probe"
 chmod 0755 "$MW_ACME_WEBROOT" "$MW_ACME_WEBROOT/.well-known" "$MW_ACME_WEBROOT/.well-known/acme-challenge"
 chmod 0644 "$MW_ACME_WEBROOT/.well-known/acme-challenge/probe"
 started=true
-"${compose[@]}" up -d --build --wait --wait-timeout 240
+"${compose[@]}" build api analytics
+"${compose[@]}" up -d --no-build --wait --wait-timeout 240
 edge_ip() {
     local id
     id=$("${compose[@]}" ps -q "$1")

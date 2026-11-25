@@ -143,7 +143,7 @@ class RestoreTest(unittest.TestCase):
         )
         self.assertEqual(
             result.stdout.splitlines(),
-            [prefix + command for command in ("config --quiet", "up --build -d", "ps -a")],
+            [prefix + command for command in ("config --quiet", "pull", "up -d --no-build", "ps -a")],
         )
         for required in ("restore_checkout", "project"):
             with self.subTest(missing=required):

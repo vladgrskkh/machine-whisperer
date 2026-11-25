@@ -4,7 +4,7 @@
 
 **Goal:** Upgrade the mobile app to Expo SDK 58 and run the Machine Whisperer server-side services on one Linux host through a TLS-enabled Nginx proxy, with persistent databases and Prometheus ready for future metrics.
 
-**Architecture:** Upgrade the native mobile app's Expo dependencies to SDK 58 without changing its screens or API behavior. Build separate container images for the Go API and Analytics modules. Compose coordinates both migration jobs, PostgreSQL, ClickHouse, the API-owned outbox worker, Analytics, Nginx and Prometheus; file secrets and private networks keep internal services off the public host interface.
+**Architecture:** Upgrade the native mobile app's Expo dependencies to SDK 58 without changing its screens or API behavior. Build separate container images for the Go API and Analytics modules, publish versioned images to Docker Hub after successful main-branch CI, and have the VPS pull them. Compose coordinates both migration jobs, PostgreSQL, ClickHouse, the API-owned outbox worker, Analytics, Nginx and Prometheus; file secrets and private networks keep internal services off the public host interface.
 
 **Tech Stack:** Expo SDK 58, React Native 0.88, Node 24.22.3, ESLint 9.39.5 with `eslint-config-expo` 58.0.4, Docker Engine, Docker Compose v2, Go 1.26.5, `postgres:18.7-alpine3.23`, `clickhouse/clickhouse-server:26.9.36.3`, `nginx:1.31.10-alpine3.24-slim`, `prom/prometheus:v3.16.0`, `certbot/certbot:v5.10.0`.
 
@@ -30,6 +30,8 @@
 - Restrict manufacturing provisioning at Nginx to `MW_PROVISIONING_CIDR`, defaulting to loopback so public clients are denied, while retaining the API's `device_provisioner` role check.
 - The generated ClickHouse password file contains exactly 64 lowercase hexadecimal characters plus an optional final line ending. Apply this format only to file-backed deployment credentials; preserve direct environment-based configuration behavior.
 - Publish Nginx on IPv4 only. Do not configure an AAAA record until the deployment has a verified IPv6 path that preserves client source addresses.
+- Build API and Analytics images for pull requests without publishing them. Publish images to Docker Hub only after all checks pass on `main`, with immutable `sha-<full-commit>` tags and a moving `latest` tag.
+- Keep registry credentials separate from runtime application secrets. Use GitHub Actions secrets for Docker Hub publishing; keep runtime secrets generated on the VPS in ignored file-backed Compose secrets.
 
 ## Review Focus
 
@@ -246,6 +248,24 @@
 - [x] Change snippet extraction to use command markers and assert the expected snippets were found.
 - [x] Run the runbook restore suite (3/3), commit, and obtain Task 11 review (`6dca69c`, clean).
 
+#### Task 12: Publish deployable images to Docker Hub
+
+**Files:**
+- Modify: `.github/workflows/ci.yml`, `deploy/compose.yaml`, `deploy/.env.server.example`, `deploy/README.md`, and `deploy/scripts/test-compose-config.sh`.
+- Create: `deploy/scripts/test-image-publish-config.sh`.
+
+**Interfaces:**
+- API and `api-migrate` use the same image, `docker.io/${DOCKERHUB_NAMESPACE}/machine-whisperer-api:${IMAGE_TAG}`. Analytics and `analytics-migrate` use `docker.io/${DOCKERHUB_NAMESPACE}/machine-whisperer-analytics:${IMAGE_TAG}`. Keep Compose build contexts for CI/smoke and include `IMAGE_TAG=latest` in the non-secret example env.
+- A GitHub Actions publish job runs only for a successful `push` to `main`, after `lint`, `test`, `build`, API integration, Analytics, deployment smoke and mobile checks pass. It logs in using secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; optional variable `DOCKERHUB_NAMESPACE` selects an organization and otherwise defaults to the login username.
+- Publish both repositories with `sha-${{ github.sha }}` and `latest` tags. Pull requests build and smoke-test but never publish.
+- The runbook sets the Docker Hub namespace and image tag on the VPS, runs `mw pull`, then starts with `mw up -d --no-build`. For releases, it pins the full commit SHA tag. A private Docker Hub repository requires a separate read-only pull token stored in the VPS Docker credential store, not in app secrets or `.env.server`.
+- GitHub Actions secrets are only for image publication. `prepare-secrets.sh` continues to generate runtime credentials on the VPS; no app secrets are added to the registry workflow.
+
+- [x] Add failing static config tests for exact Compose image references and migration-image pairing, plus a workflow regression that verifies publishing is main-only and uses the expected secret/tag contract.
+- [x] Add registry image references while retaining local build contexts; add a publish job and the VPS pull/upgrade procedure.
+- [x] Static Compose/workflow checks, both image builds, and the full local Docker smoke test passed. The Docker Hub push itself requires the user's GitHub Actions secrets and will run only after a main push.
+- [ ] Commit and obtain Task 12 review.
+
 ## Final acceptance
 
 - `docker compose up --build -d` starts the complete server stack and applies migrations before serving traffic.
@@ -255,5 +275,6 @@
 - Compose named volumes retain operational data across service restarts.
 - The manufacturing provisioning route is denied at Nginx outside the configured CIDR.
 - Nginx binds public ports on IPv4 only, with documented DNS requirements.
+- Successful main-branch CI publishes immutable SHA and `latest` API/Analytics images; the VPS pulls the selected tag without building locally.
 - CI checks Compose configuration, image builds, and an ephemeral end-to-end server-stack smoke test.
-- Whole-branch Superpowers review is clean before opening a PR.
+- PR #16 was opened before whole-branch review. Complete the whole-branch Superpowers review on the open PR before merge.

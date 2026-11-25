@@ -52,6 +52,7 @@ services:
       - "${ACME_EMAIL:-}"
 
   api:
+    image: &api-image docker.io/${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/machine-whisperer-api:${IMAGE_TAG:-latest}
     build: ../api
     restart: unless-stopped
     networks:
@@ -79,7 +80,7 @@ services:
       test: [CMD, curl, -fsS, --noproxy, "*", --cacert, /run/secrets/internal_ca, --resolve, "api:8443:127.0.0.1", "https://api:8443/healthz"]
 
   api-migrate:
-    build: ../api
+    image: *api-image
     entrypoint: [/usr/local/bin/migrate]
     networks: [data]
     environment:
@@ -103,6 +104,7 @@ services:
       test: [CMD, pg_isready, -h, 127.0.0.1, -U, machine_whisperer, -d, machine_whisperer]
 
   analytics:
+    image: &analytics-image docker.io/${DOCKERHUB_NAMESPACE:?set DOCKERHUB_NAMESPACE}/machine-whisperer-analytics:${IMAGE_TAG:-latest}
     build: ../analytics
     restart: unless-stopped
     networks: [data]
@@ -118,7 +120,7 @@ services:
       test: [CMD, wget, -qO, /dev/null, "http://127.0.0.1:8081/healthz"]
 
   analytics-migrate:
-    build: ../analytics
+    image: *analytics-image
     entrypoint: [/usr/local/bin/migrate]
     networks: [data]
     environment: *clickhouse-client

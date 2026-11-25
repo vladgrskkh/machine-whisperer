@@ -1,6 +1,6 @@
 # Machine Whisperer Single-Server Runtime
 
-**Status:** Approved by the user; Certbot added per follow-up request
+**Status:** Approved by the user, including the follow-up decisions to use Certbot and publish service images to Docker Hub from GitHub Actions.
 
 **Date:** 2026-11-24
 
@@ -111,6 +111,33 @@ Compose runs these services:
   `127.0.0.1:9090`, suitable for access over an SSH tunnel. It initially
   scrapes itself; example API and Analytics jobs remain commented until those
   services expose metrics.
+
+## Image publication and deployment
+
+GitHub Actions builds the API and Analytics images on pull requests to validate
+the Dockerfiles and Compose smoke stack. A successful push to `main` publishes
+both images to Docker Hub. The repository owner and token are supplied as the
+GitHub Actions `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; the
+`DOCKERHUB_NAMESPACE` Actions variable selects a Docker Hub user or organization
+and defaults to the login username. Docker Hub repositories are named
+`machine-whisperer-api` and `machine-whisperer-analytics` within that namespace.
+The workflow publishes an immutable `sha-<full-commit>` tag and a moving `latest`
+tag. Pull requests never publish images.
+
+Compose retains build contexts for local development and CI, and also names the
+registry image used by the API, API migration, Analytics and Analytics migration
+services. The server runbook pulls the selected image tag and starts with
+`--no-build`, so the VPS does not compile application images. The default
+example tag is `latest`; upgrades should select the immutable SHA tag produced
+by the successful main-branch workflow.
+
+Registry credentials are not application credentials. GitHub Actions uses the
+Docker Hub write token only for publishing. Runtime credentials remain in the
+VPS `deploy/secrets` directory and are mounted into containers as file secrets.
+Public Docker Hub images require no server login; private repositories require
+a separate read-only Docker Hub token in the host's Docker credential store.
+Neither registry token belongs in `deploy/.env.server` or the application
+secret files.
 
 ## TLS and secrets
 
