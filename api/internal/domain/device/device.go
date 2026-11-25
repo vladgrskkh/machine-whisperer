@@ -16,12 +16,13 @@ var (
 )
 
 type Device struct {
-	ID             string
-	MachineID      *string
-	KeyVerifier    [32]byte
-	ClaimVerifier  [32]byte
-	ClaimExpiresAt time.Time
-	ClaimedAt      *time.Time
-	RevokedAt      *time.Time
-	CreatedAt      time.Time
+	ID                  string
+	MachineID           *string
+	ProvisionedByUserID *string
+	KeyVerifier         [32]byte
+	ClaimVerifier       [32]byte
+	ClaimExpiresAt      time.Time
+	ClaimedAt           *time.Time
+	RevokedAt           *time.Time
+	CreatedAt           time.Time
 }

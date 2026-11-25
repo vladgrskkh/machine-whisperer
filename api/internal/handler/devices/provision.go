@@ -5,11 +5,12 @@ import (
 	"net/http"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/device"
 )
 
 type Provisioner interface {
-	Provision(context.Context) (device.Provisioned, error)
+	Provision(context.Context, string) (device.Provisioned, error)
 }
 
 type provisionResponse struct {
@@ -20,7 +21,12 @@ type provisionResponse struct {
 
 func NewProvision(usecase Provisioner) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		result, err := usecase.Provision(r.Context())
+		provisionerID, ok := middleware.UserID(r.Context())
+		if !ok {
+			middleware.Unauthorized(w)
+			return
+		}
+		result, err := usecase.Provision(r.Context(), provisionerID)
 		if err != nil {
 			handler.InternalError(w)
 			return

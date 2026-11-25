@@ -23,6 +23,7 @@ if SCRIPT.is_file():
 PUBLIC_URL = "https://demo.example.test"
 OWNER_ID = str(UUID(int=1))
 EXISTING_ID = str(UUID(int=2))
+EXISTING_DEVICE_ID = str(UUID(int=3))
 TOKEN = "private.access.token"
 CLAIM_CODE = "Q" * 43
 KEY_SECRET = "R" * 43
@@ -37,6 +38,7 @@ class Deployment:
         self.has_provisioner_role = False
         self.machines = {}
         self.devices = {}
+        self.device_provisioners = {}
         self.calls = []
         self.fail = None
 
@@ -113,6 +115,9 @@ class Deployment:
                 raise subprocess.CalledProcessError(1, args, output=KEY_SECRET, stderr=TOKEN)
             device_id = str(UUID(int=200 + len(self.devices)))
             self.devices[device_id] = None
+            self.device_provisioners[device_id] = OWNER_ID
+            if self.fail == "lost provisioning response":
+                raise subprocess.TimeoutExpired(args, timeout, output=KEY_SECRET, stderr=TOKEN)
             output = {
                 "device_id": device_id,
                 "api_key": f"{device_id}.{KEY_SECRET}",
@@ -136,14 +141,24 @@ class Deployment:
             self.calls.append("revoke")
             return subprocess.CompletedProcess(args, 0, "", "")
         assert "DELETE FROM users" in sql and "BEGIN;" in sql and "COMMIT;" in sql
+        lock = f"SELECT id FROM users WHERE id = '{OWNER_ID}' FOR UPDATE;"
+        delete_devices = f"DELETE FROM devices WHERE machine_id IS NULL AND provisioned_by_user_id = '{OWNER_ID}';"
+        delete_owner = f"DELETE FROM users WHERE id = '{OWNER_ID}';"
+        assert sql.splitlines() == ["BEGIN;", lock, delete_devices, delete_owner, "COMMIT;"]
+        unclaimed_demo_devices = {
+            device_id for device_id, provisioner in self.device_provisioners.items()
+            if provisioner == OWNER_ID and self.devices[device_id] is None
+        }
+        remaining = {}
         for device_id, machine_id in self.devices.items():
-            if machine_id is None:
-                assert "DELETE FROM devices" in sql and "machine_id IS NULL" in sql and device_id in sql
-        assert f"DELETE FROM users WHERE id = '{OWNER_ID}'" in sql
+            if device_id in unclaimed_demo_devices or machine_id in self.machines:
+                del self.device_provisioners[device_id]
+            else:
+                remaining[device_id] = machine_id
         del self.owners[self.email]
         self.email = None
         self.machines.clear()
-        self.devices.clear()
+        self.devices = remaining
         self.calls.append("cleanup")
         return subprocess.CompletedProcess(args, 0, "", "")
 
@@ -278,7 +293,16 @@ class SeedDemoTest(unittest.TestCase):
         self.assertEqual(self.deployment.calls[-3], "provision")
         self.assert_aborted()
 
-    def test_malformed_provisioning_payload_still_cleans_up_known_device(self):
+    def test_lost_provisioning_response_removes_only_demo_devices(self):
+        self.deployment.devices[EXISTING_DEVICE_ID] = None
+        self.deployment.device_provisioners[EXISTING_DEVICE_ID] = EXISTING_ID
+        self.deployment.fail = "lost provisioning response"
+        self.run_seed(1)
+
+        self.assert_aborted(remaining_devices={EXISTING_DEVICE_ID: None})
+        self.assertEqual(self.deployment.device_provisioners, {EXISTING_DEVICE_ID: EXISTING_ID})
+
+    def test_malformed_provisioning_payload_still_cleans_up_attributed_device(self):
         self.deployment.fail = "provision response"
         self.run_seed(1)
         self.assertEqual(self.deployment.calls[-3], "provision")
@@ -373,10 +397,10 @@ class SeedDemoTest(unittest.TestCase):
         self.assertEqual(self.deployment.owners.get("demo@machine-whisperer.test"), OWNER_ID)
         self.assertNotIn("cleanup", self.deployment.calls)
 
-    def assert_aborted(self, expect_fixture=False):
+    def assert_aborted(self, expect_fixture=False, remaining_devices=None):
         self.assertIsNone(self.deployment.email)
         self.assertEqual(self.deployment.machines, {})
-        self.assertEqual(self.deployment.devices, {})
+        self.assertEqual(self.deployment.devices, remaining_devices or {})
         self.assertFalse(self.deployment.has_provisioner_role)
         self.assertEqual(self.deployment.calls[-2:], ["revoke", "cleanup"])
         self.assertEqual(list(self.secrets.glob("*")), [self.fixture_path] if expect_fixture else [])

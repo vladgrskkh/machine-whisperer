@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/devices"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
@@ -86,6 +87,95 @@ func TestProvisioningRequiresSignedRoleAndStoresOnlyVerifiers(t *testing.T) {
 	assertDeviceCount(t, pool, 2)
 }
 
+func TestProvisioningStoresAuthenticatedSubject(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	server, _ := newSessionServer(t, pool)
+	provisionerID, ordinary := signupEnrollmentUser(t, server, httpCredentials)
+	require.NoError(t, userpostgres.New(pool).GrantRole(t.Context(), provisionerID, user.RoleDeviceProvisioner))
+	factory := readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, ordinary.RefreshToken))
+	enrolled := provisionEnrollment(t, server, factory.AccessToken)
+
+	var storedProvisioner *string
+	const query = "SELECT provisioned_by_user_id::text FROM devices WHERE id=$1"
+	require.NoError(t, pool.QueryRow(t.Context(), query, enrolled.DeviceID).Scan(&storedProvisioner))
+	require.NotNil(t, storedProvisioner)
+	assert.Equal(t, provisionerID, *storedProvisioner)
+
+	_, err := pool.Exec(t.Context(), "DELETE FROM users WHERE id=$1", provisionerID)
+	require.NoError(t, err)
+	require.NoError(t, pool.QueryRow(t.Context(), query, enrolled.DeviceID).Scan(&storedProvisioner))
+	assert.Nil(t, storedProvisioner)
+}
+
+func TestDemoCleanupSerializesLateProvisioning(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	server, _ := newSessionServer(t, pool)
+	demoID, ordinary := signupEnrollmentUser(t, server, httpCredentials)
+	otherID, otherOrdinary := signupEnrollmentUser(
+		t,
+		server,
+		`{"email":"other-provisioner@example.com","password":"long enough password"}`,
+	)
+	roles := userpostgres.New(pool)
+	require.NoError(t, roles.GrantRole(t.Context(), demoID, user.RoleDeviceProvisioner))
+	require.NoError(t, roles.GrantRole(t.Context(), otherID, user.RoleDeviceProvisioner))
+	demo := readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, ordinary.RefreshToken))
+	other := readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, otherOrdinary.RefreshToken))
+
+	provisionEnrollment(t, server, demo.AccessToken)
+	otherDevice := provisionEnrollment(t, server, other.AccessToken)
+
+	ctx := t.Context()
+	tx, err := pool.Begin(ctx)
+	require.NoError(t, err)
+	defer tx.Rollback(context.WithoutCancel(ctx))
+	_, err = tx.Exec(ctx, "SELECT id FROM users WHERE id=$1 FOR UPDATE", demoID)
+	require.NoError(t, err)
+
+	type result struct {
+		response authHTTPResponse
+		err      error
+	}
+	completed := make(chan result, 1)
+	go func() {
+		response, requestErr := sendAuthHTTPRequest(
+			ctx, server.Client(), http.MethodPost, server.URL+provisionPath, "", bearer(demo.AccessToken),
+		)
+		completed <- result{response: response, err: requestErr}
+	}()
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var blocked bool
+		queryErr := pool.QueryRow(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))
+		)`, int64(tx.Conn().PgConn().PID())).Scan(&blocked)
+		require.NoError(collect, queryErr)
+		assert.True(collect, blocked)
+	}, 5*time.Second, 10*time.Millisecond)
+
+	tag, err := tx.Exec(ctx, "DELETE FROM devices WHERE machine_id IS NULL AND provisioned_by_user_id=$1", demoID)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, tag.RowsAffected())
+	_, err = tx.Exec(ctx, "DELETE FROM users WHERE id=$1", demoID)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	attempt := <-completed
+	require.NoError(t, attempt.err)
+	assert.Equal(t, http.StatusInternalServerError, attempt.response.status)
+	assert.JSONEq(t, internalAuthErrorJSON, attempt.response.body)
+	assertDeviceCount(t, pool, 1)
+
+	var ownerID string
+	require.NoError(
+		t,
+		pool.QueryRow(ctx, "SELECT provisioned_by_user_id::text FROM devices WHERE id=$1", otherDevice.DeviceID).
+			Scan(&ownerID),
+	)
+	assert.Equal(t, otherID, ownerID)
+}
+
 func TestProvisioningRoleRevocationFollowsAccessTokenExpiry(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
@@ -134,13 +224,26 @@ func TestProvisioningEntropyFailureWritesNoDeviceOrSecret(t *testing.T) {
 		credential.NewGenerator(iotest.ErrReader(generatorFailure)),
 		time.Hour,
 	)
+	keyID, signing, verifying, _ := testutil.AuthKeys(t)
+	keys, err := token.LoadKeys(keyID, signing, verifying)
+	require.NoError(t, err)
+	now := time.Now().UTC().Truncate(time.Second)
+	jwt, err := token.NewJWT(keys, func() time.Time { return now })
+	require.NoError(t, err)
+	access, err := jwt.Sign(t.Context(), session.AccessClaims{
+		UserID: uuid.NewString(), SessionID: uuid.NewString(), JTI: uuid.NewString(),
+		IssuedAt: now, ExpiresAt: now.Add(15 * time.Minute), Roles: []string{user.RoleDeviceProvisioner},
+	})
+	require.NoError(t, err)
+
 	var logs bytes.Buffer
-	server := httptest.NewUnstartedServer(middleware.NoStore(devices.NewProvision(usecase)))
+	handler := middleware.AccessToken(jwt)(devices.NewProvision(usecase))
+	server := httptest.NewUnstartedServer(middleware.NoStore(handler))
 	server.Config.ErrorLog = slog.NewLogLogger(slog.NewTextHandler(&logs, nil), slog.LevelError)
 	server.Start()
 	t.Cleanup(server.Close)
 
-	response := authHTTPRequest(t, server, http.MethodPost, provisionPath, "", nil)
+	response := authHTTPRequest(t, server, http.MethodPost, provisionPath, "", bearer(access))
 	server.Close()
 	assert.Equal(t, http.StatusInternalServerError, response.status)
 	assert.Equal(t, "no-store", response.header.Get("Cache-Control"))

@@ -163,11 +163,13 @@ internal TLS. Keep the existing Nginx provisioning allowlist in place.
 The script writes the generated owner password and device keys to
 `deploy/secrets/k6-demo-fixtures.json` with mode `0600`. Keep this file out of
 Git, terminal output, and shared logs. An existing fixture file or an email
-already registered with the API stops the seed. On failure, the script uses
-the IDs returned by the API to roll back the new owner and its fixtures.
-If signup has an uncertain outcome, the script uses the generated password
-to identify the new owner for rollback. Inspect the deployment before
-retrying after a lost provisioning response or a reported rollback failure.
+already registered with the API stops the seed. On failure, rollback locks
+the demo owner in PostgreSQL, removes its attributed unclaimed devices even
+if a provisioning response was lost, and deletes the demo owner. The owner's
+machines and their claimed devices are removed by cascade. If signup has an
+uncertain outcome, the script uses the generated password to identify the
+new owner for rollback. If the script asks for manual inspection, verify the
+demo account and fixture state before retrying.
 
 ## Logs and Prometheus
 

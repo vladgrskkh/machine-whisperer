@@ -193,6 +193,14 @@ Nginx restricts the provisioning route to the manufacturing network or station
 gateway. The signed role check and the network boundary both apply. Users can
 access only the machines they own. Device credentials grant no app access.
 
+PostgreSQL stores each new device's authenticated provisioning account in
+`devices.provisioned_by_user_id`, using the signed JWT subject. This nullable
+foreign key uses `ON DELETE SET NULL` to preserve devices when a factory
+operator account is deleted. The attribution stays internal to the API.
+Synthetic demo rollback locks its dedicated account, deletes its attributed
+unclaimed devices, and deletes the account in one PostgreSQL transaction.
+Claimed demo devices are removed with the demo machines.
+
 ## 5. Baselines, telemetry and alerts
 
 For each supported machine, the project supplies a baseline based on reference

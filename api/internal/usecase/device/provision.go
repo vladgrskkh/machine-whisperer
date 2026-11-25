@@ -49,7 +49,7 @@ func NewProvision(
 	}
 }
 
-func (p *Provision) Provision(ctx context.Context) (Provisioned, error) {
+func (p *Provision) Provision(ctx context.Context, provisionerID string) (Provisioned, error) {
 	id, err := p.ids.Generate(ctx)
 	if err != nil {
 		return Provisioned{}, fmt.Errorf("generate device ID: %w", err)
@@ -64,11 +64,12 @@ func (p *Provision) Provision(ctx context.Context) (Provisioned, error) {
 	}
 	now := time.Now().UTC()
 	value := device.Device{
-		ID:             id,
-		KeyVerifier:    apiSecret.Verifier(),
-		ClaimVerifier:  claimCode.Verifier(),
-		CreatedAt:      now,
-		ClaimExpiresAt: now.Add(p.claimTTL),
+		ID:                  id,
+		ProvisionedByUserID: &provisionerID,
+		KeyVerifier:         apiSecret.Verifier(),
+		ClaimVerifier:       claimCode.Verifier(),
+		CreatedAt:           now,
+		ClaimExpiresAt:      now.Add(p.claimTTL),
 	}
 	if err = p.repository.Create(ctx, value); err != nil {
 		return Provisioned{}, fmt.Errorf("provision device: %w", err)

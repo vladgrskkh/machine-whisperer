@@ -116,18 +116,19 @@ def revoke_role(owner_id):
     sql(f"DELETE FROM user_roles WHERE user_id = '{owner_id}' AND role = '{ROLE}';")
 
 
-def remove_demo_owner(owner_id, provisioned_devices):
-    # Claimed devices cascade from the owner's machines. A failed claim can leave
-    # an unbound device, so delete those separately using their returned UUIDs.
-    statements = ["BEGIN;"]
-    if provisioned_devices:
-        ids = ", ".join(f"'{device_id}'" for device_id in provisioned_devices)
-        statements.append(f"DELETE FROM devices WHERE machine_id IS NULL AND id IN ({ids});")
-    statements.extend([f"DELETE FROM users WHERE id = '{owner_id}';", "COMMIT;"])
-    sql("\n".join(statements))
+def remove_demo_owner(owner_id):
+    # Lock the user before deleting unclaimed devices so a concurrent FK insert
+    # either finishes before cleanup or fails once the user has been deleted.
+    sql(
+        "BEGIN;\n"
+        f"SELECT id FROM users WHERE id = '{owner_id}' FOR UPDATE;\n"
+        f"DELETE FROM devices WHERE machine_id IS NULL AND provisioned_by_user_id = '{owner_id}';\n"
+        f"DELETE FROM users WHERE id = '{owner_id}';\n"
+        "COMMIT;"
+    )
 
 
-def provision(token, provisioned_devices):
+def provision(token):
     response = docker(
         "exec", "-T", "api", "curl", "--disable", "--silent", "--show-error", "--noproxy", "*",
         "--max-time", "15", "--cacert", "/run/secrets/internal_ca", "--resolve", "api:8443:127.0.0.1",
@@ -140,7 +141,6 @@ def provision(token, provisioned_devices):
         raise SeedError("Local API device provisioning failed.")
     result = json.loads(body)
     device_id = str(UUID(result["device_id"]))
-    provisioned_devices.append(device_id)
 
     api_key = result["api_key"]
     claim = result["claim_payload"]
@@ -151,11 +151,11 @@ def provision(token, provisioned_devices):
     return device_id, api_key, claim["claim_code"]
 
 
-def create_fixture(base_url, token, name, provisioned_devices):
+def create_fixture(base_url, token, name):
     machine = request(base_url, "POST", "/v1/machines", {"name": name}, 201, token)
     machine_id = str(UUID(machine["id"]))
     request(base_url, "PUT", f"/v1/machines/{machine_id}/baseline", BASELINE, 200, token)
-    device_id, api_key, claim_code = provision(token, provisioned_devices)
+    device_id, api_key, claim_code = provision(token)
     claim = request(base_url, "POST", "/v1/devices/claim", {
         "device_id": device_id, "machine_id": machine_id, "claim_code": claim_code,
     }, 200, token)
@@ -208,7 +208,6 @@ def seed_demo(path, simulations):
     owner_id = None
     staging_path = None
     publication_uncertain = False
-    provisioned_devices = []
     try:
         try:
             owner = request(base_url, "POST", "/v1/auth/signup", credentials, 201)
@@ -223,7 +222,7 @@ def seed_demo(path, simulations):
             token = login(base_url, {**credentials, "email": owner["email"]})
             scenarios = {
                 scenario: [
-                    create_fixture(base_url, token, f"Demo {scenario} {index}", provisioned_devices)
+                    create_fixture(base_url, token, f"Demo {scenario} {index}")
                     for index in range(1, simulations + 1)
                 ]
                 for scenario in SCENARIOS
@@ -251,7 +250,7 @@ def seed_demo(path, simulations):
                 )
         if owner_id is not None and not (published or publication_uncertain):
             try:
-                remove_demo_owner(owner_id, provisioned_devices)
+                remove_demo_owner(owner_id)
             except SeedError:
                 print(f"Demo seed rollback failed for owner UUID {owner_id}.", file=sys.stderr)
         raise
