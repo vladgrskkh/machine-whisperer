@@ -3,6 +3,7 @@
 package testfixture
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,14 +25,18 @@ func NewAPIMetricsServer(t *testing.T, app *application.Application) *httptest.S
 
 func APIMetrics(t *testing.T, server *httptest.Server) string {
 	t.Helper()
-	body, status, err := getAPIMetrics(server)
+	body, status, err := getAPIMetrics(t.Context(), server)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, status)
 	return body
 }
 
-func getAPIMetrics(server *httptest.Server) (string, int, error) {
-	response, err := server.Client().Get(server.URL + "/metrics")
+func getAPIMetrics(ctx context.Context, server *httptest.Server) (string, int, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+"/metrics", nil)
+	if err != nil {
+		return "", 0, err
+	}
+	response, err := server.Client().Do(request)
 	if err != nil {
 		return "", 0, err
 	}
@@ -42,11 +47,15 @@ func getAPIMetrics(server *httptest.Server) (string, int, error) {
 
 func WaitForAPIMetrics(t *testing.T, server *httptest.Server, sample string) string {
 	t.Helper()
+	const (
+		wait = 3 * time.Second
+		tick = 20 * time.Millisecond
+	)
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		body, status, err := getAPIMetrics(server)
+		body, status, err := getAPIMetrics(t.Context(), server)
 		require.NoError(c, err)
 		require.Equal(c, http.StatusOK, status)
 		assert.Contains(c, body, sample)
-	}, 3*time.Second, 20*time.Millisecond)
+	}, wait, tick)
 	return APIMetrics(t, server)
 }

@@ -49,6 +49,9 @@ func (c *HTTPClient) Send(ctx context.Context, events []telemetry.OutboxEvent) e
 	request.Header.Set("Content-Type", "application/json")
 	response, err := c.client.Do(request)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return errors.Join(telemetry.ErrAnalyticsTransport, context.Canceled)
+		}
 		if errors.Is(err, context.DeadlineExceeded) {
 			return telemetry.ErrAnalyticsTimeout
 		}

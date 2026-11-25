@@ -84,7 +84,7 @@ func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 	e.logger.DebugContext(ctx, "outbox batch claimed", "rows", claimed)
 	started := time.Now()
 	err = e.sender.Send(ctx, events)
-	outcome := sendOutcome(ctx, err)
+	outcome := sendOutcome(err)
 	e.metrics.RecordSend(outcome, time.Since(started))
 	if err != nil {
 		return claimed, e.retry(ctx, token, events, err)
@@ -147,11 +147,11 @@ func (e *Export) operationFailed(ctx context.Context, operation string, rows int
 	e.logger.WarnContext(ctx, "outbox operation failed", "category", operation, "rows", rows)
 }
 
-func sendOutcome(ctx context.Context, err error) string {
+func sendOutcome(err error) string {
 	if err == nil {
 		return OutboxSendSuccess
 	}
-	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) {
 		return OutboxSendCanceled
 	}
 	return analyticsErrorCategory(err)
