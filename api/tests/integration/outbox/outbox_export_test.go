@@ -261,7 +261,7 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	t.Cleanup(server.Close)
 	outbox := telemetrypostgres.NewOutbox(pool)
 	observations := metrics.New(telemetryusecase.NewMeasureOutbox(outbox))
-	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations)
+	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations, http.DefaultTransport)
 	metricsServer := httptest.NewServer(observations.Handler())
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
@@ -340,7 +340,7 @@ func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
 		outbox,
-		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations),
+		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations, http.DefaultTransport),
 		telemetryusecase.ExportSettings{
 			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: time.Minute,
 		},

@@ -111,7 +111,11 @@ func (l *limiter) makeRoom(now time.Time) time.Duration {
 	return 0
 }
 
-func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
+func IsTrustedProxy(r *http.Request, trusted []netip.Prefix) bool {
+	return trustedIP(socketPeerIP(r), trusted)
+}
+
+func socketPeerIP(r *http.Request) netip.Addr {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return netip.Addr{}
@@ -120,7 +124,11 @@ func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
 	if err != nil {
 		return netip.Addr{}
 	}
-	peer = peer.Unmap()
+	return peer.Unmap()
+}
+
+func clientIP(r *http.Request, trusted []netip.Prefix) netip.Addr {
+	peer := socketPeerIP(r)
 	if !trustedIP(peer, trusted) {
 		return peer
 	}

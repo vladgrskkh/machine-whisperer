@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	alertpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/alert/postgres"
@@ -21,6 +24,7 @@ import (
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/alert"
@@ -58,6 +62,8 @@ type Application struct {
 	verifier         *token.JWT
 	logger           *slog.Logger
 	rateLimitConfig  middleware.RateLimitConfig
+	tracerProvider   trace.TracerProvider
+	propagator       propagation.TextMapPropagator
 }
 
 type Option func(context.Context, *Application) error
@@ -105,7 +111,10 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	app := &Application{verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP}
+	app := &Application{
+		verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP,
+		tracerProvider: noop.NewTracerProvider(), propagator: propagation.TraceContext{},
+	}
 	for _, option := range options {
 		if err = option(ctx, app); err != nil {
 			app.Close()
@@ -136,7 +145,11 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 	app.setupEnrollment(
 		transactions,
 		claimTTL,
-		analyticshttp.NewHistoryClient(config.Relay.AnalyticsURL, config.Relay.AnalyticsAPIKey),
+		analyticshttp.NewHistoryClient(
+			config.Relay.AnalyticsURL,
+			config.Relay.AnalyticsAPIKey,
+			tracing.HTTPTransport(app.tracerProvider, app.propagator),
+		),
 	)
 	app.setupTelemetry(transactions, detectorConfig, config.Relay)
 
@@ -188,7 +201,10 @@ func (a *Application) setupTelemetry(
 func (a *Application) setupRelay(config RelayConfig, outbox *telemetrypostgres.Outbox) {
 	export := telemetry.NewExport(
 		outbox,
-		analyticshttp.NewHTTPClient(config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout, a.metrics),
+		analyticshttp.NewHTTPClient(
+			config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout, a.metrics,
+			tracing.HTTPTransport(a.tracerProvider, a.propagator),
+		),
 		telemetry.ExportSettings{
 			BatchSize: config.BatchSize,
 			Lease:     config.Lease,

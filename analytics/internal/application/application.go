@@ -7,6 +7,9 @@ import (
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/clickhouse"
@@ -19,17 +22,21 @@ const connectTimeout = 10 * time.Second
 type Application struct {
 	MetricsHandler http.Handler
 
-	ingestKey  string
-	clickHouse ch.Conn
-	metrics    *metrics.Metrics
-	ingest     *telemetry.IngestBatch
-	history    *telemetry.ListHistory
+	ingestKey      string
+	clickHouse     ch.Conn
+	metrics        *metrics.Metrics
+	ingest         *telemetry.IngestBatch
+	history        *telemetry.ListHistory
+	tracerProvider trace.TracerProvider
+	propagator     propagation.TextMapPropagator
 }
 
 type Option func(context.Context, *Application) error
 
 func New(ctx context.Context, cfg config.Config, options ...Option) (*Application, error) {
-	app := &Application{ingestKey: cfg.IngestKey}
+	app := &Application{
+		ingestKey: cfg.IngestKey, tracerProvider: noop.NewTracerProvider(), propagator: propagation.TraceContext{},
+	}
 	for _, option := range options {
 		if err := option(ctx, app); err != nil {
 			app.Close()

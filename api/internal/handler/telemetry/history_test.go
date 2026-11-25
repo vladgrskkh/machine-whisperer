@@ -69,7 +69,7 @@ func TestHistoryOwnershipLookupFailure(t *testing.T) {
 			repository := telemetrymock.NewHistoryMachineRepository(t)
 			repository.EXPECT().FindByOwner(mock.Anything, ownerID, machineID).
 				Return(machine.Machine{}, tc.err).Once()
-			client := analytics.NewHistoryClient(downstream.URL, "test-analytics-key")
+			client := analytics.NewHistoryClient(downstream.URL, "test-analytics-key", http.DefaultTransport)
 			list := telemetry.NewListHistory(repository, client)
 			router := chi.NewRouter()
 			router.With(middleware.AccessToken(jwt)).

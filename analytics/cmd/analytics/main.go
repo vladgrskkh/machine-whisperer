@@ -16,6 +16,7 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/config"
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/tracing"
 )
 
 const (
@@ -33,7 +34,18 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	app, err := application.New(ctx, cfg, application.WithClickHouse(cfg.ClickHouse))
+	traces, err := tracing.New(ctx, "analytics")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if traces.Shutdown(ctx) != nil {
+			logger.WarnContext(ctx, "trace provider shutdown failed")
+		}
+	}()
+	app, err := application.New(ctx, cfg,
+		application.WithTracing(traces.Provider, traces.Propagator), application.WithClickHouse(cfg.ClickHouse),
+	)
 	if err != nil {
 		return err
 	}

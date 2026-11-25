@@ -30,13 +30,19 @@ type HTTPClient struct {
 	recorder SendRecorder
 }
 
-func NewHTTPClient(baseURL, apiKey string, timeout time.Duration, recorder SendRecorder) *HTTPClient {
+func NewHTTPClient(
+	baseURL, apiKey string,
+	timeout time.Duration,
+	recorder SendRecorder,
+	transport http.RoundTripper,
+) *HTTPClient {
 	return &HTTPClient{
 		url:      strings.TrimRight(baseURL, "/") + BatchPath,
 		apiKey:   apiKey,
 		recorder: recorder,
 		client: &http.Client{
-			Timeout: timeout,
+			Timeout:   timeout,
+			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				// Only the configured endpoint can acknowledge delivery.
 				return http.ErrUseLastResponse

@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
 )
 
 const (
@@ -150,7 +151,19 @@ func serve(ctx context.Context, address string) error {
 		return err
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	app, err := application.New(ctx, config, application.WithDatabase(config.Database), application.WithLogger(logger))
+	traces, err := tracing.New(ctx, "api")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if traces.Shutdown(ctx) != nil {
+			logger.WarnContext(ctx, "trace provider shutdown failed")
+		}
+	}()
+	app, err := application.New(ctx, config,
+		application.WithTracing(traces.Provider, traces.Propagator),
+		application.WithDatabase(config.Database), application.WithLogger(logger),
+	)
 	if err != nil {
 		return err
 	}
