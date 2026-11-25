@@ -1,6 +1,6 @@
 import base64
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.cookiejar import CookieJar
 import http.client
 import importlib.util
@@ -695,8 +695,22 @@ class DeploymentEndToEndTest(unittest.TestCase):
                 return next((spans for spans in traces.values()
                              if required <= {(service_name(span), span["name"]) for span in spans}), None)
 
-            return eventually(name + " and its downstream spans in Jaeger", complete_trace, timeout=45,
-                              caught=NETWORK_ERRORS)
+            try:
+                return eventually(name + " and its downstream spans in Jaeger", complete_trace, timeout=45,
+                                  caught=NETWORK_ERRORS)
+            except AssertionError as error:
+                interval = timedelta(seconds=2)
+                summary = []
+                for emitter in ("nginx", "api", "analytics"):
+                    try:
+                        nearby = query.find(emitter, None, start - interval, end + interval)
+                    except (*NETWORK_ERRORS, AssertionError):
+                        summary.append(f"{emitter} query unavailable")
+                        continue
+                    names = {span["name"] for span in nearby if service_name(span) == emitter}
+                    expected = {label for svc, label in required if svc == emitter}
+                    summary.append(f"{emitter} matched {sorted(names & expected)}, other names {len(names - expected)}")
+                raise AssertionError(f"{error}\nNearby spans by service: {'; '.join(summary)}") from None
 
         history = trace_with("api", HISTORY, history_start, history_end, {
             ("nginx", "proxy /v1/"), ("api", HISTORY), ("api", "GET"), ("api", "telemetry.history.list"),

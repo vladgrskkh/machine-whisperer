@@ -26,11 +26,12 @@ processors:
         "db.system.name", "db.operation.name", "db.query.summary", "error.type", "outcome", "outbox.links.dropped"])
       - 'set(span.status.message, "")'
       - 'set(span.trace_state, "")'
-      - 'set(span.events, [])'
+      # Pdata event and link slices use nil to clear their typed contents.
+      - 'set(span.events, nil)'
       # The stock transform processor cannot edit individual link fields. The
       # API's outbox worker sets only ID and flag fields, with no attributes or
       # tracestate. Remove whole links from every other kind of span.
-      - 'set(span.links, []) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
+      - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
   batch:
     timeout: 1s
     send_batch_size: 256

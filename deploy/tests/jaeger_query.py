@@ -28,12 +28,14 @@ class JaegerQuery:
         ]
 
     def find(self, service, operation, start, end):
-        return self.spans("?" + urlencode({
+        params = {
             "query.serviceName": service,
-            "query.operationName": operation,
             "query.startTimeMin": start.isoformat(),
             "query.startTimeMax": end.isoformat(),
-        }))
+        }
+        if operation is not None:
+            params["query.operationName"] = operation
+        return self.spans("?" + urlencode(params))
 
     def get(self, trace_id):
         return self.spans("/" + quote(trace_id, safe=""))
