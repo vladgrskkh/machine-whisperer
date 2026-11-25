@@ -20,7 +20,8 @@ started=false
 
 cleanup() {
     local rc=$?
-    trap - EXIT
+    trap - EXIT ERR
+    trap '' INT TERM
     if "$started"; then
         "${compose[@]}" down -v --remove-orphans --rmi local --timeout 10 || rc=1
         for image in \
@@ -80,6 +81,10 @@ MW_PROVISIONING_CIDR=$MW_PROVISIONING_CIDR
 EOF
 
 mkdir -m 0700 "$work/fixtures"
+source_copy="$work/source"
+mkdir -p "$source_copy/deploy"
+cp -a scripts compose.yaml nginx clickhouse prometheus .env.server.example "$source_copy/deploy/"
+cp -a "$repo/api" "$repo/analytics" "$source_copy/"
 docker build --quiet --tag "$runner_image" --file k6-e2e-runner.Dockerfile . >/dev/null
 started=true
 "${compose[@]}" build api analytics
@@ -93,12 +98,13 @@ docker run --rm --network "${project}_edge" --user 0:0 \
     --env SSL_CERT_FILE=/e2e/fullchain.pem \
     --env PYTHONDONTWRITEBYTECODE=1 \
     --env DOCKER_CONFIG=/tmp/docker-config \
-    --mount "type=bind,src=$repo,dst=/work,readonly" \
+    --mount "type=bind,src=$source_copy,dst=/work,readonly" \
     --mount "type=bind,src=$work/fixtures,dst=/seed-output" \
     --mount "type=bind,src=$fixture,dst=/e2e,readonly" \
     --mount "type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock" \
     "$runner_image" /bin/sh -ec '
         cp -a /work/. /tmp/work/
+        rm -rf /tmp/work/deploy/secrets
         cp /e2e/.env.server /tmp/work/deploy/.env.server
         install -d -m 0700 /tmp/work/deploy/secrets
         python3 /tmp/work/deploy/scripts/seed-demo-data.py
