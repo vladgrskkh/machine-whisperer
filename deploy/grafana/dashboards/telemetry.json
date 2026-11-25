@@ -84,7 +84,7 @@
     {
       "type": "timeseries",
       "title": "Accepted device requests",
-      "description": "Newly committed device observations and accepted replays. Five-minute average rates.",
+      "description": "Requests that committed a new device observation and accepted replays. Five-minute average rates.",
       "gridPos": {
         "w": 12,
         "h": 8,
@@ -149,8 +149,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Rejected device requests",
-      "description": "Telemetry POSTs by bounded rejection outcome. Five-minute average rates.",
+      "title": "Device ingest rejections and errors",
+      "description": "Ingest use-case rejections and errors. Five-minute average rates. The Go services dashboard shows HTTP status classes, including requests rejected during authentication, authorization or decoding.",
       "gridPos": {
         "w": 12,
         "h": 8,
@@ -584,8 +584,8 @@
     },
     {
       "type": "stat",
-      "title": "Latest successful snapshot age",
-      "description": "Age of the newest successful snapshot from any live API instance. Values of 90 seconds or more are stale.",
+      "title": "Latest outbox snapshot age",
+      "description": "Age of the newest snapshot from the latest scrape of each live API instance. Unknown if none returned a snapshot. Values of 90 seconds or more are stale.",
       "gridPos": {
         "w": 8,
         "h": 8,
@@ -656,8 +656,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Snapshot refresh failures",
-      "description": "Failed attempts to refresh the outbox snapshot, by API instance.",
+      "title": "Outbox snapshot failures",
+      "description": "Failed outbox snapshot reads during scrapes, by API instance.",
       "gridPos": {
         "w": 16,
         "h": 8,
@@ -831,8 +831,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Analytics batch requests",
-      "description": "Batch endpoint requests by outcome.",
+      "title": "Analytics batch storage outcomes",
+      "description": "Batches acknowledged by ClickHouse and batches that failed during storage. The Go services dashboard shows HTTP status classes, including batch requests rejected before storage.",
       "gridPos": {
         "w": 12,
         "h": 8,

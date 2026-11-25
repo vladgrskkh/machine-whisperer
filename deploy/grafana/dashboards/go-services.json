@@ -359,7 +359,7 @@
       "title": "In-flight HTTP requests",
       "description": "Current business-listener requests by instance, including health checks.",
       "gridPos": {
-        "w": 12,
+        "w": 24,
         "h": 8,
         "x": 0,
         "y": 17
@@ -407,60 +407,6 @@
         }
       },
       "id": 6
-    },
-    {
-      "type": "timeseries",
-      "title": "Database pool connections",
-      "description": "Client-side pool states by process. Analytics reports open total and idle connections.",
-      "gridPos": {
-        "w": 12,
-        "h": 8,
-        "x": 12,
-        "y": 17
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "mw-prometheus"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "suffix: connections",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 8,
-            "showPoints": "never",
-            "spanNulls": false
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "mw-prometheus"
-          },
-          "editorMode": "code",
-          "expr": "mw_postgres_pool_connections{job=\"$job\",instance=~\"${instance:regex}\"} or mw_clickhouse_pool_connections{job=\"$job\",instance=~\"${instance:regex}\"}",
-          "legendFormat": "{{instance}} {{state}}",
-          "instant": false,
-          "range": true
-        }
-      ],
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "id": 7
     },
     {
       "type": "row",
