@@ -89,8 +89,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assert_grafana_provisioning_and_access()
             self.assert_application_without_grafana()
             self.assert_application_metrics()
-            self.assert_dashboard_queries()
+            # The p95 panels need requests between two scrapes of the same histogram.
             self.run_k6_scenarios()
+            self.assert_dashboard_queries()
             self.assert_scrape_failure_and_recovery()
             self.assert_persistence_across_container_recreation()
             self.assert_proxy_rejects_untrusted_upstream()
