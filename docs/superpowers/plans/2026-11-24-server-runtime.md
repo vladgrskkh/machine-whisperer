@@ -260,6 +260,7 @@
 - Protect SHA tags on both Docker Hub repositories with the immutable-tag regex `^sha-[0-9a-f]{40}$`. Reuse existing SHA images on reruns. A serialized promotion job waits for both SHA images and verifies the current main head before updating the two `latest` aliases. Pull requests build and smoke-test but never publish.
 - Require a pinned SHA for production and backup. Before backup, compare both running container image references against the saved Compose configuration.
 - The runbook sets the Docker Hub namespace and image tag on the VPS, runs `mw pull`, then starts with `mw up -d --no-build`. For releases, it pins the full commit SHA tag. A private Docker Hub repository requires a separate read-only pull token stored in the VPS Docker credential store, not in app secrets or `.env.server`.
+- The cold-backup runbook requires a pinned SHA tag, verifies the running API and Analytics images match it before stopping services, and attempts to restart services on all exits after downtime begins while preserving the original backup error.
 - GitHub Actions secrets are only for image publication. `prepare-secrets.sh` continues to generate runtime credentials on the VPS; no app secrets are added to the registry workflow.
 
 - [x] Add failing static config tests for exact Compose image references and migration-image pairing, plus a workflow regression that verifies publishing is main-only and uses the expected secret/tag contract.

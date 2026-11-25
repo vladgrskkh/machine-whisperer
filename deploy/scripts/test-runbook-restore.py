@@ -87,45 +87,73 @@ class RestoreTest(unittest.TestCase):
         with tarfile.open(self.backup / "letsencrypt.tar", "w") as archive:
             archive.add(secrets / "token", arcname="letsencrypt/accounts/token")
 
-    def test_backup_requires_running_images_to_match_the_saved_pin(self):
+    def prepare_cold_backup(self):
         self.create_backup()
-        snippet = RUNBOOK.split("## Back up the volumes", 1)[1].split("```bash\n", 1)[1].split("\n```", 1)[0]
+        (self.checkout / "deploy/letsencrypt").mkdir()
         compose_yaml = Path(__file__).resolve().parents[1] / "compose.yaml"
         (self.checkout / "deploy/compose.yaml").write_bytes(compose_yaml.read_bytes())
+
+    def run_cold_backup(self, tag, mismatch="", volume_status=0, restart_status=0):
+        snippet = RUNBOOK.split("## Back up the volumes", 1)[1].split("```bash\n", 1)[1].split("\n```", 1)[0]
+        marker = self.scratch / "operations"
+        marker.write_text("")
+        (self.checkout / "deploy/.env.server").write_text(f"DOCKERHUB_NAMESPACE=org\nIMAGE_TAG={tag}\n")
+        functions = r"""
+        mw() {
+            case "$1" in
+                config) HOME="$DOCKER_CLI_HOME" command docker compose --env-file deploy/.env.server -f deploy/compose.yaml "$@" ;;
+                ps) echo "${!#}" ;;
+                stop) echo "$*" >> "$MARKER" ;;
+                up) echo "$*" >> "$MARKER"; return "$RESTART_STATUS" ;;
+                *) return 1 ;;
+            esac
+        }
+        docker() {
+            case "$1" in
+                inspect)
+                    local svc="${!#}" tag="$TAG"
+                    [[ "$svc" != "$MISMATCH" ]] || tag=latest
+                    echo "docker.io/org/machine-whisperer-$svc:$tag" ;;
+                volume) return "$VOLUME_STATUS" ;;
+                run) tar -C deploy -cpf - secrets ;;
+                *) return 1 ;;
+            esac
+        }
+        """
+        env = self.env | {
+            "TAG": tag, "MISMATCH": mismatch, "MARKER": str(marker), "DOCKER_CLI_HOME": str(Path.home()),
+            "IMAGE_TAG": "latest", "DOCKERHUB_NAMESPACE": "override",
+            "RESTART_STATUS": str(restart_status), "VOLUME_STATUS": str(volume_status),
+        }
+        result = run_bash(functions + snippet, self.checkout, env)
+        return result, marker.read_text().splitlines()
+
+    def test_backup_requires_running_images_to_match_the_saved_pin(self):
+        self.prepare_cold_backup()
         pinned = "sha-" + "a" * 40
         for tag, mismatch, accepted in [
             ("latest", "", False), (pinned, "api", False), (pinned, "analytics", False), (pinned, "", True),
         ]:
             with self.subTest(tag=tag, mismatch=mismatch):
-                marker = self.scratch / "stopped"
-                marker.unlink(missing_ok=True)
-                saved_env = f"DOCKERHUB_NAMESPACE=org\nIMAGE_TAG={tag}\n"
-                (self.checkout / "deploy/.env.server").write_text(saved_env)
-                functions = r"""
-                mw() {
-                    case "$1" in
-                        config) HOME="$DOCKER_CLI_HOME" command docker compose --env-file deploy/.env.server -f deploy/compose.yaml "$@" ;;
-                        ps) echo "${!#}" ;;
-                        stop) touch "$MARKER"; exit 87 ;;
-                        *) return 1 ;;
-                    esac
-                }
-                docker() {
-                    [[ "$1" == inspect ]] || return 1
-                    local svc="${!#}" tag="$TAG"
-                    [[ "$svc" != "$MISMATCH" ]] || tag=latest
-                    echo "docker.io/org/machine-whisperer-$svc:$tag"
-                }
-                """
-                env = self.env | {"TAG": tag, "MISMATCH": mismatch, "MARKER": str(marker),
-                                  "DOCKER_CLI_HOME": str(Path.home()), "IMAGE_TAG": "latest", "DOCKERHUB_NAMESPACE": "override"}
-                result = run_bash(functions + snippet, self.checkout, env)
-                self.assertEqual(marker.exists(), accepted, result.stderr)
+                result, operations = self.run_cold_backup(tag, mismatch)
                 if accepted:
-                    self.assertEqual(result.returncode, 87, result.stderr)
-                    self.assertEqual(next(self.scratch.glob("mw-backup.*/env.server")).read_text(), saved_env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(operations, ["stop --timeout 120", "up -d --no-build"])
+                    self.assertEqual(next(self.scratch.glob("mw-backup.*/env.server")).read_text(),
+                                     f"DOCKERHUB_NAMESPACE=org\nIMAGE_TAG={tag}\n")
                 else:
                     self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(operations, [])
+
+    def test_backup_restarts_after_downtime_and_preserves_failure_status(self):
+        self.prepare_cold_backup()
+        for volume_status, restart_status, expected_status in [(42, 0, 42), (42, 17, 42), (0, 17, 17)]:
+            with self.subTest(volume_status=volume_status, restart_status=restart_status):
+                result, operations = self.run_cold_backup(
+                    "sha-" + "b" * 40, volume_status=volume_status, restart_status=restart_status,
+                )
+                self.assertEqual(result.returncode, expected_status, result.stderr)
+                self.assertEqual(operations, ["stop --timeout 120", "up -d --no-build"])
 
     def test_restores_to_separate_worktree(self):
         self.create_backup()

@@ -273,6 +273,19 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
     printf 'Backup directory: %s\n' "$backup"
     git rev-parse HEAD > "$backup/revision"
     cp -p deploy/.env.server "$backup/env.server"
+    restart_after_backup() {
+        local backup_status=$1 restart_status=0
+        trap - EXIT
+        mw up -d --no-build || restart_status=$?
+        if (( restart_status != 0 )); then
+            printf 'Stack restart failed (exit %s). Check mw ps -a.\n' "$restart_status" >&2
+        fi
+        if (( backup_status != 0 )); then
+            exit "$backup_status"
+        fi
+        exit "$restart_status"
+    }
+    trap 'restart_after_backup "$?"' EXIT
     mw stop --timeout 120
     for name in postgres-data clickhouse-data prometheus-data; do
         volume="${project}_${name}"
@@ -285,7 +298,6 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
     tar -C deploy -cpf "$backup/secrets.tar" secrets
     sudo tar -C deploy -cpf - letsencrypt > "$backup/letsencrypt.tar"
     printf 'Backup complete: %s\n' "$backup"
-    mw up -d --no-build
 )
 ```
 
