@@ -1,10 +1,26 @@
-.PHONY: run build test test-integration lint tools migrate-up migrate-down migrate-status
+.PHONY: run build test test-integration lint tools migrate-up migrate-down migrate-status swagger swagger-check
+
+SWAGGER_DIR := docs/openapi
+SWAGGER_INIT := go run github.com/swaggo/swag/cmd/swag@v1.16.6 init \
+	--dir cmd/api,internal/application,internal/handler,internal/domain/telemetry \
+	--generalInfo main.go --parseInternal --outputTypes yaml
 
 run:
 	go run ./cmd/api
 
 build:
 	go build -o bin/api ./cmd/api
+
+swagger:
+	$(SWAGGER_INIT) --output "$(SWAGGER_DIR)"
+
+swagger-check:
+	@set -eu; \
+	tmp=$$(mktemp -d); \
+	trap 'rm -rf "$$tmp"' EXIT; \
+	trap 'exit 1' HUP INT TERM; \
+	$(SWAGGER_INIT) --output "$$tmp"; \
+	diff -u "$(SWAGGER_DIR)/swagger.yaml" "$$tmp/swagger.yaml"
 
 test:
 	go test ./... -v -count=1

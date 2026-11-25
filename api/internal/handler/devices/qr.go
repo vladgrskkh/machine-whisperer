@@ -16,10 +16,11 @@ const (
 var ErrInvalidClaimPayload = errors.New("invalid QR claim payload")
 
 type ClaimPayload struct {
-	Version   int    `json:"v"`
-	DeviceID  string `json:"device_id"`
-	ClaimCode string `json:"claim_code"`
-}
+	Version  int    `json:"v"         validate:"required" enums:"1"`
+	DeviceID string `json:"device_id" validate:"required"           format:"uuid"`
+	// Independent 32-byte claim secret encoded as canonical unpadded base64url.
+	ClaimCode string `json:"claim_code" validate:"required" minLength:"43" maxLength:"43"`
+} // @name ClaimPayload
 
 func DecodeClaimPayload(reader io.Reader) (ClaimPayload, error) {
 	var payload ClaimPayload

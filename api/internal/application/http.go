@@ -18,6 +18,14 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 )
 
+// Routes builds the API router and attaches endpoint middleware.
+//
+// @Summary Check process health
+// @ID checkProcessHealth
+// @Tags operational
+// @Description Process probe on the API listener.
+// @Success 200 "Process is running."
+// @Router /healthz [get]
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
 	schema := *httplog.SchemaECS

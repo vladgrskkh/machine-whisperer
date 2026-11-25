@@ -1,5 +1,27 @@
 # Machine Whisperer API
 
+## HTTP contract
+
+The [generated Swagger 2.0 YAML](docs/openapi/swagger.yaml) describes all API
+operations, including the restricted manufacturing endpoint and the process
+health probe. Open it in a Swagger-compatible viewer.
+
+After changing an HTTP route or its contract, update the handler annotations and
+run these commands from `api/`.
+
+```sh
+make swagger
+git diff -- docs/openapi/swagger.yaml
+make swagger-check
+```
+
+Commit the regenerated YAML with the change. CI runs `make swagger-check` to
+compare a fresh copy against the checked-in artifact. Both commands use the
+module's Go toolchain and download the pinned generator on first use. They run
+without starting the API or its dependencies.
+
+## Local development
+
 The API requires Go 1.26.5, PostgreSQL and golangci-lint v2.12.2.
 Install the pinned tools with `make tools`, create a PostgreSQL database and
 provision the key files described below, then:
