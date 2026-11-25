@@ -1,3 +1,4 @@
+.worktrees/
 /deploy/.env.server
 /deploy/secrets/
 /deploy/acme-webroot/

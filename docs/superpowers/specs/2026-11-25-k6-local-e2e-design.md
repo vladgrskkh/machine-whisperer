@@ -46,8 +46,8 @@ together.
 
 Add `deploy/scripts/test-k6-demo-e2e.sh`. It follows the smoke-test pattern:
 create a random Compose project, temporary secret/certificate directories,
-build the API and Analytics images, and start the full stack with published
-loopback ports. The Nginx service also receives the test domain as a Docker
+build the API and Analytics images, and start the full stack without host
+port publication. The Nginx service also receives the test domain as a Docker
 network alias.
 
 Generate a disposable certificate for `k6-e2e.test`. Run the existing seed
@@ -70,8 +70,8 @@ load the script without fixtures or network access.
 
 Remove the Node VM behavior suite from `deploy/scripts/test-k6-demo.sh` once
 the real E2E test covers scenario selection, fixture mapping, event timing,
-alert transitions, and history delivery. Keep or move only small checks that
-exercise behavior unavailable to the E2E path.
+alert transitions, and history delivery. Keep only the pinned-image archive
+check as fast offline load coverage.
 
 ## Verification
 
@@ -80,5 +80,6 @@ exercise behavior unavailable to the E2E path.
   contents.
 - A failure leaves no Compose project containers, networks, volumes, or local
   images behind.
-- Existing seed unit tests cover the new local-test configuration behavior.
+- The E2E run proves the existing seed's production defaults without changing
+  the seed tool; existing seed unit tests remain green.
 - Existing API, deployment, and mobile checks remain green.

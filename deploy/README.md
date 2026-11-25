@@ -203,6 +203,27 @@ These synthetic readings exercise the API, detector, and history pipeline.
 They use a fixed baseline and do not represent measured vibration or validate
 sensor accuracy or production capacity.
 
+### Run the local k6 E2E check
+
+CI validates the same scenarios against a disposable full Compose stack. To
+run that check locally, use:
+
+```bash
+deploy/scripts/test-k6-demo-e2e.sh
+```
+
+The script creates a random Compose project, generated secrets, a disposable
+certificate and fixture file, seeds one simulation through the real API, then
+runs `all`, `alert`, and `recovery`. It publishes no host ports and removes
+the stack, images, volumes, network, and temporary files when it finishes.
+`run-k6-demo.sh` also accepts `K6_DOCKER_NETWORK` and `K6_CA_FILE` so the k6
+container can join this isolated network and trust its disposable CA. Leave
+both unset for deployed-host runs.
+
+The separate offline check, `deploy/scripts/test-k6-demo.sh --archive`, only
+proves the pinned k6 image can load and archive the scenario script without
+network access or private fixtures.
+
 ## Logs and Prometheus
 
 ```bash
