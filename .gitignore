@@ -1,0 +1,7 @@
+/deploy/.env.server
+/deploy/secrets/
+/deploy/acme-webroot/
+/deploy/**/*.crt
+/deploy/**/*.key
+/deploy/**/*.pem
+/deploy/letsencrypt/

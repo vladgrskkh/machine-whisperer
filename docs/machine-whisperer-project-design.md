@@ -1,305 +1,403 @@
-# Machine Whisperer — project design
+# Machine Whisperer — project architecture decisions
 
-**Status:** Draft for review  
-**Date:** 2026-11-10
+**Status:** MVP decisions and target architecture
 
-## 1. Product
+**Last reviewed:** 2026-11-24
 
-Machine Whisperer monitors vibration on steady-running machines such as fans
-and pumps operating at a consistent speed and load. Each
-sensor node sends measurements to a service that compares them with an
-operator-configured machine baseline and flags sustained changes. Operators see
-their machines, trends and alerts in a mobile app. Automatic baseline adjustment
-from telemetry history is a post-MVP capability.
+This document records the intended end state of the project: product, services,
+data flow, detection, hardware and deployment decisions.
 
-An alert requests an inspection; it does not diagnose a component or predict a
-failure date. Detection quality and hardware suitability require validation on
-real machines.
+## 1. Context and product boundary
 
-The initial scope excludes multi-mode machines, such as coffee machines with
-distinct grinding and brewing cycles. Supporting those requires identifying
-operating modes and learning separate baselines.
+Machine Whisperer helps an operator notice sustained vibration changes on
+steady-running equipment such as fans and pumps. A **machine** is the physical
+equipment being monitored. A **device** is a separate sensor node attached to a
+machine. The device has its own identity and sends readings for the machine to
+which it was enrolled. A user account owns one or more machines and can review
+their histories and alerts in the mobile app.
 
-### MVP boundary
+The system reports deviations from a machine-specific reference. It does not
+diagnose a component or predict a failure date. It is designed first for
+equipment that runs at a steady speed and load. Machines with multiple
+operating modes need separate mode detection and baselines and are outside the
+MVP.
 
-For Analytics, the MVP collects, delivers and stores telemetry history. The MVP
-also supports operator-configured baselines, detection against those baselines
-and alerts for sustained deviation. Automatic per-machine baseline learning or
-adjustment from history is post-MVP; it requires enough healthy, steady-running
-observations and a validated calibration process.
+## 2. Architecture decision
 
-## 2. Architecture
+Use a Go API as the public entry point and operational system of record. Store
+account, access, machine, device, baseline and alert state in PostgreSQL. Keep
+the full telemetry history in ClickHouse, owned by a separate Go Analytics
+service. Deliver telemetry from the API to Analytics through an outbox worker
+inside the API process. Serve the owner-facing experience through a React Native
+app built with Expo. Place Nginx at the public edge and manage public TLS with
+Certbot. A separate observability stack handles service metrics, traces,
+dashboards and alert routing.
 
-```text
-  ESP32 + accelerometer
-          │ HTTPS
-          ▼
-  Load balancer ◄──── HTTPS ──── Mobile app
-          │
-          ▼
-    Go REST API ──────► PostgreSQL
-          │             users, organizations, devices,
-          │             baseline configuration, alerts, outbox
-          │
-          └── API outbox relay ──HTTPS──► Analytics service ──► ClickHouse
-                                            export and analysis  telemetry history
+```mermaid
+flowchart TB
+    subgraph Clients["Clients"]
+        device["ESP32-S3-DevKitC-1-N8R8<br/>ADXL345 accelerometer"]
+        app["React Native app<br/>Expo"]
+    end
+    edge[Nginx]
+    api[Go API]
+    pg[(PostgreSQL)]
+    worker["Outbox worker<br/>in API process"]
+    analytics[Go Analytics]
+    ch[(ClickHouse)]
+    certbot[Certbot]
+
+    device -->|HTTPS telemetry| edge
+    app -->|HTTPS| edge
+    edge -->|HTTPS; API certificate verified| api
+    api -->|One transaction: event ID, outbox, detector and alerts| pg
+    pg --> worker
+    worker -->|Private HTTP + bearer token| analytics
+    analytics -->|Batch insert| ch
+    api -->|History request| analytics
+    analytics -->|Bounded history| api
+    certbot -. certificate renewal .-> edge
 ```
 
-The load balancer terminates external TLS and routes requests to REST API
-instances. The API authenticates callers, receives telemetry, commits the
-event and outbox record to PostgreSQL, and serves the app. A worker in the API
-process posts outbox batches to an internal Analytics endpoint. Analytics stores
-the history in ClickHouse. The API runs the MVP detector and stores alert
-state in PostgreSQL. Post-MVP Analytics will learn or propose baseline
-adjustments from history. The app never connects directly to a database.
+The API and Analytics service have separate databases and responsibilities. The
+mobile app and sensor device never connect directly to either database. The
+outbox worker stays in the API service; a second API entry point or a service
+sharing the API database is unnecessary.
 
-| Component            | Proposed technology                              |
-| -------------------- | ------------------------------------------------ |
-| Sensor node          | ESP32, ADXL345, Arduino framework and PlatformIO |
-| API and outbox relay | Go                                               |
-| Analytics service    | Go                                               |
-| Operational data     | PostgreSQL                                       |
-| Telemetry analytics  | ClickHouse                                       |
-| Mobile app           | React Native                                     |
-| Edge                | TLS reverse proxy / load balancer                     |
+| Component | Decision |
+| --- | --- |
+| Public API and outbox worker | Go, chi, PostgreSQL; worker runs in the API process |
+| Analytics and history | Separate Go HTTP service backed by ClickHouse |
+| Mobile client | React Native with Expo |
+| Edge and public certificates | Nginx with Certbot and HTTP-01 validation |
+| Service deployment | Docker Compose on a Linux host; start with one host and scale when measured load requires it |
+| Observability in MVP | OpenTelemetry SDKs and Collector, Prometheus and Alertmanager for service alerting, Jaeger for traces, Grafana for dashboards |
 
-The API uses chi for routing, pgx for PostgreSQL, Goose for migrations and slog
-for structured logging.
+### Service observability
 
-At launch, run the reverse proxy, API, Analytics service, PostgreSQL and
-ClickHouse as containers on one cloud VM with approximately 4 vCPUs and 16 GiB
-RAM. This is a starting assumption to benchmark, not a
-verified capacity or highly available deployment. The reverse proxy terminates
-TLS and balances API instances; one VM remains a single point of failure. A
-separate API gateway is not required.
+```mermaid
+flowchart LR
+    services["Go API + Analytics<br/>OpenTelemetry SDKs"] --> collector["OpenTelemetry Collector"]
+    collector --> prometheus["Prometheus<br/>service metrics"]
+    collector --> jaeger["Jaeger<br/>distributed traces"]
+    prometheus --> alertmanager["Alertmanager<br/>service alert routing"]
+    prometheus --> grafana["Grafana<br/>dashboards"]
+    jaeger --> grafana
+```
 
-For a price reference, DigitalOcean lists a 4-vCPU, 16-GiB general-purpose VM
-at $126/month with 50 GiB SSD. This is the VM price, not a full project bill:
-additional storage, traffic, taxes and any external services can add cost.
-Pricing and region availability can change. [Pricing source](https://www.digitalocean.com/pricing/droplets).
-All-history storage may exceed the included disk; measure growth before launch.
+Prometheus evaluates service alert rules and sends firing alerts to Alertmanager
+for grouping and notification routing. Jaeger stores and displays distributed
+traces. Grafana queries Prometheus and Jaeger. Machine vibration alerts are
+created by the API and shown in the mobile app; they are separate from
+service-health alerts.
 
-### Scaling
+## 3. Device and hardware decision
 
-Start with stateless API instances behind the proxy. As demand grows, move the
-proxy and API to separate hosts and add API instances. Keep detector state
-updates serialized per machine in PostgreSQL. Use transactional outbox
-claiming so multiple relay workers do not process the same work concurrently.
-Relay workers scale with API replicas. Scale Analytics instances independently.
-Move PostgreSQL and ClickHouse to dedicated or managed resources when CPU,
-memory, disk, ingest lag or query latency requires it. Add replicas or sharding
-only after workload measurements justify the added complexity. Define capacity
-thresholds and availability targets after load testing.
+The development hardware is the **Espressif ESP32-S3-DevKitC-1-N8R8** board and
+an **ADXL345 accelerometer breakout**. The board uses the ESP32-S3-WROOM-1-N8R8
+module, exposes its GPIO pins for wiring and provides 8 MB flash and 8 MB PSRAM.
+Use the 3.3 V variant. The production device will use a compact board with the
+same MCU family and sensor; the development kit is for firmware bring-up.
+Mount the sensor rigidly on the machine; vibration testing requires soldered or
+locking connections, not a loose breadboard assembly.
 
-## 3. Data and delivery
+The ADXL345 measures acceleration independently along X, Y and Z. It senses
+both gravity and dynamic movement or shock; it does not measure velocity,
+displacement, current, sound or a fault type. Its ranges are ±2, ±4, ±8 or ±16 g.
+In full-resolution mode it provides up to 13-bit output with a nominal scale of
+3.9 mg/LSB. It outputs signed digital samples over I²C or SPI and contains a
+32-sample FIFO. The chosen initial configuration is full-resolution ±16 g at
+800 samples per second (ODR), giving a 400 Hz bandwidth. This suits an initial
+low-frequency RMS trend detector; it does not cover higher-frequency bearing
+analysis. Sensor noise and mounting must be checked against the expected
+vibration amplitude.
 
-PostgreSQL stores users, organizations, device credential verifiers, machine
-configuration, event IDs, detector state and alerts. An alert records the machine,
-trigger observation and baseline snapshot, last and peak z-scores, and
-recovery details and the first acknowledgement timestamp when available.
+### Wiring and firmware sampling
 
-ClickHouse stores the full telemetry history for charts and analysis. At one
-observation per minute, 100 devices produce around 144,000 records per day,
-or 52.6 million per year. PostgreSQL could handle this workload depending on
-queries and indexing, but ClickHouse is the proposed analytics store because the
-product aims to analyze large histories across devices. Capacity and query
-performance must be measured using representative data.
+Use the Adafruit ADXL345 breakout, product 1231, with its I²C interface. Connect
+ESP32 3V3 to `VIN`, ground to `GND`, GPIO 8 to `SCL`, GPIO 9 to `SDA`, and the
+breakout `INT1` output to GPIO 4 for the FIFO watermark interrupt. The breakout
+uses I²C address `0x53` by default and includes the required I²C pull-ups. Set
+the ADXL345 FIFO to stream mode with a 16-sample watermark. At 800 Hz this
+interrupts the ESP32 every 20 ms; firmware reads the available XYZ samples in a
+single burst over 400 kHz I²C. The ADXL345 datasheet limits the recommended ODR
+to 800 Hz at that I²C rate.
 
-On ingestion, a PostgreSQL transaction stores the accepted event, advances the
-machine cursor, creates an outbox entry and applies any detector or alert
-changes. The API relay leases batches and posts them to Analytics, which
-bulk-inserts them into ClickHouse and acknowledges only after success. A
-successful API response means the event is committed in PostgreSQL; it may take
-longer to appear in ClickHouse. Current status and alerts come from PostgreSQL,
-so charts may temporarily lag.
+For each 60-second observation window, firmware converts the signed sensor
+counts to g and accumulates the 48,000 XYZ samples. It does not retain the raw
+window. At the window end it removes each axis mean and calculates the combined
+RMS vibration:
 
-For MVP detection, the API compares valid RMS observations with the machine's
-operator-configured baseline during the telemetry transaction. PostgreSQL holds
-the baseline configuration and alert state. Baseline writes lock the same machine
-row as telemetry ingestion. The outbox table only delivers telemetry.
+```text
+mean_x = sum(x_i) / N
+mean_y = sum(y_i) / N
+mean_z = sum(z_i) / N
+vibration_rms_g = sqrt(sum((x_i-mean_x)^2 + (y_i-mean_y)^2 + (z_i-mean_z)^2) / N)
+```
 
-Post-MVP, Analytics can learn or adjust a machine's baseline from accumulated,
-valid observations collected while the machine is known healthy and running.
-Receiving an individual telemetry batch will not synchronously tune the
-baseline.
-
-Delivery is at least once. ClickHouse uses `ReplacingMergeTree` keyed by
-`(machine_id, observed_at, device_id, event_id)`; queries that need immediate
-logical deduplication use `FINAL` or equivalent event-key aggregation. The
-outbox retains delivered entries for a limited, configurable period and retains
-undelivered entries until delivery succeeds. ClickHouse is intended to retain
-all telemetry for analysis, subject to available capacity. The outbox is not the
-long-term telemetry store. Event IDs remain in PostgreSQL for a defined retry
-window; retries outside that window must be rejected rather than silently
-processed again. The retry window and device queue lifetime must be specified
-together.
-
-## 4. Device hardware and firmware
-
-One node needs an ESP32 development board with Wi-Fi, an ADXL345 accelerometer
-breakout compatible with 3.3 V logic, wiring, power, an enclosure and a secure
-mount. The ESP32 plus ADXL345 is a reference candidate; exact board, breakout,
-wiring and mounting remain to be selected. The [ADXL345 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/ADXL345.pdf)
-defines the sensor's electrical and measurement limits.
-
-The firmware samples three acceleration axes at a defined rate, removes each
-axis's window mean and calculates combined RMS acceleration in g. It sends one
-feature record per minute and handles invalid samples, time synchronization,
-connection loss and bounded retries. Frequency and current are optional fields;
-the first firmware version does not calculate them. Sensor bandwidth, placement
-and machine operating conditions must be validated for the intended use.
-
-The ADXL345 supports selectable output rates up to 3,200 Hz and ranges up to
-±16 g, but output rate is not the same as usable measurement bandwidth. Its
-noise, bandwidth and mounting may be insufficient for subtle or high-frequency
-bearing faults. [Sensor selection guidance](https://www.analog.com/en/resources/analog-dialogue/articles/intro-to-mems-vibration-monitoring.html)
-identifies bandwidth, noise, range and mounting as key factors. Select a target
-machine and expected frequency range, then compare candidate sensors and test a
-mounted device before treating ADXL345 as a production choice.
-
-## 5. Authentication and authorization
-
-### Devices
-
-Each device has a dedicated identity, similar to a service account, and its own
-randomly generated, high-entropy API key. During provisioning, the service binds
-the identity to an organization and machine. The key is supplied through a secure provisioning
-process and stored in protected device storage; the server stores a one-way
-verifier, not the plaintext secret. The provisioning mechanism and storage
-capabilities must be selected for the exact board.
-
-The device sends its API key as an HTTPS bearer token with every request.
-The API verifies it and checks that the device identity is active and authorized
-for the machine in the request path. One device cannot submit data for another machine.
-Keys can be revoked and rotated individually; revoked keys are
-rejected. TLS is required end to end, including load balancer to API, and the
-device verifies the server certificate. The details of enrollment, certificate
-trust and rotation need a separate security design.
-
-### Users
-
-Users authenticate to the app and can access only machines and alerts belonging
-to organizations they are authorized to use. Identity provider, session
-management and roles remain open decisions. Device API keys do not grant
-user or app access.
-
-## 6. API contracts
-
-The REST API uses JSON, UTC timestamps and versioned paths.
-
-### Device telemetry
-
-`POST /v1/machines/{machine_id}/telemetry`
+The device synchronizes its clock and timestamps the end of the window in UTC.
+It sends one JSON event each minute to `POST /v1/devices/me/telemetry` over
+HTTPS. The device authenticates with its own API key. The API resolves
+the device's claimed machine from that identity, so the firmware does not need
+to receive or store a machine ID. The payload is:
 
 ```http
-Authorization: Bearer <device-api-key>
+POST /v1/devices/me/telemetry
+Authorization: Bearer <device_id.secret>
 Content-Type: application/json
 ```
 
 ```json
 {
-    "schema_version": 1,
-    "event_id": "a5b96d2a-5cb0-4f3b-9d64-f3f53de41071",
-    "observed_at": "2026-11-10T12:00:00Z",
-    "operating_state": "running",
-    "vibration_rms_g": 0.043,
-    "dominant_frequency_hz": null,
-    "current_rms_a": null
+  "schema_version": 1,
+  "event_id": "a5b96d2a-5cb0-4f3b-9d64-f3f53de41071",
+  "observed_at": "2026-11-24T12:01:00Z",
+  "operating_state": "running",
+  "vibration_rms_g": 0.043,
+  "dominant_frequency_hz": null,
+  "current_rms_a": null
 }
 ```
 
-A device creates an event ID once and reuses it for retries. The API records
-observation and receipt times. Identical retries succeed without processing the
-same event twice; an ID reused with different content is rejected. New events
-must arrive in observation order for each machine. Clock-skew limits and
-handling after device clock changes remain to be specified.
+This firmware reports RMS only; the ADXL345 does not provide current or
+dominant-frequency measurements. The API responds `202` with an empty body once
+the event is durably queued. On retry, the device resends the same event ID and
+body. Set `operating_state` to `running` only when a trusted machine schedule or
+signal says the machine is running; otherwise send `unknown`. The ADXL345's
+activity/inactivity interrupt reports whether acceleration crossed a configured
+motion threshold. It does not establish that the machine is running normally or
+is healthy, so it cannot by itself set `operating_state`.
 
-### App API
+References: [Analog Devices ADXL345 datasheet](https://www.analog.com/media/en/technical-documentation/data-sheets/adxl345.pdf),
+[Espressif ESP32-S3-DevKitC-1 guide](https://docs.espressif.com/projects/esp-idf/en/v5.1/esp32s3/hw-reference/esp32s3/user-guide-devkitc-1-v1.0.html),
+[Adafruit ADXL345 breakout wiring](https://learn.adafruit.com/adxl345-digital-accelerometer/assembly-and-wiring).
 
-| Endpoint                           | Purpose                                      |
-| ---------------------------------- | -------------------------------------------- |
-| `GET /v1/machines`                 | List authorized machines and current states. |
-| `GET /v1/machines/{id}`            | Get machine details.                         |
-| `GET /v1/machines/{id}/baseline`   | Get the owner's current machine baseline. |
-| `PUT /v1/machines/{id}/baseline`   | Set or replace the owner's machine baseline. |
-| `GET /v1/machines/{machine_id}/telemetry` | Get the owner’s bounded historical observations. |
-| `GET /v1/machines/{id}/alerts`     | Get alert history.                           |
-| `POST /v1/alerts/{id}/acknowledge` | Record that a user has seen an alert.        |
+## 4. Identity, enrollment and ownership
 
-The API verifies the user JWT and machine ownership before requesting telemetry
-history from Analytics with the internal service token. Analytics reads
-`telemetry_events FINAL` in ClickHouse to deduplicate retries. History is
-newest first with a descending `(observed_at, device_id, event_id)` cursor key.
-The default page size is 100 and the maximum is 1,000. The response includes
-`items` and an opaque `next_cursor` that is null when the history is exhausted.
-Invalid queries return `400`, inaccessible machines return `404`, and
-Analytics failures return a sanitized `503`.
+User authentication uses short-lived signed access JWTs and rotating refresh
+tokens. PostgreSQL stores user role assignments. Access-token claims include
+standard identity/session fields, issuer `machine-whisperer`, audience
+`machine-whisperer-api` and the assigned roles. Authentication middleware
+validates the token; authorization middleware checks the required role for a
+route.
 
-Only the machine owner can list or acknowledge its alerts. History is returned
-newest trigger time first. Acknowledgement records the first time the owner saw
-the alert, including after recovery, and leaves an ongoing condition active.
-Remaining endpoint schemas and errors, pagination, and registration are open.
+A provisioning operator with the `device_provisioner` role creates a device
+identity and a one-time claim code. The device API key is programmed into that
+unit during assembly. The operator prints a QR code containing the versioned
+claim payload, not the device API key. At installation, the owner creates a
+machine and scans the QR code to bind the device to it. The claim code is
+single-use and expires. The device can submit telemetry only for its enrolled
+machine.
 
-## 7. Detection and operations
+Nginx restricts the provisioning route to the manufacturing network or station
+gateway. The signed role check and the network boundary both apply. Users can
+access only the machines they own. Device credentials grant no app access.
 
-For the MVP, the machine owner configures the baseline using a finite,
-nonnegative RMS mean (`mean_rms_g`) and a finite, positive RMS standard
-deviation (`stddev_rms_g`). The API returns those fields with `machine_id`, the
-current `version` and the `updated_at` timestamp. Changing either value
-increments the version. A write of identical values preserves the version and
-timestamp.
+## 5. Baselines, telemetry and alerts
 
-For a newly accepted `running` observation, the API computes
-`abs(vibration_rms_g - mean_rms_g) / stddev_rms_g`. By default, three consecutive
-observations with a z-score of at least 3 open an alert and three with a score
-of at most 2 recover it. A reading outside the range required by the current
-streak resets that count. An `unknown` observation also resets pending counts
-and leaves any active alert unchanged. A changed baseline version resets
-pending counts on the next accepted observation without closing an active alert.
-Exact telemetry retries leave detector state unchanged, and telemetry storage
-continues before a baseline is configured. An offline device is not necessarily
-healthy or faulty.
+For each supported machine, the project supplies a baseline based on reference
+measurements from that machine in a known healthy, steady-running condition. It
+contains RMS mean (`mean_rms_g`) and standard deviation (`stddev_rms_g`) in g.
+The owner reviews and accepts the values for their machine; they are not expected
+to estimate these statistics. A baseline is versioned and associated with its
+machine; the source readings and validation method are recorded with its
+configuration. The standard deviation describes the usual spread of healthy RMS
+readings around the machine's mean; a z-score expresses a new reading's distance
+from that mean in units of this spread.
 
-The thresholds and required observation counts are configurable for the API.
-An alert keeps its initial trigger data and baseline snapshot while its last
-and peak z-scores advance with accepted running observations. Recovery records
-the observation and baseline version used. Each machine can have one active
-alert at a time.
+For every newly accepted `running` observation with a baseline, the API computes
+`abs(vibration_rms_g - mean_rms_g) / stddev_rms_g`. By default, three
+consecutive scores of at least 3 open an alert; three consecutive scores of at
+most 2 recover it. The alert preserves the trigger reading and baseline
+snapshot, last and peak z-scores, and recovery reading. An `unknown` observation
+resets pending counts without changing an active alert. Exact event retries do
+not advance detector state. A device going offline is not evidence that a
+machine is healthy or faulty.
 
-After the MVP, Analytics can analyze historical data and adjust a baseline
-using valid observations collected while the machine is known to be healthy and
-running at its normal steady speed and load. Do not learn during a known fault.
-The current firmware cannot reliably identify idle on its own, so calibration
-must exclude idle periods.
+The baseline is configured per machine; it is not learned from each incoming
+batch. In a later analytics phase, ClickHouse history can be analyzed to propose
+baseline adjustments using verified healthy observations. Changes must be
+reviewed and versioned. This rule is a transparent deviation detector, not a
+validated fault diagnosis algorithm. Accuracy and false-alert rates require
+evaluation against representative healthy and labelled-fault data from the
+target machines.
 
-Baseline adjustment is a starting design, not a validated diagnostic
-algorithm. Load, speed, mounting and sensor noise can change the baseline; a
-single RMS feature may miss faults. Validate with healthy and fault-labelled
-data from the target machines, including normal operating changes. Choose
-learning periods and thresholds from that evidence and measure missed
-detections and false alerts.
+## 6. Data ownership and delivery
 
-Alerts are displayed in the app. Push notifications and email are outside the
-initial scope. The service needs metrics and logs for device connectivity,
-ingestion, alerts and export lag. Detector thresholds, calibration and operating
-modes require field validation. Detection performance must be evaluated
-against representative real equipment before making accuracy claims.
+On telemetry ingestion, one PostgreSQL transaction records the event ID and
+payload hash for deduplication, stores the outbox payload, advances detector
+state and writes alert changes. The event identity is retained for a bounded
+retry window; it is not the long-term telemetry history. The outbox is a
+delivery queue: it keeps accepted readings until Analytics confirms the batch.
 
-## 8. Decisions and open questions
+The worker leases pending outbox rows and posts batches to the private Analytics
+endpoint. Analytics writes them to ClickHouse and acknowledges only after a
+successful insert. Delivery is at least once; ClickHouse queries deduplicate by
+`(machine_id, observed_at, device_id, event_id)`. A successful device response
+means PostgreSQL committed the event; the history view may update later.
 
-**Selected:** vibration monitoring for steady-running machines; device firmware and a hardware reference
-design are required.
+PostgreSQL is authoritative for account, machine, device, baseline and alert
+state. ClickHouse is authoritative for telemetry history and analysis. The two
+services do not share database tables. The outbox retains undelivered events
+until success and delivered rows for a limited cleanup period. Its retention
+and device retry lifetime must be configured together.
 
-**Proposed:** Go REST API, React Native, PostgreSQL, ClickHouse, ESP32 and
-ADXL345; transactional outbox; per-device bearer credentials; a cloud load
-balancer. ClickHouse is the long-term telemetry store.
+## 7. API contracts and mobile experience
 
-**Open:**
+The REST API uses versioned JSON routes and UTC timestamps. User routes require
+an Ed25519-signed access JWT with issuer `machine-whisperer`, audience
+`machine-whisperer-api`, standard user/session claims and assigned roles.
+Device routes use the device API key. The API verifies the caller and ownership
+before returning machine data.
 
-- Cloud provider and region; measured capacity and availability targets.
-- Telemetry volume, query patterns and ClickHouse storage growth.
-- Target machine, sensor bandwidth, mounting, exact board and breakout.
-- Secure provisioning, credential rotation and device enrollment.
-- User identity provider and organization roles.
-- Baseline calibration, operating modes and alert thresholds.
-- Post-MVP API contract for versioned baseline adjustments proposed by Analytics.
+| Method and path | Caller | Request | Success |
+| --- | --- | --- | --- |
+| `POST /v1/auth/signup` | Public | `{"email":"owner@example.com","password":"…"}` | `201` with `id`, canonical `email`, `created_at`; does not create a session |
+| `POST /v1/auth/login` | Public | Same email/password object | `200` with `access_token`, `token_type: "Bearer"`, `expires_in`, `refresh_token` |
+| `POST /v1/auth/refresh` | Public | `{"refresh_token":"…"}` | `200` with replacement access and refresh tokens |
+| `POST /v1/auth/logout` | Public | `{"refresh_token":"…"}` | `204`, empty body |
+| `GET /v1/users/me` | User JWT | No body | `200` with `id`, `email`, `created_at` |
+| `POST /internal/v1/device-provisioning` | User JWT with `device_provisioner`; manufacturing network | No body | `201` with `device_id`, one-time `api_key`, and `claim_payload` |
+| `POST /v1/machines` | User JWT | `{"name":"Pump"}` | `201` with `id`, `name`, `created_at` |
+| `GET /v1/machines` | User JWT | No body | `200` with the owner's machines |
+| `GET /v1/machines/{id}` | User JWT | No body | `200` with the owned machine |
+| `POST /v1/devices/claim` | User JWT | `device_id`, `claim_code`, `machine_id` | `200` with `device_id`, `machine_id`, `status: "claimed"` |
+| `POST /v1/devices/me/telemetry` | Device API key | Telemetry event, shown in §3 | `202`, empty body; event is queued for export |
+| `GET /v1/machines/{id}/baseline` | User JWT | No body | `200` with the prepared baseline for that machine |
+| `GET /v1/machines/{id}/telemetry` | User JWT | Optional `limit` and opaque `cursor` | `200` with `items` and `next_cursor` |
+| `GET /v1/machines/{id}/alerts` | User JWT | No body | `200` with alerts, newest trigger first |
+| `POST /v1/alerts/{id}/acknowledge` | User JWT | No body | `204`, empty body |
+
+Provisioning returns a QR payload such as
+`{"v":1,"device_id":"…","claim_code":"…"}`. The user creates a machine
+and claims the device by scanning that QR. Claiming creates the device-to-machine
+association in PostgreSQL. Later, the device authenticates to
+`/v1/devices/me/telemetry`; the API gets the device identity from its key and
+resolves the claimed machine. The firmware never needs the machine ID.
+
+Provisioning returns the one-time device key separately from the QR payload:
+
+```json
+{
+  "device_id": "22222222-2222-4222-8222-222222222222",
+  "api_key": "22222222-2222-4222-8222-222222222222.<secret>",
+  "claim_payload": {
+    "v": 1,
+    "device_id": "22222222-2222-4222-8222-222222222222",
+    "claim_code": "<one-time-code>"
+  }
+}
+```
+
+The owner creates a machine with `POST /v1/machines` and
+`{"name":"Pump"}`. To claim the device, the app sends the QR values and
+machine ID to `POST /v1/devices/claim`:
+
+```json
+{
+  "device_id": "22222222-2222-4222-8222-222222222222",
+  "claim_code": "<one-time-code>",
+  "machine_id": "11111111-1111-4111-8111-111111111111"
+}
+```
+
+Claim success returns `{"device_id":"…","machine_id":"…","status":"claimed"}`.
+
+Each supported machine has a project-supplied baseline from its healthy reference
+measurements. The owner can review it in the app; owners do not calculate or
+submit mean and standard deviation. The owner-facing baseline response is:
+
+```json
+{
+  "machine_id": "11111111-1111-4111-8111-111111111111",
+  "mean_rms_g": 0.4,
+  "stddev_rms_g": 0.05,
+  "version": 1,
+  "updated_at": "2026-11-24T12:00:00Z"
+}
+```
+
+Baseline values are loaded through controlled machine setup and versioned when
+changed. The exact operator workflow for loading and replacing those values is
+an open decision. History is newest first; the default page size is 100 and the
+maximum is 1,000. A history response contains an `items` array and an opaque
+`next_cursor`, which is null on the final page. Alert records include the trigger
+event and device, trigger time and z-score, baseline version and values, last and
+peak z-scores, optional recovery data and the first acknowledgement time.
+
+For example, a history page uses this response shape:
+
+```json
+{
+  "items": [
+    {
+      "device_id": "22222222-2222-4222-8222-222222222222",
+      "event_id": "a5b96d2a-5cb0-4f3b-9d64-f3f53de41071",
+      "received_at": "2026-11-24T12:01:00.987654Z",
+      "schema_version": 1,
+      "observed_at": "2026-11-24T12:01:00Z",
+      "operating_state": "running",
+      "vibration_rms_g": 0.043,
+      "dominant_frequency_hz": null,
+      "current_rms_a": null
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+An alert acknowledgement has no request body and returns `204`. It records the
+first time the owner saw the alert; it does not close an active alert. A request
+for a machine or alert outside the user's ownership returns `404`.
+
+The mobile app supports account access, machine list and details, QR device
+claim, review of the supplied machine baseline, telemetry history and alert
+acknowledgement. It does not present a 0–100 health score, estimated avoided
+costs or a maintenance journal. Push notifications and email alerts are outside
+the MVP.
+
+## 8. Deployment and operations
+
+Package PostgreSQL, ClickHouse, API, Analytics, Nginx, Prometheus and Certbot in
+a Docker Compose deployment on a Linux host. Nginx terminates public TLS and
+verifies the API's internal HTTPS certificate using a project CA. API-to-
+Analytics traffic uses a bearer token on the private Compose network. Certbot
+uses HTTP-01 validation on port 80; public API and app traffic use port 443.
+Renewal reloads Nginx after a successful certificate update.
+
+Provisioning is limited by a configurable manufacturing-network CIDR at Nginx
+and by the user's signed role in the API. PostgreSQL, ClickHouse and Prometheus
+data use persistent volumes with documented backup and restore procedures.
+Instrument the Go API and Analytics with OpenTelemetry SDKs and send OTLP data
+to an OpenTelemetry Collector. The Collector exports metrics to Prometheus and
+traces to Jaeger. Prometheus evaluates service alert rules and sends firing
+alerts to Alertmanager for grouping and notification routing. Grafana dashboards
+query Prometheus and Jaeger. This observability stack monitors services; machine
+vibration alerts remain API records shown in the owner app. Nginx remains the
+public edge and the API upstream proxy.
+
+## 9. Alternatives considered
+
+- **Write directly from the API to ClickHouse:** rejected because an Analytics
+  outage would couple device acceptance to history storage. The transactional
+  outbox allows the API to accept an event and retry delivery.
+- **Store the only copy of telemetry in PostgreSQL:** rejected for the target
+  architecture because ClickHouse is the dedicated store for long-term history
+  and cross-machine analysis.
+- **Train the baseline automatically during ingestion:** rejected for the MVP
+  because an individual reading cannot establish that the machine is healthy.
+  Baselines are supplied for specific machines; later analytics may propose
+  reviewed adjustments from verified healthy history.
+
+## 10. Open decisions
+
+- Final sensor mount and validation dataset for the selected board and ADXL345.
+- Device Wi-Fi credential setup during installation.
+- Nginx metrics collection method and the final service metric/trace set.
+- Controlled operator workflow to load and version machine-specific baselines.
+- Source readings, calibration process and ownership for machine-specific
+  baselines.
+- Retention periods for event IDs, delivered outbox rows and ClickHouse history.
+- Application metric set, service alert rules and receivers, availability and
+  recovery objectives.
+- Review and approval process for future Analytics baseline proposals.

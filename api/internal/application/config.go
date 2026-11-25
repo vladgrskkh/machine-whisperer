@@ -1,10 +1,12 @@
 package application
 
 import (
+	"bytes"
 	"errors"
 	"math"
 	"net/netip"
 	"net/url"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -99,12 +101,14 @@ func (c DetectorConfig) validate() error {
 }
 
 type environmentConfig struct {
-	Database   databaseEnvironmentConfig
-	Auth       authEnvironmentConfig
-	Device     deviceEnvironmentConfig
-	RateLimits rateLimitsEnvironmentConfig
-	Relay      RelayConfig
-	Detector   DetectorConfig
+	DatabaseURLFile     string `env:"DATABASE_URL_FILE"`
+	AnalyticsAPIKeyFile string `env:"ANALYTICS_INGEST_API_KEY_FILE"`
+	Database            databaseEnvironmentConfig
+	Auth                authEnvironmentConfig
+	Device              deviceEnvironmentConfig
+	RateLimits          rateLimitsEnvironmentConfig
+	Relay               RelayConfig
+	Detector            DetectorConfig
 }
 
 type databaseEnvironmentConfig struct {
@@ -139,6 +143,14 @@ func LoadConfig() (Config, error) {
 		// Parser errors include supplied values, which can contain secrets.
 		return Config{}, errors.New("invalid environment configuration")
 	}
+	if err := loadSecretFile(&settings.Database.URL, settings.DatabaseURLFile, "DATABASE_URL_FILE"); err != nil {
+		return Config{}, err
+	}
+	if err := loadSecretFile(
+		&settings.Relay.AnalyticsAPIKey, settings.AnalyticsAPIKeyFile, "ANALYTICS_INGEST_API_KEY_FILE",
+	); err != nil {
+		return Config{}, err
+	}
 	config := Config{
 		Database: DatabaseConfig{URL: settings.Database.URL},
 		Auth: AuthConfig{
@@ -170,6 +182,21 @@ func LoadConfig() (Config, error) {
 		}
 	}
 	return config, nil
+}
+
+func loadSecretFile(value *string, path, variable string) error {
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return errors.New("cannot read " + variable)
+	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return errors.New(variable + " must not contain NUL bytes")
+	}
+	*value = strings.TrimRight(string(data), "\r\n")
+	return nil
 }
 
 func validateConfig(config Config) error {

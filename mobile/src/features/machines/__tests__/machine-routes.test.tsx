@@ -95,13 +95,13 @@ function network(handler?: (path: string, init?: RequestInit) => Response | unde
   });
 }
 
-function press(name: string) {
-  fireEvent.press(screen.getByRole('button', { name }));
+async function press(name: string) {
+  await fireEvent.press(screen.getByRole('button', { name }));
 }
 
-function enterClaim(id: string, code: string) {
-  fireEvent.changeText(screen.getByLabelText('Device ID'), id);
-  fireEvent.changeText(screen.getByLabelText('Claim code'), code);
+async function enterClaim(id: string, code: string) {
+  await fireEvent.changeText(screen.getByLabelText('Device ID'), id);
+  await fireEvent.changeText(screen.getByLabelText('Claim code'), code);
 }
 
 beforeEach(() => {
@@ -120,7 +120,7 @@ afterEach(() => {
 
 it('shows an empty machine list with a single add action', async () => {
   network((path) => path === '/v1/machines' ? json([]) : undefined);
-  renderRouter(routes, { initialUrl: '/machines' });
+  await renderRouter(routes, { initialUrl: '/machines' });
 
   expect(await screen.findByText('No machines yet.')).toBeOnTheScreen();
   expect(screen.getAllByRole('button', { name: 'Add machine' })).toHaveLength(1);
@@ -129,12 +129,12 @@ it('shows an empty machine list with a single add action', async () => {
 
 it('loads the selected machine before showing the claim form', async () => {
   const fetch = network();
-  const navigation = renderRouter(routes, { initialUrl: '/machines' });
+  const navigation = await renderRouter(routes, { initialUrl: '/machines' });
 
   await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
-  press(pump.name);
+  await press(pump.name);
   await screen.findByRole('button', { name: 'Scan device QR' });
-  press('Scan device QR');
+  await press('Scan device QR');
 
   expect(await screen.findByText(/Pair a sensor device with Water pump/)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(`/machines/${pump.id}/claim-device`);
@@ -146,10 +146,10 @@ it('reports a list error and retries loading', async () => {
   network((path) => path === '/v1/machines' && reads++ === 0
     ? json({ error: { code: 'internal_error', message: 'Could not load your machines.' } }, 500)
     : undefined);
-  renderRouter(routes, { initialUrl: '/machines' });
+  await renderRouter(routes, { initialUrl: '/machines' });
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not load your machines.');
-  press('Try again');
+  await press('Try again');
   await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
   expect(screen.getByRole('button', { name: fan.name })).toBeOnTheScreen();
 });
@@ -164,58 +164,58 @@ it('creates a machine by normalized name and opens that machine’s claim flow',
     }
     return json(created ? [fan, pump] : [pump]);
   });
-  const navigation = renderRouter(routes, { initialUrl: '/machines' });
+  const navigation = await renderRouter(routes, { initialUrl: '/machines' });
 
   await screen.findByText('No active alerts');
   expect(screen.getByRole('button', { name: pump.name })).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: fan.name })).toBeNull();
-  press('Add machine');
-  fireEvent.changeText(screen.getByLabelText('Machine name'), '  Workshop fan  ');
-  press('Create machine');
+  await press('Add machine');
+  await fireEvent.changeText(screen.getByLabelText('Machine name'), '  Workshop fan  ');
+  await press('Create machine');
 
   expect(await screen.findByText(/Pair a sensor device with Workshop fan/)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(claimPath);
   expect(fetch).toHaveBeenCalledWith(base + '/v1/machines', expect.objectContaining({
     method: 'POST', body: '{"name":"Workshop fan"}',
   }));
-  fireEvent.press(screen.getByRole('link', { name: /Machines/ }));
+  await fireEvent.press(screen.getByRole('link', { name: /Machines/ }));
   await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
   expect(screen.getByRole('button', { name: fan.name })).toBeOnTheScreen();
 });
 
 it('keeps an invalid name local and shows a public error for a failed creation', async () => {
   const fetch = network(() => json({ error: { code: 'invalid_input', message: 'Invalid machine name or request body' } }, 400));
-  renderRouter(routes, { initialUrl: '/machines/new' });
+  await renderRouter(routes, { initialUrl: '/machines/new' });
 
   await screen.findByRole('header', { name: 'Add a machine' });
-  fireEvent.changeText(screen.getByLabelText('Machine name'), ' '.repeat(4));
-  press('Create machine');
+  await fireEvent.changeText(screen.getByLabelText('Machine name'), ' '.repeat(4));
+  await press('Create machine');
   expect(screen.getByRole('alert')).toHaveTextContent(/machine name/i);
   expect(fetch).not.toHaveBeenCalled();
 
-  fireEvent.changeText(screen.getByLabelText('Machine name'), 'Workshop fan');
-  press('Create machine');
+  await fireEvent.changeText(screen.getByLabelText('Machine name'), 'Workshop fan');
+  await press('Create machine');
   expect(await screen.findByText('Invalid machine name or request body')).toBeOnTheScreen();
   expect(screen.getByLabelText('Machine name')).toHaveDisplayValue('Workshop fan');
 });
 
 it('keeps manual entry available after camera denial and binds the request to the selected machine', async () => {
   const fetch = network();
-  const navigation = renderRouter(routes, { initialUrl: claimPath });
+  const navigation = await renderRouter(routes, { initialUrl: claimPath });
 
   await screen.findByRole('button', { name: 'Scan device QR' });
-  press('Scan device QR');
+  await press('Scan device QR');
   expect(await screen.findByText(/camera access is denied/i)).toBeOnTheScreen();
-  press('Enter claim code');
-  enterClaim(deviceId.toUpperCase(), claimCode);
-  press('Claim device');
+  await press('Enter claim code');
+  await enterClaim(deviceId.toUpperCase(), claimCode);
+  await press('Claim device');
 
   expect(await screen.findByText(/Sensor device connected/)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(claimPath);
   expect(fetch).toHaveBeenCalledWith(base + '/v1/devices/claim', expect.objectContaining({
     method: 'POST', body: JSON.stringify({ device_id: deviceId, claim_code: claimCode, machine_id: fan.id }),
   }));
-  press('Back to machines');
+  await press('Back to machines');
   await waitFor(() => expect(screen.getAllByText('No active alerts')).toHaveLength(2));
   expect(screen.getByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
 });
@@ -223,14 +223,14 @@ it('keeps manual entry available after camera denial and binds the request to th
 it('keeps manual claims usable when the camera permission request rejects', async () => {
   requestPermission.mockRejectedValueOnce(new Error('Permission request failed'));
   network();
-  renderRouter(routes, { initialUrl: claimPath });
+  await renderRouter(routes, { initialUrl: claimPath });
 
   await screen.findByRole('button', { name: 'Scan device QR' });
-  press('Scan device QR');
+  await press('Scan device QR');
   expect(await screen.findByRole('alert')).toHaveTextContent(/could not open the camera.*manually/i);
-  press('Enter claim code');
-  enterClaim(deviceId, claimCode);
-  press('Claim device');
+  await press('Enter claim code');
+  await enterClaim(deviceId, claimCode);
+  await press('Claim device');
 
   expect(await screen.findByText('Sensor device connected.')).toBeOnTheScreen();
 });
@@ -238,17 +238,17 @@ it('keeps manual claims usable when the camera permission request rejects', asyn
 it('closes a failed camera preview and lets the operator claim manually', async () => {
   jest.mocked(Camera.useCameraPermissions).mockReturnValue([permission(true), requestPermission, getPermission]);
   network();
-  renderRouter(routes, { initialUrl: claimPath });
+  await renderRouter(routes, { initialUrl: claimPath });
 
   await screen.findByRole('button', { name: 'Scan device QR' });
-  press('Scan device QR');
+  await press('Scan device QR');
   await screen.findByRole('button', { name: 'Simulate camera mount error' });
-  press('Simulate camera mount error');
+  await press('Simulate camera mount error');
   expect(await screen.findByRole('alert')).toHaveTextContent(/could not open the camera.*manually/i);
   expect(screen.queryByRole('button', { name: 'Read sample QR' })).toBeNull();
-  press('Enter claim code');
-  enterClaim(deviceId, claimCode);
-  press('Claim device');
+  await press('Enter claim code');
+  await enterClaim(deviceId, claimCode);
+  await press('Claim device');
 
   expect(await screen.findByText('Sensor device connected.')).toBeOnTheScreen();
 });
@@ -256,17 +256,17 @@ it('closes a failed camera preview and lets the operator claim manually', async 
 it('recovers after scanning an invalid QR and uses a valid QR for the selected machine', async () => {
   jest.mocked(Camera.useCameraPermissions).mockReturnValue([permission(true), requestPermission, getPermission]);
   const fetch = network();
-  renderRouter(routes, { initialUrl: claimPath });
+  await renderRouter(routes, { initialUrl: claimPath });
 
   await screen.findByRole('button', { name: 'Scan device QR' });
-  press('Scan device QR');
-  press('Read invalid QR');
+  await press('Scan device QR');
+  await press('Read invalid QR');
   expect(screen.getByRole('alert')).toHaveTextContent(/invalid device qr/i);
   expect(fetch).toHaveBeenCalledTimes(1);
-  press('Scan again');
-  press('Read sample QR');
+  await press('Scan again');
+  await press('Read sample QR');
   expect(screen.getByLabelText('Device ID')).toHaveDisplayValue(deviceId);
-  press('Claim device');
+  await press('Claim device');
 
   expect(await screen.findByText(/Sensor device connected/)).toBeOnTheScreen();
   expect(fetch).toHaveBeenCalledWith(base + '/v1/devices/claim', expect.objectContaining({
@@ -278,20 +278,20 @@ it('blocks invalid manual claim fields and keeps the form available after a clai
   const fetch = network((path) => path === '/v1/devices/claim'
     ? json({ error: { code: 'claim_unavailable', message: 'Device claim unavailable' } }, 404)
     : undefined);
-  renderRouter(routes, { initialUrl: claimPath });
+  await renderRouter(routes, { initialUrl: claimPath });
 
   await screen.findByRole('button', { name: 'Enter claim code' });
-  press('Enter claim code');
-  enterClaim('invalid', 'short');
-  press('Claim device');
+  await press('Enter claim code');
+  await enterClaim('invalid', 'short');
+  await press('Claim device');
   expect(screen.getByRole('alert')).toHaveTextContent(/valid device ID/i);
-  enterClaim(deviceId, 'short');
-  press('Claim device');
+  await enterClaim(deviceId, 'short');
+  await press('Claim device');
   expect(screen.getByRole('alert')).toHaveTextContent(/valid claim code/i);
   expect(fetch).toHaveBeenCalledTimes(1);
 
-  enterClaim(deviceId, claimCode);
-  press('Claim device');
+  await enterClaim(deviceId, claimCode);
+  await press('Claim device');
   expect(await screen.findByRole('alert')).toHaveTextContent(/device claim unavailable/i);
   expect(screen.getByRole('button', { name: 'Claim device' })).toBeEnabled();
   expect(screen.getByLabelText('Device ID')).toHaveDisplayValue(deviceId);
@@ -299,7 +299,7 @@ it('blocks invalid manual claim fields and keeps the form available after a clai
 
 it('blocks invalid machine deep links before making any request', async () => {
   const fetch = network();
-  renderRouter(routes, { initialUrl: '/machines/bad-id/claim-device' });
+  await renderRouter(routes, { initialUrl: '/machines/bad-id/claim-device' });
   expect(await screen.findByRole('alert')).toHaveTextContent(/invalid machine id/i);
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -307,7 +307,7 @@ it('blocks invalid machine deep links before making any request', async () => {
 it('blocks claim deep links for signed-out operators', async () => {
   jest.mocked(SecureStore.getItemAsync).mockResolvedValue(null);
   const fetch = network();
-  const navigation = renderRouter(routes, { initialUrl: claimPath });
+  const navigation = await renderRouter(routes, { initialUrl: claimPath });
   await waitFor(() => expect(navigation.getPathname()).toBe('/sign-in'));
   expect(fetch).not.toHaveBeenCalled();
 });
@@ -316,7 +316,7 @@ it('keeps the claim form unavailable when the selected machine cannot be loaded'
   const fetch = network((path) => path.endsWith(fan.id)
     ? json({ error: { code: 'machine_not_found', message: 'Machine not found' } }, 404)
     : undefined);
-  renderRouter(routes, { initialUrl: claimPath });
+  await renderRouter(routes, { initialUrl: claimPath });
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Machine not found');
   expect(screen.queryByRole('button', { name: 'Enter claim code' })).toBeNull();

@@ -1,3 +1,4 @@
+import { userEvent } from '@testing-library/react-native';
 import * as SecureStore from 'expo-secure-store';
 import { act, fireEvent, renderRouter, screen, waitFor, within } from 'expo-router/testing-library';
 
@@ -86,8 +87,8 @@ function network(handler?: (url: URL, request?: RequestInit) => Response | Promi
   });
 }
 
-function press(name: string | RegExp) {
-  fireEvent.press(screen.getByRole('button', { name }));
+async function press(name: string | RegExp) {
+  await fireEvent.press(screen.getByRole('button', { name }));
 }
 
 beforeEach(() => {
@@ -112,10 +113,10 @@ it('opens machine detail from Machines and reads older observations with the opa
     queries.push([url.searchParams.get('limit'), supplied]);
     return supplied === cursor ? json({ items: [older], next_cursor: null }) : json({ items: [latest], next_cursor: cursor });
   });
-  const navigation = renderRouter(routes, { initialUrl: '/machines' });
+  const navigation = await renderRouter(routes, { initialUrl: '/machines' });
 
   await screen.findByRole('button', { name: machine.name });
-  press(machine.name);
+  await press(machine.name);
   expect(await screen.findByRole('header', { name: machine.name })).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(detailPath);
   expect(await screen.findByText('1 observation loaded')).toBeOnTheScreen();
@@ -125,7 +126,7 @@ it('opens machine detail from Machines and reads older observations with the opa
   expect(screen.queryByText(/Dominant frequency|Current RMS|null/)).toBeNull();
   expect(screen.getByText(deviceId)).toBeOnTheScreen();
 
-  press('Load older observations');
+  await press('Load older observations');
   expect(await screen.findByText('2 observations loaded')).toBeOnTheScreen();
   expect(screen.getByText('0.55 g')).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: 'Load older observations' })).toBeNull();
@@ -144,14 +145,14 @@ it('recognizes an empty baseline and retries a failed older page without losing 
     if (olderAttempts++ === 0) return json({ error: { code: 'history_unavailable', message: 'History unavailable' } }, 503);
     return json({ items: [older], next_cursor: null });
   });
-  renderRouter(routes, { initialUrl: detailPath });
+  await renderRouter(routes, { initialUrl: detailPath });
 
   expect(await screen.findByText('No baseline set.')).toBeOnTheScreen();
   await screen.findByRole('button', { name: 'Load older observations' });
-  press('Load older observations');
+  await press('Load older observations');
   expect(await screen.findByRole('alert')).toHaveTextContent('History unavailable');
   expect(screen.getByText('0.55 g')).toBeOnTheScreen();
-  press('Load older observations');
+  await press('Load older observations');
   expect(await screen.findByText('2 observations loaded')).toBeOnTheScreen();
 });
 
@@ -162,7 +163,7 @@ it('preloads a baseline, validates both fields locally and returns to detail aft
     if (request?.method === 'PUT') saved = { ...configured, ...JSON.parse(String(request.body)), version: 2 };
     return json(saved);
   });
-  const navigation = renderRouter(routes, { initialUrl: detailPath + '/baseline' });
+  const navigation = await renderRouter(routes, { initialUrl: detailPath + '/baseline' });
   const mean = 'Baseline mean RMS (g)';
   const stddev = 'Baseline standard deviation (g)';
 
@@ -170,20 +171,20 @@ it('preloads a baseline, validates both fields locally and returns to detail aft
   expect(screen.getByLabelText(stddev)).toHaveDisplayValue('0.05');
   expect(screen.queryByText(/current alert policy|3 consecutive readings/i)).toBeNull();
   for (const invalid of [' ', '-1', 'Infinity', '0x10']) {
-    fireEvent.changeText(screen.getByLabelText(mean), invalid);
-    press('Save baseline');
+    await fireEvent.changeText(screen.getByLabelText(mean), invalid);
+    await press('Save baseline');
     expect(screen.getByRole('alert')).toHaveTextContent(/mean/i);
   }
-  fireEvent.changeText(screen.getByLabelText(mean), '0');
+  await fireEvent.changeText(screen.getByLabelText(mean), '0');
   for (const invalid of ['0', '-0.1', '1e309']) {
-    fireEvent.changeText(screen.getByLabelText(stddev), invalid);
-    press('Save baseline');
+    await fireEvent.changeText(screen.getByLabelText(stddev), invalid);
+    await press('Save baseline');
     expect(screen.getByRole('alert')).toHaveTextContent(/standard deviation/i);
   }
   expect(fetch.mock.calls.filter(([, request]) => request?.method === 'PUT')).toHaveLength(0);
 
-  fireEvent.changeText(screen.getByLabelText(stddev), ' 0.08 ');
-  press('Save baseline');
+  await fireEvent.changeText(screen.getByLabelText(stddev), ' 0.08 ');
+  await press('Save baseline');
   expect(await screen.findByText('Mean 0 g · Std dev 0.08 g')).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe(detailPath);
   expect(fetch).toHaveBeenCalledWith(base + root + '/baseline', expect.objectContaining({
@@ -195,7 +196,7 @@ it('opens a blank editor for a machine without an existing baseline', async () =
   network((url) => url.pathname === root + '/baseline'
     ? json({ error: { code: 'baseline_not_found', message: 'Baseline not found' } }, 404)
     : undefined);
-  renderRouter(routes, { initialUrl: detailPath + '/baseline' });
+  await renderRouter(routes, { initialUrl: detailPath + '/baseline' });
 
   expect(await screen.findByLabelText('Baseline mean RMS (g)')).toHaveDisplayValue('');
   expect(screen.getByLabelText('Baseline standard deviation (g)')).toHaveDisplayValue('');
@@ -222,7 +223,7 @@ it('aggregates per-machine alerts with at most four requests in flight', async (
     });
   });
 
-  renderRouter(routes, { initialUrl: '/alerts' });
+  await renderRouter(routes, { initialUrl: '/alerts' });
   await waitFor(() => expect(pending.size).toBe(4));
   expect(screen.queryByRole('button', { name: /^History, tab/ })).toBeNull();
   expect(requested).toHaveLength(4);
@@ -255,12 +256,12 @@ it('keeps an acknowledged alert active and groups recovery separately', async ()
     if (attempts++ === 0) return json({ error: { code: 'internal_error', message: 'Could not acknowledge' } }, 500);
     return new Response(null, { status: 204 });
   });
-  renderRouter(routes, { initialUrl: '/alerts' });
+  await renderRouter(routes, { initialUrl: '/alerts' });
   const activeGroup = await screen.findByLabelText('Active alerts');
   expect(within(await screen.findByLabelText('Recovered alerts')).getByText('Recovered')).toBeOnTheScreen();
-  fireEvent.press(within(activeGroup).getByRole('button', { name: /Acknowledge alert for Workshop fan/ }));
+  await fireEvent.press(within(activeGroup).getByRole('button', { name: /Acknowledge alert for Workshop fan/ }));
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not acknowledge');
-  fireEvent.press(within(activeGroup).getByRole('button', { name: /Acknowledge alert for Workshop fan/ }));
+  await fireEvent.press(within(activeGroup).getByRole('button', { name: /Acknowledge alert for Workshop fan/ }));
 
   expect(await within(activeGroup).findByText('Seen')).toBeOnTheScreen();
   expect(within(activeGroup).getByText('Active')).toBeOnTheScreen();
@@ -270,7 +271,7 @@ it('keeps an acknowledged alert active and groups recovery separately', async ()
 
 it.each(['/machines/invalid', '/machines/invalid/baseline'])('blocks invalid machine links at %s', async (path) => {
   const fetch = network();
-  renderRouter(routes, { initialUrl: path });
+  await renderRouter(routes, { initialUrl: path });
 
   expect(await screen.findByRole('alert')).toHaveTextContent(/invalid machine id/i);
   expect(fetch).not.toHaveBeenCalled();
@@ -284,13 +285,13 @@ it('preserves an in-flight acknowledgement when switching tabs', async () => {
     attempts++;
     return new Promise((resolve) => { resolveAck = resolve; });
   });
-  renderRouter(routes, { initialUrl: '/alerts' });
+  await renderRouter(routes, { initialUrl: '/alerts' });
 
   await screen.findByLabelText('Active alerts');
-  press(/Acknowledge alert for Workshop fan/);
-  press(/^Machines, tab/);
+  await userEvent.setup().press(screen.getByRole('button', { name: /Acknowledge alert for Workshop fan/ }));
+  await press(/^Machines, tab/);
   await screen.findByRole('button', { name: machine.name });
-  press(/^Alerts, tab/);
+  await press(/^Alerts, tab/);
   await screen.findByLabelText('Active alerts');
   expect(screen.getByRole('button', { name: /Acknowledge alert for Workshop fan/ })).toBeDisabled();
 
@@ -308,11 +309,11 @@ it('shows successful machine alerts when another machine has a loading error', a
     if (attempts++ === 0) return json({ error: { code: 'internal_error', message: 'Unavailable' } }, 500);
     return json([]);
   });
-  renderRouter(routes, { initialUrl: '/alerts' });
+  await renderRouter(routes, { initialUrl: '/alerts' });
 
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not load alerts for 1 machine.');
   expect(within(screen.getByLabelText('Active alerts')).getByText(machine.name)).toBeOnTheScreen();
-  press('Try again');
+  await press('Try again');
   await waitFor(() => expect(attempts).toBe(2));
   expect(await screen.findByLabelText('Active alerts')).toBeOnTheScreen();
   expect(screen.queryByRole('alert')).toBeNull();
@@ -322,7 +323,7 @@ it.each(['/machines', '/machines/0bb58342-734e-4587-a1bd-95f9c1e7a302', '/machin
   'blocks signed-out access and sends no request at %s', async (path) => {
     jest.mocked(SecureStore.getItemAsync).mockResolvedValue(null);
     const fetch = network();
-    const navigation = renderRouter(routes, { initialUrl: path });
+    const navigation = await renderRouter(routes, { initialUrl: path });
 
     await waitFor(() => expect(navigation.getPathname()).toBe('/sign-in'));
     expect(fetch).not.toHaveBeenCalled();
@@ -358,7 +359,7 @@ it('summarizes vibration, baseline and active alerts with a total of at most fou
       peak = Math.max(peak, pending.size);
     });
   });
-  renderRouter(routes, { initialUrl: '/machines' });
+  await renderRouter(routes, { initialUrl: '/machines' });
 
   expect(await screen.findByRole('button', { name: machine.name })).toBeOnTheScreen();
   await waitFor(() => expect(pending.size).toBe(4));

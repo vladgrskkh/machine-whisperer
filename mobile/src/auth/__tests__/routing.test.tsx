@@ -56,18 +56,18 @@ afterEach(() => {
   jest.useRealTimers();
 });
 
-function enterCredentials() {
-  fireEvent.changeText(screen.getByLabelText('Email'), user.email);
-  fireEvent.changeText(screen.getByLabelText('Password'), 'an operator password');
+async function enterCredentials() {
+  await fireEvent.changeText(screen.getByLabelText('Email'), user.email);
+  await fireEvent.changeText(screen.getByLabelText('Password'), 'an operator password');
 }
 
 it('routes completed sign-up to sign-in without saving a session', async () => {
   const request = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(user), { status: 201 }));
-  const navigation = renderRouter(routes, { initialUrl: '/sign-up' });
+  const navigation = await renderRouter(routes, { initialUrl: '/sign-up' });
 
   await screen.findByRole('header', { name: 'Create your account' });
-  enterCredentials();
-  fireEvent.press(screen.getByRole('button', { name: 'Create account' }));
+  await enterCredentials();
+  await fireEvent.press(screen.getByRole('button', { name: 'Create account' }));
 
   expect(await screen.findByText('Account created. Sign in to continue.')).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe('/sign-in');
@@ -85,23 +85,23 @@ it('blocks a signed-out account deep link and routes through sign-in, account, a
     if (path.endsWith('/logout')) return new Response(null, { status: 204 });
     throw new Error('Unexpected request');
   });
-  const navigation = renderRouter(routes, { initialUrl: '/account' });
+  const navigation = await renderRouter(routes, { initialUrl: '/account' });
 
   await screen.findByRole('header', { name: 'Sign in' });
   expect(navigation.getPathname()).toBe('/sign-in');
   expect(request).not.toHaveBeenCalled();
-  enterCredentials();
-  fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
+  await enterCredentials();
+  await fireEvent.press(screen.getByRole('button', { name: 'Sign in' }));
 
   expect(await screen.findByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe('/machines');
-  fireEvent.press(screen.getByRole('button', { name: /^Account, tab/ }));
+  await fireEvent.press(screen.getByRole('button', { name: /^Account, tab/ }));
 
   expect(await screen.findByText(user.email)).toBeOnTheScreen();
   expect(navigation.getPathname()).toBe('/account');
   expect(SecureStore.setItemAsync).toHaveBeenCalledWith(expect.any(String), JSON.stringify(pair), expect.any(Object));
 
-  fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
   await screen.findByRole('header', { name: 'Sign in' });
   expect(navigation.getPathname()).toBe('/sign-in');
   await waitFor(() => expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(1));
@@ -118,10 +118,10 @@ it('hides the protected screen while signing out and offers a retry if secure de
     if (String(url).endsWith('/logout')) return new Response(null, { status: 204 });
     return new Response(JSON.stringify(user));
   });
-  renderRouter(routes, { initialUrl: '/account' });
+  await renderRouter(routes, { initialUrl: '/account' });
 
   await screen.findByText(user.email);
-  fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Sign out' }));
   await waitFor(() => expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(1));
   try {
     expect(await screen.findByLabelText('Clearing session')).toBeOnTheScreen();
@@ -134,7 +134,7 @@ it('hides the protected screen while signing out and offers a retry if secure de
   expect(await screen.findByRole('alert')).toHaveTextContent('Could not remove the session from this device.');
   expect(screen.queryByText(user.email)).toBeNull();
   expect(screen.queryByRole('header', { name: 'Sign in' })).toBeNull();
-  fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
 
   expect(await screen.findByRole('header', { name: 'Sign in' })).toBeOnTheScreen();
   expect(SecureStore.deleteItemAsync).toHaveBeenCalledTimes(2);
@@ -145,11 +145,11 @@ it('shows a retryable error if the account response is malformed', async () => {
   jest.spyOn(globalThis, 'fetch')
     .mockResolvedValueOnce(new Response(JSON.stringify({ ...user, created_at: 'invalid' })))
     .mockResolvedValueOnce(new Response(JSON.stringify(user)));
-  renderRouter(routes, { initialUrl: '/account' });
+  await renderRouter(routes, { initialUrl: '/account' });
 
   expect(await screen.findByRole('alert')).toHaveTextContent(/unreadable account response/i);
   expect(screen.queryByText('Invalid Date', { exact: false })).toBeNull();
-  fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
+  await fireEvent.press(screen.getByRole('button', { name: 'Try again' }));
 
   expect(await screen.findByText(user.email)).toBeOnTheScreen();
 });

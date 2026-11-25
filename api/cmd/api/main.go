@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,11 +24,27 @@ const (
 )
 
 func run(ctx context.Context, address string, handler http.Handler, runWorkers func(context.Context)) error {
+	certFile := os.Getenv("API_TLS_CERT_FILE")
+	keyFile := os.Getenv("API_TLS_KEY_FILE")
+	if (certFile == "") != (keyFile == "") {
+		return errors.New("API_TLS_CERT_FILE and API_TLS_KEY_FILE must be set together")
+	}
+	var tlsConfig *tls.Config
+	if certFile != "" {
+		certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return errors.New("invalid API TLS certificate or key")
+		}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+	}
+
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout}
+	server := &http.Server{
+		Handler: handler, ReadHeaderTimeout: readHeaderTimeout, ReadTimeout: readTimeout, TLSConfig: tlsConfig,
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var background sync.WaitGroup
 	background.Go(func() { runWorkers(ctx) })
@@ -40,7 +57,11 @@ func run(ctx context.Context, address string, handler http.Handler, runWorkers f
 			_ = server.Close()
 		}
 	})
-	err = server.Serve(listener)
+	if tlsConfig != nil {
+		err = server.ServeTLS(listener, "", "")
+	} else {
+		err = server.Serve(listener)
+	}
 	cancel()
 	background.Wait()
 	if errors.Is(err, http.ErrServerClosed) {

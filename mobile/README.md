@@ -1,7 +1,8 @@
 # Machine Whisperer mobile
 
-Expo SDK 57 and TypeScript for iOS and Android. Use Node.js 24.3 or later in
-the Node.js 24 release line.
+Expo SDK 58 and TypeScript for iOS and Android. Use Node.js 24.22.3, pinned
+in the repository's `.nvmrc`. Run `nvm use` from the repository root if you
+use nvm, then run these commands from `mobile/`.
 
 ```sh
 npm ci
@@ -14,7 +15,7 @@ Whisperer API. Use an HTTPS endpoint reachable from the device. On a physical
 phone, `localhost` refers to the phone itself. Expo includes `EXPO_PUBLIC_`
 variables in the client bundle, so put only the public API address there.
 
-Open the app in an SDK 57-compatible Expo Go or development build. Use
+Open the app in an SDK 58-compatible Expo Go or development build. Use
 `npm run ios` or `npm run android` to start Metro and open an emulator.
 
 Sign up with an email address and a password of 15–128 characters, then sign in.

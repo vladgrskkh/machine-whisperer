@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew Machine Whisperer public TLS certificates
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/machine-whisperer
+ExecStart=/opt/machine-whisperer/deploy/scripts/renew-certificates.sh

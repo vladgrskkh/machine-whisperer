@@ -76,6 +76,36 @@ jobs:
           working-directory: analytics
           args: --config ../api/.golangci.yml --build-tags=integration --timeout=5m
 
+  deployment:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test the API migration wrapper
+        run: api/scripts/test-migrate.sh
+      - name: Test the ClickHouse entrypoint
+        run: deploy/clickhouse/test-entrypoint.sh
+      - name: Test certificate bootstrap and renewal helpers
+        run: deploy/scripts/test-certificates.sh
+      - name: Check the Certbot CLI offline
+        run: |
+          version=$(docker run --rm --network none certbot/certbot:v5.10.0 --version)
+          test "$version" = 'certbot 5.10.0'
+      - name: Validate the Compose configuration
+        run: deploy/scripts/test-compose-config.sh
+      - name: Validate the Docker Hub publication workflow
+        run: deploy/scripts/test-image-publish-config.sh
+      - name: Test the backup restore runbook
+        run: python3 deploy/scripts/test-runbook-restore.py
+      - name: Build the API and Analytics images
+        run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
+      - name: Smoke test the server stack
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: deploy/scripts/smoke-test.sh
+
   mobile:
     runs-on: ubuntu-latest
     defaults:
@@ -95,3 +125,74 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run export:check
+
+  publish:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [lint, test, build, integration, analytics, deployment, mobile]
+    runs-on: ubuntu-latest
+    environment: dockerhub-publish
+    concurrency:
+      group: dockerhub-sha-${{ matrix.service }}-${{ github.sha }}
+      queue: max
+    strategy:
+      matrix:
+        service: [api, analytics]
+    env:
+      DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_PUBLISH_USERNAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_PUBLISH_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PUBLISH_TOKEN }}
+      - name: Check for the immutable release image
+        id: release
+        env:
+          RELEASE_IMAGE: docker.io/${{ env.DOCKERHUB_NAMESPACE }}/machine-whisperer-${{ matrix.service }}:sha-${{ github.sha }}
+        run: |
+          if result=$(docker buildx imagetools inspect "$RELEASE_IMAGE" 2>&1); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$result" == *"$RELEASE_IMAGE: not found" ]]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          else
+            printf '%s\n' "$result" >&2
+            exit 1
+          fi
+      - uses: docker/build-push-action@v7
+        if: steps.release.outputs.exists == 'false'
+        with:
+          context: ./${{ matrix.service }}
+          push: true
+          tags: docker.io/${{ env.DOCKERHUB_NAMESPACE }}/machine-whisperer-${{ matrix.service }}:sha-${{ github.sha }}
+
+  promote:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: dockerhub-publish
+    concurrency:
+      group: dockerhub-latest
+      queue: max
+    env:
+      DOCKERHUB_NAMESPACE: ${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_PUBLISH_USERNAME }}
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_PUBLISH_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PUBLISH_TOKEN }}
+      - name: Promote the current main release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$head" != "$GITHUB_SHA" ]]; then
+            echo "Main has moved. Keeping the existing latest tags."
+            exit 0
+          fi
+          for service in api analytics; do
+            image="docker.io/$DOCKERHUB_NAMESPACE/machine-whisperer-$service"
+            docker buildx imagetools create --prefer-index=false --tag "$image:latest" "$image:sha-$GITHUB_SHA"
+          done
