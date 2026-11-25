@@ -2,6 +2,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import type { ApiClient } from '../../api/client';
 import { Button } from '../../ui/button';
+import { QueryRefreshStatus } from '../../ui/query-refresh-status';
 import { colors, typography } from '../../ui/theme';
 import { WorkspaceScreen } from '../../ui/workspace-screen';
 import { MachineCard } from './machine-card';
@@ -12,7 +13,7 @@ async function listMachines(api: ApiClient, signal: AbortSignal) {
 }
 
 export function MachineList({ onAdd, onSelect }: { onAdd: () => void; onSelect: (machineId: string) => void }) {
-  const { query, retry } = useMachineQuery(listMachines, 'Could not load your machines.');
+  const { query, refresh, retry } = useMachineQuery(listMachines, 'Could not load your machines.');
 
   return (
     <WorkspaceScreen tab>
@@ -20,6 +21,7 @@ export function MachineList({ onAdd, onSelect }: { onAdd: () => void; onSelect: 
         <Text style={styles.mark}>◈  </Text>Machine Whisperer
       </Text>
       <Text accessibilityRole="header" style={typography.heading}>Your machines</Text>
+      <QueryRefreshStatus refresh={refresh} resource="machines" retry={retry} />
       {query.state === 'loading' && <ActivityIndicator accessibilityLabel="Loading machines" color={colors.accent} />}
       {query.state === 'error' && (
         <View style={styles.card}>

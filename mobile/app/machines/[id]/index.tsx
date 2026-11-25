@@ -7,6 +7,7 @@ import { parseUUID } from '../../../src/api/uuid';
 import { MachineHistory } from '../../../src/features/history/machine-history';
 import { useMachineQuery } from '../../../src/features/machines/use-machine-query';
 import { Button } from '../../../src/ui/button';
+import { QueryRefreshStatus } from '../../../src/ui/query-refresh-status';
 import { colors, typography } from '../../../src/ui/theme';
 import { WorkspaceScreen } from '../../../src/ui/workspace-screen';
 
@@ -26,7 +27,7 @@ export default function MachineDetailRoute() {
 
 function SelectedMachine({ id }: { id: string }) {
   const load = useCallback((api: ApiClient) => api.getMachine(id), [id]);
-  const { query, retry } = useMachineQuery(load, 'Could not load the machine.');
+  const { query, refresh, retry } = useMachineQuery(load, 'Could not load the machine.');
 
   if (query.state === 'loading') {
     return <ActivityIndicator accessibilityLabel="Loading machine" color={colors.accent} />;
@@ -43,10 +44,13 @@ function SelectedMachine({ id }: { id: string }) {
   }
 
   return (
-    <MachineHistory
-      machine={query.data}
-      onEditBaseline={() => router.push({ pathname: '/machines/[id]/baseline', params: { id } })}
-      onClaim={() => router.push({ pathname: '/machines/[id]/claim-device', params: { id } })}
-    />
+    <>
+      <QueryRefreshStatus refresh={refresh} resource="machine details" retry={retry} />
+      <MachineHistory
+        machine={query.data}
+        onEditBaseline={() => router.push({ pathname: '/machines/[id]/baseline', params: { id } })}
+        onClaim={() => router.push({ pathname: '/machines/[id]/claim-device', params: { id } })}
+      />
+    </>
   );
 }

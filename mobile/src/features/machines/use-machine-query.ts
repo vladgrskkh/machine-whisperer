@@ -5,7 +5,10 @@ import type { ApiClient } from '../../api/client';
 import { errorMessage } from '../../api/errors';
 import { useSession } from '../../auth/session-provider';
 
-type Query<T> = { state: 'loading' } | { state: 'ready'; data: T } | { state: 'error'; message: string };
+type Query<T> =
+  | { state: 'loading' }
+  | { state: 'ready'; data: T; revision: number; refresh?: 'refreshing' | { message: string } }
+  | { state: 'error'; message: string };
 
 export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) => Promise<T>, fallback: string) {
   const { api } = useSession();
@@ -20,10 +23,23 @@ export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) =
     function runQuery() {
       if (pending) return;
       pending = true;
-      setQuery({ state: 'loading' });
+      setQuery((previous) => previous.state === 'ready'
+        ? { ...previous, refresh: 'refreshing' }
+        : { state: 'loading' });
       void load(api, signal).then(
-        (data) => { if (!signal.aborted) setQuery({ state: 'ready', data }); },
-        (error: unknown) => { if (!signal.aborted) setQuery({ state: 'error', message: errorMessage(error, fallback) }); },
+        (data) => {
+          if (signal.aborted) return;
+          setQuery((previous) => ({
+            state: 'ready', data, revision: previous.state === 'ready' ? previous.revision + 1 : 0,
+          }));
+        },
+        (error: unknown) => {
+          if (signal.aborted) return;
+          const message = errorMessage(error, fallback);
+          setQuery((previous) => previous.state === 'ready'
+            ? { ...previous, refresh: { message } }
+            : { state: 'error', message });
+        },
       ).finally(() => { pending = false; });
     }
 
@@ -35,5 +51,9 @@ export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) =
     };
   }, [api, fallback, load]));
 
-  return { query, retry: () => reload.current?.() };
+  return {
+    query,
+    refresh: query.state === 'ready' ? query.refresh : undefined,
+    retry: () => reload.current?.(),
+  };
 }
