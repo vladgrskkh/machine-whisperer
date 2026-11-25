@@ -30,7 +30,7 @@ export function AlertsScreen() {
     loading.current ??= loadMachineAlerts(api, controller.current.signal).finally(() => { loading.current = null; });
     return loading.current;
   }, []);
-  const { query, refresh, retry } = useMachineQuery(load, 'Could not load machine alerts.');
+  const { query, refresh, retry } = useMachineQuery(load, 'Could not load machine alerts.', { keepPreviousData: true });
 
   async function acknowledge(id: string) {
     if (pending.current.has(id)) return;

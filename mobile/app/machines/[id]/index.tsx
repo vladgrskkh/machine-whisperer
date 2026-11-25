@@ -27,7 +27,7 @@ export default function MachineDetailRoute() {
 
 function SelectedMachine({ id }: { id: string }) {
   const load = useCallback((api: ApiClient) => api.getMachine(id), [id]);
-  const { query, refresh, retry } = useMachineQuery(load, 'Could not load the machine.');
+  const { query, refresh, retry } = useMachineQuery(load, 'Could not load the machine.', { keepPreviousData: true });
 
   if (query.state === 'loading') {
     return <ActivityIndicator accessibilityLabel="Loading machine" color={colors.accent} />;

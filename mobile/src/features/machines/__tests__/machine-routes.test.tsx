@@ -1,6 +1,7 @@
 import * as Camera from 'expo-camera';
+import { router } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
-import { fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
+import { act, fireEvent, renderRouter, screen, waitFor } from 'expo-router/testing-library';
 
 import AuthLayout from '../../../../app/(auth)/_layout';
 import SignIn from '../../../../app/(auth)/sign-in';
@@ -77,7 +78,7 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status });
 }
 
-function network(handler?: (path: string, init?: RequestInit) => Response | undefined) {
+function network(handler?: (path: string, init?: RequestInit) => Response | Promise<Response> | undefined) {
   return jest.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
     const path = new URL(String(url)).pathname;
     const custom = handler?.(path, init);
@@ -116,6 +117,30 @@ afterEach(() => {
   if (originalBaseUrl === undefined) delete process.env.EXPO_PUBLIC_API_URL;
   else process.env.EXPO_PUBLIC_API_URL = originalBaseUrl;
   jest.restoreAllMocks();
+});
+
+it.each([
+  { route: `/machines/${fan.id}/baseline`, action: 'Save baseline', loading: 'Loading baseline' },
+  { route: claimPath, action: 'Scan device QR', loading: 'Loading machine' },
+])('revalidates $route before exposing the action on refocus', async ({ route, action, loading }) => {
+  const { promise: refresh, resolve } = Promise.withResolvers<Response>();
+  let machineRequests = 0;
+  network((path) => {
+    if (path === `/v1/machines/${fan.id}` && ++machineRequests === 2) return refresh;
+    return undefined;
+  });
+  await renderRouter(routes, { initialUrl: route });
+  await screen.findByRole('button', { name: action });
+
+  await act(async () => { router.push('/machines/new'); });
+  await screen.findByRole('header', { name: 'Add a machine' });
+  await act(async () => { router.back(); });
+  await waitFor(() => expect(machineRequests).toBe(2));
+
+  expect(screen.queryByRole('button', { name: action })).toBeNull();
+  expect(screen.getByLabelText(loading)).toBeOnTheScreen();
+  await act(async () => { resolve(json(fan)); });
+  expect(await screen.findByRole('button', { name: action })).toBeOnTheScreen();
 });
 
 it('shows an empty machine list with a single add action', async () => {

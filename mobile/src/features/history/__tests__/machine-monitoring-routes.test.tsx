@@ -159,6 +159,52 @@ it('keeps loaded alerts and offers a retry when refreshing fails', async () => {
   expect(screen.queryByRole('alert')).toBeNull();
 });
 
+it('keeps loaded alerts when every machine alert request fails on refresh', async () => {
+  const pump = { ...machine, id: '7ebac931-e3b1-4a33-829a-13b5d852aaf8', name: 'Water pump' };
+  const { promise: refresh, resolve } = Promise.withResolvers<void>();
+  let listRequests = 0;
+  let refreshingMachines = 0;
+  network((url) => {
+    if (url.pathname === '/v1/machines') {
+      listRequests++;
+      return json([machine, pump]);
+    }
+    if (!url.pathname.endsWith('/alerts')) return undefined;
+    if (listRequests === 2) {
+      refreshingMachines++;
+      return refresh.then(() => json({ error: { code: 'internal_error', message: 'Unavailable' } }, 503));
+    }
+    return url.pathname === root + '/alerts' && listRequests === 1 ? json([active]) : json([]);
+  });
+  await renderRouter(routes, { initialUrl: '/alerts' });
+
+  const acknowledge = { name: /Acknowledge alert for Workshop fan/ };
+  await screen.findByRole('button', acknowledge);
+  await press(/^Account, tab/);
+  await press(/^Alerts, tab/);
+  await waitFor(() => expect(refreshingMachines).toBe(2));
+  expect(screen.getByRole('button', acknowledge)).toBeEnabled();
+
+  await act(async () => { resolve(); });
+  await screen.findByRole('alert');
+  expect(screen.getByRole('button', acknowledge)).toBeEnabled();
+  expect(screen.getByRole('alert')).toHaveTextContent('Could not load machine alerts.');
+  await press('Retry alerts refresh');
+  expect(await screen.findByText('No active alerts.')).toBeOnTheScreen();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('shows the initial load error when every machine alert request fails', async () => {
+  network((url) => url.pathname === root + '/alerts'
+    ? json({ error: { code: 'internal_error', message: 'Unavailable' } }, 503)
+    : undefined);
+  await renderRouter(routes, { initialUrl: '/alerts' });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load machine alerts.');
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+  expect(screen.queryByLabelText('Active alerts')).toBeNull();
+});
+
 it('keeps showing machine history until new observations arrive after returning to detail', async () => {
   const { promise: refresh, resolve } = Promise.withResolvers<Response>();
   let historyRequests = 0;

@@ -13,7 +13,7 @@ async function listMachines(api: ApiClient, signal: AbortSignal) {
 }
 
 export function MachineList({ onAdd, onSelect }: { onAdd: () => void; onSelect: (machineId: string) => void }) {
-  const { query, refresh, retry } = useMachineQuery(listMachines, 'Could not load your machines.');
+  const { query, refresh, retry } = useMachineQuery(listMachines, 'Could not load your machines.', { keepPreviousData: true });
 
   return (
     <WorkspaceScreen tab>

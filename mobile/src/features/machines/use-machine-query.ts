@@ -10,7 +10,11 @@ type Query<T> =
   | { state: 'ready'; data: T; revision: number; refresh?: 'refreshing' | { message: string } }
   | { state: 'error'; message: string };
 
-export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) => Promise<T>, fallback: string) {
+export function useMachineQuery<T>(
+  load: (api: ApiClient, signal: AbortSignal) => Promise<T>,
+  fallback: string,
+  { keepPreviousData = false }: { keepPreviousData?: boolean } = {},
+) {
   const { api } = useSession();
   const [query, setQuery] = useState<Query<T>>({ state: 'loading' });
   const reload = useRef<(() => void) | null>(null);
@@ -23,7 +27,7 @@ export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) =
     function runQuery() {
       if (pending) return;
       pending = true;
-      setQuery((previous) => previous.state === 'ready'
+      setQuery((previous) => keepPreviousData && previous.state === 'ready'
         ? { ...previous, refresh: 'refreshing' }
         : { state: 'loading' });
       void load(api, signal).then(
@@ -49,7 +53,7 @@ export function useMachineQuery<T>(load: (api: ApiClient, signal: AbortSignal) =
       controller.abort();
       reload.current = null;
     };
-  }, [api, fallback, load]));
+  }, [api, fallback, keepPreviousData, load]));
 
   return {
     query,

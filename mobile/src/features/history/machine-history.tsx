@@ -19,9 +19,9 @@ export function MachineHistory({ machine, onEditBaseline, onClaim }: {
   const loadHistory = useCallback((api: ApiClient, signal: AbortSignal) => api.getTelemetry(id, { signal }), [id]);
   const loadBaseline = useCallback((api: ApiClient, signal: AbortSignal) => api.getBaseline(id, signal), [id]);
   const loadAlerts = useCallback((api: ApiClient, signal: AbortSignal) => api.listAlerts(id, signal), [id]);
-  const history = useMachineQuery(loadHistory, 'Could not load vibration history.');
-  const baseline = useMachineQuery(loadBaseline, 'Could not load the baseline.');
-  const alerts = useMachineQuery(loadAlerts, 'Could not load alert markers.');
+  const history = useMachineQuery(loadHistory, 'Could not load vibration history.', { keepPreviousData: true });
+  const baseline = useMachineQuery(loadBaseline, 'Could not load the baseline.', { keepPreviousData: true });
+  const alerts = useMachineQuery(loadAlerts, 'Could not load alert markers.', { keepPreviousData: true });
 
   const readings = history.query.state === 'ready' ? history.query.data : null;
   const manual = baseline.query.state === 'ready' ? baseline.query.data : null;
