@@ -83,6 +83,9 @@ jobs:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Test the API migration wrapper
         run: api/scripts/test-migrate.sh
       - name: Test the ClickHouse entrypoint
@@ -99,6 +102,10 @@ jobs:
         run: deploy/scripts/test-image-publish-config.sh
       - name: Test the backup restore runbook
         run: python3 deploy/scripts/test-runbook-restore.py
+      - name: Test synthetic demo seeding
+        run: python3 -B deploy/scripts/test-seed-demo.py
+      - name: Validate the k6 demo scenarios offline
+        run: deploy/scripts/test-k6-demo.sh --archive
       - name: Build the API and Analytics images
         run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
       - name: Smoke test the server stack

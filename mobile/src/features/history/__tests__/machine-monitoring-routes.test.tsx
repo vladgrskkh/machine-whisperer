@@ -104,6 +104,132 @@ afterEach(() => {
   jest.restoreAllMocks();
 });
 
+it('keeps machines visible while refetching after a tab switch', async () => {
+  const { promise: refresh, resolve } = Promise.withResolvers<Response>();
+  let listRequests = 0;
+  network((url) => {
+    if (url.pathname === '/v1/machines' && ++listRequests === 2) return refresh;
+    return undefined;
+  });
+  await renderRouter(routes, { initialUrl: '/machines' });
+
+  await screen.findByText('0.55 g RMS');
+  await press(/^Account, tab/);
+  await press(/^Machines, tab/);
+  await waitFor(() => expect(listRequests).toBe(2));
+
+  expect(screen.getByRole('button', { name: machine.name })).toBeEnabled();
+  expect(screen.getByText('0.55 g RMS')).toBeOnTheScreen();
+  expect(screen.getByRole('status')).toHaveTextContent(/refreshing machines/i);
+  expect(screen.queryByLabelText('Loading machines')).toBeNull();
+
+  await act(async () => { resolve(json([{ ...machine, name: 'Renamed fan' }])); });
+  expect(await screen.findByRole('button', { name: 'Renamed fan' })).toBeOnTheScreen();
+  expect(screen.queryByRole('button', { name: machine.name })).toBeNull();
+  expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('keeps loaded alerts and offers a retry when refreshing fails', async () => {
+  const { promise: refresh, resolve } = Promise.withResolvers<Response>();
+  let listRequests = 0;
+  network((url) => {
+    if (url.pathname !== '/v1/machines') return undefined;
+    if (++listRequests === 2) return refresh;
+    if (listRequests === 3) return json([]);
+    return undefined;
+  });
+  await renderRouter(routes, { initialUrl: '/alerts' });
+
+  await screen.findByRole('button', { name: /Acknowledge alert for Workshop fan/ });
+  await press(/^Account, tab/);
+  await press(/^Alerts, tab/);
+  await waitFor(() => expect(listRequests).toBe(2));
+  expect(screen.getByRole('button', { name: /Acknowledge alert for Workshop fan/ })).toBeEnabled();
+  expect(screen.getByRole('status')).toHaveTextContent(/refreshing alerts/i);
+
+  await act(async () => {
+    resolve(json({ error: { code: 'machines_unavailable', message: 'Machine list unavailable' } }, 503));
+  });
+  expect(await screen.findByRole('alert')).toHaveTextContent('Machine list unavailable');
+  expect(screen.getByRole('button', { name: /Acknowledge alert for Workshop fan/ })).toBeEnabled();
+  expect(screen.queryByRole('status')).toBeNull();
+
+  await press('Retry alerts refresh');
+  expect(await screen.findByText('No active alerts.')).toBeOnTheScreen();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('keeps loaded alerts when every machine alert request fails on refresh', async () => {
+  const pump = { ...machine, id: '7ebac931-e3b1-4a33-829a-13b5d852aaf8', name: 'Water pump' };
+  const { promise: refresh, resolve } = Promise.withResolvers<void>();
+  let listRequests = 0;
+  let refreshingMachines = 0;
+  network((url) => {
+    if (url.pathname === '/v1/machines') {
+      listRequests++;
+      return json([machine, pump]);
+    }
+    if (!url.pathname.endsWith('/alerts')) return undefined;
+    if (listRequests === 2) {
+      refreshingMachines++;
+      return refresh.then(() => json({ error: { code: 'internal_error', message: 'Unavailable' } }, 503));
+    }
+    return url.pathname === root + '/alerts' && listRequests === 1 ? json([active]) : json([]);
+  });
+  await renderRouter(routes, { initialUrl: '/alerts' });
+
+  const acknowledge = { name: /Acknowledge alert for Workshop fan/ };
+  await screen.findByRole('button', acknowledge);
+  await press(/^Account, tab/);
+  await press(/^Alerts, tab/);
+  await waitFor(() => expect(refreshingMachines).toBe(2));
+  expect(screen.getByRole('button', acknowledge)).toBeEnabled();
+
+  await act(async () => { resolve(); });
+  await screen.findByRole('alert');
+  expect(screen.getByRole('button', acknowledge)).toBeEnabled();
+  expect(screen.getByRole('alert')).toHaveTextContent('Could not load machine alerts.');
+  await press('Retry alerts refresh');
+  expect(await screen.findByText('No active alerts.')).toBeOnTheScreen();
+  expect(screen.queryByRole('alert')).toBeNull();
+});
+
+it('shows the initial load error when every machine alert request fails', async () => {
+  network((url) => url.pathname === root + '/alerts'
+    ? json({ error: { code: 'internal_error', message: 'Unavailable' } }, 503)
+    : undefined);
+  await renderRouter(routes, { initialUrl: '/alerts' });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not load machine alerts.');
+  expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+  expect(screen.queryByLabelText('Active alerts')).toBeNull();
+});
+
+it('keeps showing machine history until new observations arrive after returning to detail', async () => {
+  const { promise: refresh, resolve } = Promise.withResolvers<Response>();
+  let historyRequests = 0;
+  network((url) => {
+    if (url.pathname === root + '/telemetry' && ++historyRequests >= 2) return refresh;
+    return undefined;
+  });
+  await renderRouter(routes, { initialUrl: detailPath });
+
+  expect(await screen.findByText('0.55 g')).toBeOnTheScreen();
+  await press('Edit baseline');
+  await screen.findByRole('header', { name: 'Set baseline' });
+  await fireEvent.press(await screen.findByRole('link', { name: /Workshop fan/ }));
+  await waitFor(() => expect(historyRequests).toBeGreaterThan(1));
+
+  expect(screen.getByText('0.55 g')).toBeOnTheScreen();
+  expect(screen.getByRole('status', { name: /refreshing vibration history/i })).toBeOnTheScreen();
+  expect(screen.queryByLabelText('Loading vibration history')).toBeNull();
+
+  await act(async () => { resolve(json({ items: [{ ...latest, vibration_rms_g: 0.7 }], next_cursor: null })); });
+  expect(await screen.findByText('0.7 g')).toBeOnTheScreen();
+  expect(screen.queryByText('0.55 g')).toBeNull();
+  expect(screen.queryByRole('status', { name: /refreshing vibration history/i })).toBeNull();
+});
+
 it('opens machine detail from Machines and reads older observations with the opaque cursor', async () => {
   const cursor = 'token+/=?& skip';
   const queries: [string | null, string | null][] = [];

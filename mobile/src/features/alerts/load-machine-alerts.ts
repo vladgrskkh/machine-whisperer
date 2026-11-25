@@ -22,6 +22,9 @@ export async function loadMachineAlerts(api: ApiClient, signal: AbortSignal) {
   }
 
   await Promise.all(Array.from({ length: Math.min(4, machines.length) }, loadNextMachine));
+  if (machines.length > 0 && failures === machines.length) {
+    throw new Error('All machine alert requests failed');
+  }
 
   return {
     alerts: alerts.sort((a, b) => Date.parse(b.alert.triggered_at) - Date.parse(a.alert.triggered_at)

@@ -24,8 +24,10 @@ func (r *Repository) Create(ctx context.Context, value device.Device) error {
 	if tx := transaction.FromContext(ctx); tx != nil {
 		exec = tx.Exec
 	}
-	_, err := exec(ctx, `INSERT INTO devices (id,key_verifier,claim_verifier,claim_expires_at,created_at)
-		VALUES ($1,$2,$3,$4,$5)`, value.ID, value.KeyVerifier[:], value.ClaimVerifier[:], value.ClaimExpiresAt, value.CreatedAt)
+	_, err := exec(ctx, `INSERT INTO devices
+		(id,key_verifier,claim_verifier,claim_expires_at,created_at,provisioned_by_user_id)
+		VALUES ($1,$2,$3,$4,$5,$6)`, value.ID, value.KeyVerifier[:], value.ClaimVerifier[:], value.ClaimExpiresAt,
+		value.CreatedAt, value.ProvisionedByUserID)
 	if pgErr, ok := errors.AsType[*pgconn.PgError](err); ok && pgErr.Code == pgerrcode.UniqueViolation {
 		return device.ErrConflict
 	}

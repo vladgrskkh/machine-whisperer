@@ -173,6 +173,11 @@ Login and refresh load current assignments from PostgreSQL. Previously issued
 access tokens retain their signed roles until their 15-minute lifetime and
 30-second skew allowance end.
 
+PostgreSQL records the authenticated JWT subject internally as the device's
+`provisioned_by_user_id`. Existing enrollments can have a null value. Deleting
+a provisioning account clears this association and preserves its devices.
+Provisioning and claim responses omit the provisioner identity.
+
 The provisioning request needs only the bearer header. A successful response
 returns `201` with `device_id`, `api_key` and the QR object `claim_payload`. The
 station programs `api_key` into that unit's secure storage. Its format is

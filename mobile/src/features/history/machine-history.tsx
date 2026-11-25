@@ -4,6 +4,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import type { ApiClient } from '../../api/client';
 import type { Machine } from '../../api/types';
 import { Button } from '../../ui/button';
+import { QueryRefreshStatus } from '../../ui/query-refresh-status';
 import { colors, typography } from '../../ui/theme';
 import { WorkspaceCard } from '../../ui/workspace-card';
 import { useMachineQuery } from '../machines/use-machine-query';
@@ -18,9 +19,9 @@ export function MachineHistory({ machine, onEditBaseline, onClaim }: {
   const loadHistory = useCallback((api: ApiClient, signal: AbortSignal) => api.getTelemetry(id, { signal }), [id]);
   const loadBaseline = useCallback((api: ApiClient, signal: AbortSignal) => api.getBaseline(id, signal), [id]);
   const loadAlerts = useCallback((api: ApiClient, signal: AbortSignal) => api.listAlerts(id, signal), [id]);
-  const history = useMachineQuery(loadHistory, 'Could not load vibration history.');
-  const baseline = useMachineQuery(loadBaseline, 'Could not load the baseline.');
-  const alerts = useMachineQuery(loadAlerts, 'Could not load alert markers.');
+  const history = useMachineQuery(loadHistory, 'Could not load vibration history.', { keepPreviousData: true });
+  const baseline = useMachineQuery(loadBaseline, 'Could not load the baseline.', { keepPreviousData: true });
+  const alerts = useMachineQuery(loadAlerts, 'Could not load alert markers.', { keepPreviousData: true });
 
   const readings = history.query.state === 'ready' ? history.query.data : null;
   const manual = baseline.query.state === 'ready' ? baseline.query.data : null;
@@ -37,12 +38,23 @@ export function MachineHistory({ machine, onEditBaseline, onClaim }: {
         <ActivityIndicator color={colors.accent} accessibilityLabel="Loading vibration history" />
       )}
       {history.query.state === 'error' && <QueryError message={history.query.message} retry={history.retry} />}
-      {readings && <HistoryPanel id={id} initialPage={readings} baselineMean={manual?.mean_rms_g ?? null} alerts={events} />}
+      <QueryRefreshStatus refresh={history.refresh} resource="vibration history" retry={history.retry} />
+      {history.query.state === 'ready' && readings && (
+        <HistoryPanel
+          key={history.query.revision}
+          id={id}
+          initialPage={readings}
+          baselineMean={manual?.mean_rms_g ?? null}
+          alerts={events}
+        />
+      )}
       {alerts.query.state === 'error' && <QueryError message={alerts.query.message} retry={alerts.retry} />}
+      <QueryRefreshStatus refresh={alerts.refresh} resource="alert markers" retry={alerts.retry} />
       <WorkspaceCard>
         <Text accessibilityRole="header" style={typography.brand}>Manual baseline</Text>
         {baseline.query.state === 'loading' && <ActivityIndicator color={colors.accent} accessibilityLabel="Loading baseline" />}
         {baseline.query.state === 'error' && <QueryError message={baseline.query.message} retry={baseline.retry} />}
+        <QueryRefreshStatus refresh={baseline.refresh} resource="baseline" retry={baseline.retry} />
         {baseline.query.state === 'ready' && (
           <Text style={typography.body}>{manual ? `Mean ${manual.mean_rms_g} g · Std dev ${manual.stddev_rms_g} g` : 'No baseline set.'}</Text>
         )}

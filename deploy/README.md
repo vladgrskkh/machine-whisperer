@@ -135,6 +135,74 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
     https://onerep.mooo.com/v1/users/me
 ```
 
+## Seed synthetic demo data
+
+After the release is merged and deployed, run the seed from the monorepo
+root on the Docker host with the matching `deploy/.env.server` and a healthy
+Compose stack. Use the same Compose project name as the running deployment.
+
+```bash
+COMPOSE_PROJECT_NAME=machine-whisperer SIMULATIONS=1 python3 deploy/scripts/seed-demo-data.py
+```
+
+Set `DEMO_OWNER_EMAIL` to register a different unused email. The default is
+`demo@machine-whisperer.test`. The seed creates a separate owner with one
+machine and one claimed software device per scenario (`healthy`, `alert`,
+`recovery`, and `unknown`). Set `SIMULATIONS` to 1, 2, or 3 to choose how many
+independent fixtures to create per scenario within the enrollment rate limit.
+Each machine starts with a baseline mean of 0.04 g and standard deviation of
+0.005 g. The seed creates the fixtures for subsequent k6 telemetry runs.
+
+The script uses the public HTTPS origin from the Compose `DOMAIN` for the
+owner routes. It grants the new owner the `device_provisioner` role before
+login and revokes it when provisioning finishes. An issued access token
+retains its signed role until its 15-minute lifetime and 30-second clock
+skew allowance end. Provisioning runs inside the API container over verified
+internal TLS. Keep the existing Nginx provisioning allowlist in place.
+
+The script writes the generated owner password and device keys to
+`deploy/secrets/k6-demo-fixtures.json` with mode `0600`. Keep this file out of
+Git, terminal output, and shared logs. An existing fixture file or an email
+already registered with the API stops the seed. On failure, rollback locks
+the demo owner in PostgreSQL, removes its attributed unclaimed devices even
+if a provisioning response was lost, and deletes the demo owner. The owner's
+machines and their claimed devices are removed by cascade. If signup has an
+uncertain outcome, the script uses the generated password to identify the
+new owner for rollback. If the script asks for manual inspection, verify the
+demo account and fixture state before retrying.
+
+### Run the k6 scenarios
+
+Run k6 on the Docker host after deployment and a successful seed. Use the same
+operator account that owns the mode `0600` fixture file. The runner uses the
+public HTTPS API origin saved by the seed and mounts the fixture read-only.
+
+```bash
+SCENARIO=all SIMULATIONS=1 deploy/scripts/run-k6-demo.sh
+SCENARIO=recovery SIMULATIONS=1 deploy/scripts/run-k6-demo.sh
+```
+
+`SCENARIO` defaults to `all`. Select `healthy`, `alert`, `recovery`, or
+`unknown` to run one group. `SIMULATIONS` defaults to `1` and selects that
+many independent machines and devices per group. To run two simulations of
+each scenario, set `SIMULATIONS=2` for both the seed and the runner and select
+`SCENARIO=all` for the run. Use at most the number of fixtures seeded per group.
+
+Each simulated device submits one short sequence. The run checks HTTP 202,
+the expected alert state, and the appearance of every submitted event in
+telemetry history within a 30-second polling window. Run one invocation at a
+time on a fixture set. You can rerun it immediately after completion. The
+`alert` scenario leaves an active alert on its demo machine for inspection,
+and the `recovery` scenario opens and recovers an alert on a separate machine.
+The checks assume the API's default detector thresholds and sustained counts.
+If an `alert` or `recovery` run is interrupted after one or two high readings,
+the next run can trigger earlier than its third event; let that run fail and
+rerun the scenario after the alert is active.
+
+These synthetic readings exercise the API, detector, and history pipeline.
+They use a fixed baseline and do not represent measured vibration or validate
+sensor accuracy or production capacity.
+
 ## Logs and Prometheus
 
 ```bash

@@ -5,6 +5,7 @@ import type { ApiClient } from '../../api/client';
 import { errorMessage } from '../../api/errors';
 import { useSession } from '../../auth/session-provider';
 import { Button } from '../../ui/button';
+import { QueryRefreshStatus } from '../../ui/query-refresh-status';
 import { colors, typography } from '../../ui/theme';
 import { WorkspaceCard } from '../../ui/workspace-card';
 import { WorkspaceScreen } from '../../ui/workspace-screen';
@@ -29,7 +30,7 @@ export function AlertsScreen() {
     loading.current ??= loadMachineAlerts(api, controller.current.signal).finally(() => { loading.current = null; });
     return loading.current;
   }, []);
-  const { query, retry } = useMachineQuery(load, 'Could not load machine alerts.');
+  const { query, refresh, retry } = useMachineQuery(load, 'Could not load machine alerts.', { keepPreviousData: true });
 
   async function acknowledge(id: string) {
     if (pending.current.has(id)) return;
@@ -49,6 +50,7 @@ export function AlertsScreen() {
   return (
     <WorkspaceScreen tab>
       <Text accessibilityRole="header" style={typography.heading}>Machine alerts</Text>
+      <QueryRefreshStatus refresh={refresh} resource="alerts" retry={retry} />
       {query.state === 'loading' && <ActivityIndicator color={colors.accent} accessibilityLabel="Loading alerts" />}
       {query.state === 'error' && (
         <>
@@ -63,7 +65,7 @@ export function AlertsScreen() {
               <Text accessibilityRole="alert" style={typography.error}>
                 Could not load alerts for {query.data.failures} {query.data.failures === 1 ? 'machine' : 'machines'}.
               </Text>
-              <Button label="Try again" onPress={retry} outline />
+              {!refresh && <Button label="Try again" onPress={retry} outline />}
             </>
           )}
           <AlertGroup
