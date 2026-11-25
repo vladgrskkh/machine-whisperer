@@ -83,34 +83,12 @@ jobs:
         working-directory: .
     steps:
       - uses: actions/checkout@v4
-      - name: Test the API migration wrapper
-        run: api/scripts/test-migrate.sh
-      - name: Test the ClickHouse entrypoint
-        run: deploy/clickhouse/test-entrypoint.sh
-      - name: Test certificate bootstrap and renewal helpers
-        run: deploy/scripts/test-certificates.sh
-      - name: Check the Certbot CLI offline
-        run: |
-          version=$(docker run --rm --network none certbot/certbot:v5.10.0 --version)
-          test "$version" = 'certbot 5.10.0'
-      - name: Validate the Compose configuration
-        run: deploy/scripts/test-compose-config.sh
-      - name: Validate the Docker Hub publication workflow
-        run: deploy/scripts/test-image-publish-config.sh
-      - name: Test the backup restore runbook
-        run: python3 deploy/scripts/test-runbook-restore.py
-      - name: Test synthetic demo seeding
-        run: python3 -B deploy/scripts/test-seed-demo.py
-      - name: Check the k6 scenario archive offline
-        run: deploy/scripts/test-k6-demo.sh --archive
-      - name: Run k6 demo scenarios against a local stack
-        run: deploy/scripts/test-k6-demo-e2e.sh
-      - name: Build the API and Analytics images
-        run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
-      - name: Smoke test the server stack
+      - name: Run deployment contract checks
+        run: python3 -B -m unittest discover -s deploy/tests -v
+      - name: Run end-to-end checks against the local stack
         env:
           TMPDIR: ${{ runner.temp }}
-        run: deploy/scripts/smoke-test.sh
+        run: python3 -B -m unittest -v deploy.tests.e2e
 
   mobile:
     runs-on: ubuntu-latest

@@ -63,11 +63,20 @@ make lint
 ```
 
 Unit tests use real HTTP connections and require permission to bind loopback
-ports. Integration tests use Testcontainers to start `postgres:18-alpine`, apply
-migrations and isolate each test in its own schema. They require a running Docker
-engine; missing Docker fails the tests. They do not use `DATABASE_URL` or a shared
-test database. `make test-integration` also runs the race detector. Lint includes
-integration-tagged code. To regenerate the hashing mock used by handler tests:
+ports. Each database integration suite lives in its own package under
+`tests/integration`. It starts a disposable `postgres:18-alpine` Testcontainer
+on first use and stops it in `TestMain` after the suite finishes. Each test
+gets a connection pool and a freshly migrated schema. These fixtures require
+Docker and use the container's URL.
+
+`make test-integration` also runs the race detector. Lint includes
+integration-tagged code. To run a focused integration test:
+
+```sh
+go test -tags=integration -race ./tests/integration/devicetelemetry -run '^TestDeviceMeTelemetry'
+```
+
+To regenerate the hashing mock used by handler tests:
 
 ```sh
 mockery --name PasswordHasher --dir internal/usecase/auth --output internal/handler/auth/authmock --outpkg authmock --filename password_hasher.go --with-expecter
@@ -272,12 +281,17 @@ maximum finite value.
 
 ## Device telemetry
 
-A claimed sensor sends `POST /v1/machines/{machine_id}/telemetry` over HTTPS
-with one `Authorization: Bearer <device_id.secret>` header and a JSON body.
-Use the API key issued during provisioning. Keep it in the device's secure
-storage and out of URLs and logs. Exclude authorization headers and telemetry
-bodies from ingress logs. This route uses device credentials and owner routes
-use user access JWTs.
+A claimed sensor sends `POST /v1/devices/me/telemetry` over HTTPS with one
+`Authorization: Bearer <device_id.secret>` header and a JSON body. The API
+uses the machine assigned to the authenticated device. Send the observation
+fields shown below. Use the API key issued during provisioning. Keep it in
+the device's secure storage and out of URLs and logs. Exclude authorization
+headers and telemetry bodies from ingress logs. Owner routes use user access
+JWTs.
+
+Existing clients can also send `POST /v1/machines/{machine_id}/telemetry`
+with the assigned machine ID. Both routes share the same event IDs and
+accept identical retries across either URL.
 
 ```json
 {
@@ -307,7 +321,7 @@ observations at most five minutes ahead of that time and strictly less than
 | Status | Result |
 | --- | --- |
 | `202` | The event is durably queued for export or is an identical retry. The response body is empty. |
-| `400` | The machine ID or request body is invalid. |
+| `400` | The request body or the compatibility route's machine ID is invalid. |
 | `401` | Device credentials are missing or invalid. |
 | `404` | The device is unclaimed or revoked, or the machine is unavailable to the device. |
 | `409` | The event ID conflicts with a previous submission, the observation is out of order, or the timestamp is outside the acceptance window. |

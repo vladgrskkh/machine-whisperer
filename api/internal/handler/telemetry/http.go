@@ -25,16 +25,28 @@ type Ingester interface {
 }
 
 func NewIngest(usecase Ingester) http.Handler {
+	return newIngest(usecase, true)
+}
+
+func NewDeviceIngest(usecase Ingester) http.Handler {
+	return newIngest(usecase, false)
+}
+
+func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deviceID, assignedMachineID, ok := middleware.DeviceBinding(r.Context())
 		if !ok {
 			middleware.Unauthorized(w)
 			return
 		}
-		requestedMachineID, err := handler.ParseUUID(chi.URLParam(r, "machine_id"))
-		if err != nil {
-			handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid machine ID")
-			return
+		requestedMachineID := assignedMachineID
+		if machineIDFromPath {
+			parsedMachineID, err := handler.ParseUUID(chi.URLParam(r, "machine_id"))
+			if err != nil {
+				handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid machine ID")
+				return
+			}
+			requestedMachineID = parsedMachineID
 		}
 		observation, err := decodeObservation(r.Body)
 		if err == nil {

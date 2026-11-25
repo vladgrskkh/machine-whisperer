@@ -203,26 +203,28 @@ These synthetic readings exercise the API, detector, and history pipeline.
 They use a fixed baseline and do not represent measured vibration or validate
 sensor accuracy or production capacity.
 
-### Run the local k6 E2E check
+### Run deployment checks locally
 
-CI validates the same scenarios against a disposable full Compose stack. To
-run that check locally, use:
+From the repository root, run the deployment contracts and the disposable
+Compose end-to-end suite with Python 3. The checks use Docker Compose, OpenSSL,
+Ruby for reading workflow YAML, and `envsubst` from gettext.
 
 ```bash
-deploy/scripts/test-k6-demo-e2e.sh
+python3 -B -m unittest discover -s deploy/tests -v
+python3 -B -m unittest -v deploy.tests.e2e
 ```
 
-The script creates a random Compose project, generated secrets, a disposable
-certificate and fixture file, seeds one simulation through the real API, then
-runs `all`, `alert`, and `recovery`. It publishes no host ports and removes
-the stack, images, volumes, network, and temporary files when it finishes.
-`run-k6-demo.sh` also accepts `K6_DOCKER_NETWORK` and `K6_CA_FILE` so the k6
-container can join this isolated network and trust its disposable CA. Leave
-both unset for deployed-host runs.
+The contract suite archives both k6 scripts with synthetic fixtures and Docker
+network access disabled. The end-to-end suite generates its own credentials
+and certificate, publishes random loopback ports, and starts one Compose
+project. It checks ingress and authentication, device claim, telemetry
+submission and history, k6 scenarios, and database persistence. The k6
+container joins the project's edge network and verifies TLS using the
+disposable certificate. The suite removes the project's containers, images,
+volumes, networks, and temporary fixtures when it finishes.
 
-The separate offline check, `deploy/scripts/test-k6-demo.sh --archive`, only
-proves the pinned k6 image can load and archive the scenario script without
-network access or private fixtures.
+See the [local k6 load profile](k6/README.md) for running the longer telemetry
+workload from your machine.
 
 ## Logs and Prometheus
 

@@ -154,8 +154,9 @@ export default function ({ ownerToken }) {
     const { name, iterationInTest } = exec.scenario;
     const fixture = fixtureFile.scenarios[name][iterationInTest];
     const machineURL = `${fixtureFile.api_base_url}/v1/machines/${fixture.machine_id}`;
+    const telemetryURL = `${fixtureFile.api_base_url}/v1/devices/me/telemetry`;
     const params = {
-        ...requestParams('POST /v1/machines/:id/telemetry', fixture.device_api_key),
+        ...requestParams('POST /v1/devices/me/telemetry', fixture.device_api_key),
         responseType: 'none',
     };
 
@@ -180,7 +181,7 @@ export default function ({ ownerToken }) {
 
     let activeAlert;
     for (const [index, event] of events.entries()) {
-        const response = http.post(machineURL + '/telemetry', JSON.stringify(event), params);
+        const response = http.post(telemetryURL, JSON.stringify(event), params);
         expect('Telemetry ingest returns 202', response.status === 202);
         if (shouldAlert && index === 2) {
             activeAlert = verifyActiveAlert(readAlerts(machineURL, ownerToken), fixture, event, previousAlert);
