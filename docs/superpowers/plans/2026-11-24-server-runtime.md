@@ -265,8 +265,8 @@
 
 - [x] Add failing static config tests for exact Compose image references and migration-image pairing, plus a workflow regression that verifies publishing is main-only and uses the expected secret/tag contract.
 - [x] Add registry image references while retaining local build contexts; add a publish job and the VPS pull/upgrade procedure.
-- [x] Static Compose/workflow checks, both image builds, and the full local Docker smoke test passed. The Docker Hub push itself requires the user's GitHub Actions secrets and will run only after a main push.
-- [ ] Commit and obtain Task 12 review.
+- [x] Static Compose/workflow checks, both image builds, and the full local Docker smoke test passed. The actual Docker Hub push is restricted to a main push and was not run from the PR.
+- [x] Commit and obtain Task 12 review; fix the four publication/recovery findings and backup restart regression (`93a256a`, `25ae9ac`, `dd1012c`; scoped re-reviews approved). The user has environment secrets and a main-only branch policy; immutable tag rules remain an operator step.
 
 ## Final acceptance
 
