@@ -28,28 +28,30 @@ const (
 	cleanupTimeout = 10 * time.Second
 )
 
-// PostgresSuite starts a shared server on first use. Its zero value is ready to use.
-type PostgresSuite struct {
+type postgresSuite struct {
 	startOnce sync.Once
 	startErr  error
 	container *postgres.PostgresContainer
 	admin     *pgxpool.Pool
 }
 
-func RunWithPostgres(m *testing.M, suites ...*PostgresSuite) int {
+//nolint:gochecknoglobals // Each integration test binary installs its fixture in TestMain.
+var suitePostgres *postgresSuite
+
+func RunWithPostgres(m *testing.M) int {
+	suite := &postgresSuite{}
+	suitePostgres = suite
 	code := m.Run()
-	for _, suite := range suites {
-		if err := suite.close(); err != nil {
-			fmt.Fprintf(os.Stderr, "clean up integration PostgreSQL: %v\n", err)
-			if code == 0 {
-				code = 1
-			}
+	if err := suite.close(); err != nil {
+		fmt.Fprintf(os.Stderr, "clean up integration PostgreSQL: %v\n", err)
+		if code == 0 {
+			return 1
 		}
 	}
 	return code
 }
 
-func (s *PostgresSuite) start() error {
+func (s *postgresSuite) start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
 	var err error
@@ -72,7 +74,7 @@ func (s *PostgresSuite) start() error {
 	return err
 }
 
-func (s *PostgresSuite) close() error {
+func (s *postgresSuite) close() error {
 	if s.admin != nil {
 		s.admin.Close()
 	}
@@ -84,8 +86,10 @@ func (s *PostgresSuite) close() error {
 	return testcontainers.TerminateContainer(s.container, testcontainers.StopContext(ctx))
 }
 
-func (s *PostgresSuite) Pool(t *testing.T) *pgxpool.Pool {
+func Postgres(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	s := suitePostgres
+	require.NotNil(t, s, "TestMain must call RunWithPostgres")
 	s.startOnce.Do(func() { s.startErr = s.start() })
 	require.NoError(t, s.startErr)
 	ctx, cancel := context.WithTimeout(t.Context(), startupTimeout)

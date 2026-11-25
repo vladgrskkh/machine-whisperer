@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth/authmock"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 //nolint:tparallel // Each failure must leave the same predecessor usable for the next attempt.
@@ -98,7 +99,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			now,
 		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
-		requirePGCode(t, err, pgerrcode.UniqueViolation)
+		testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 		assert.Empty(t, pair)
 		assert.Equal(t, before, readRefreshSession(t, fixture.pool, id))
 	})
@@ -137,7 +138,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			FOR EACH ROW EXECUTE FUNCTION fail_refresh_commit()`)
 		require.NoError(t, err)
 		pair, err := newRefresh(fixture, now).Refresh(t.Context(), original.RefreshToken)
-		requirePGCode(t, err, pgerrcode.UniqueViolation)
+		testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 		assert.Empty(t, pair)
 		assert.Equal(t, before, readRefreshSession(t, fixture.pool, id))
 	})
@@ -161,10 +162,10 @@ func TestRefreshAndLogoutRevocationFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
-	requirePGCode(t, err, pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.CheckViolation)
 	assert.NotErrorIs(t, err, auth.ErrAuthenticationFailed)
 	assert.Empty(t, pair)
-	requirePGCode(t, logout.Logout(t.Context(), current.RefreshToken), pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, logout.Logout(t.Context(), current.RefreshToken), pgerrcode.CheckViolation)
 	assert.Equal(t, before, readRefreshSession(t, fixture.pool, id))
 }
 
@@ -177,9 +178,13 @@ func TestRefreshAndLogoutLookupFailure(t *testing.T) {
 	require.NoError(t, err)
 
 	pair, err := newRefresh(fixture, now).Refresh(t.Context(), original.RefreshToken)
-	requirePGCode(t, err, pgerrcode.UndefinedTable)
+	testfixture.RequirePGCode(t, err, pgerrcode.UndefinedTable)
 	assert.Empty(t, pair)
-	requirePGCode(t, newLogout(fixture, now).Logout(t.Context(), original.RefreshToken), pgerrcode.UndefinedTable)
+	testfixture.RequirePGCode(
+		t,
+		newLogout(fixture, now).Logout(t.Context(), original.RefreshToken),
+		pgerrcode.UndefinedTable,
+	)
 }
 
 func TestRefreshRoleLookupFailureRollsBack(t *testing.T) {
@@ -193,7 +198,7 @@ func TestRefreshRoleLookupFailureRollsBack(t *testing.T) {
 
 	refresh := newRefresh(fixture, func() time.Time { return fixture.now.Add(time.Second) })
 	pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
-	requirePGCode(t, err, pgerrcode.UndefinedTable)
+	testfixture.RequirePGCode(t, err, pgerrcode.UndefinedTable)
 	assert.Empty(t, pair)
 	assert.Equal(t, before, readRefreshSession(t, fixture.pool, id))
 }

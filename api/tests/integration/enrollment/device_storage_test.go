@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package enrollment_test
 
 import (
 	"crypto/sha256"
@@ -13,11 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 func TestEnrollmentSchemaConstraints(t *testing.T) {
 	t.Parallel()
-	pool := enrollmentPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	ctx := t.Context()
 	ownerID, machineID, deviceID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	now := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
@@ -30,9 +31,9 @@ func TestEnrollmentSchemaConstraints(t *testing.T) {
 
 	const insertMachine = "INSERT INTO machines (id,owner_user_id,name,created_at) VALUES ($1,$2,'Test motor',$3)"
 	_, err = pool.Exec(ctx, insertMachine, machineID, uuid.NewString(), now)
-	requirePGCode(t, err, pgerrcode.ForeignKeyViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.ForeignKeyViolation)
 	_, err = pool.Exec(ctx, insertMachine, "invalid UUID", ownerID, now)
-	requirePGCode(t, err, pgerrcode.InvalidTextRepresentation)
+	testfixture.RequirePGCode(t, err, pgerrcode.InvalidTextRepresentation)
 	_, err = pool.Exec(ctx, insertMachine, machineID, ownerID, now)
 	require.NoError(t, err)
 
@@ -42,22 +43,22 @@ func TestEnrollmentSchemaConstraints(t *testing.T) {
 	code := sha256.Sum256([]byte("fixture claim code"))
 	expires := now.Add(time.Hour)
 	_, err = pool.Exec(ctx, insertDevice, deviceID, key[:31], code[:], now, expires)
-	requirePGCode(t, err, pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.CheckViolation)
 	_, err = pool.Exec(ctx, insertDevice, deviceID, key[:], code[:31], now, expires)
-	requirePGCode(t, err, pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.CheckViolation)
 	_, err = pool.Exec(ctx, insertDevice, deviceID, key[:], code[:], now, expires)
 	require.NoError(t, err)
 	otherCode := sha256.Sum256([]byte("different claim code"))
 	_, err = pool.Exec(ctx, insertDevice, uuid.NewString(), key[:], otherCode[:], now, expires)
-	requirePGCode(t, err, pgerrcode.UniqueViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 	otherKey := sha256.Sum256([]byte("different API secret"))
 	_, err = pool.Exec(ctx, insertDevice, uuid.NewString(), otherKey[:], code[:], now, expires)
-	requirePGCode(t, err, pgerrcode.UniqueViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 	_, err = pool.Exec(ctx, "UPDATE devices SET claim_verifier=NULL WHERE id=$1", deviceID)
-	requirePGCode(t, err, pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.CheckViolation)
 	const bindDevice = "UPDATE devices SET machine_id=$1, claimed_at=$2, claim_verifier=NULL WHERE id=$3"
 	_, err = pool.Exec(ctx, bindDevice, uuid.NewString(), now, deviceID)
-	requirePGCode(t, err, pgerrcode.ForeignKeyViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.ForeignKeyViolation)
 	_, err = pool.Exec(ctx, bindDevice, machineID, now, deviceID)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, "DELETE FROM users WHERE id=$1", ownerID)
@@ -71,7 +72,7 @@ func TestEnrollmentSchemaConstraints(t *testing.T) {
 
 func TestEnrollmentMigrationsCanBeReapplied(t *testing.T) {
 	t.Parallel()
-	pool := enrollmentPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	ctx := t.Context()
 	provider := testutil.PostgresMigrations(t, pool)
 	const sessionsMigration = 202611100002

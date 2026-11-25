@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"context"
@@ -14,20 +14,22 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 func TestRefreshHTTPSameTokenRaceRevokesTheOnlySuccessor(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	server, race := newAuthRaceServer(t, pool)
-	initial := startHTTPSession(t, server)
-	independent := loginHTTPSession(t, server)
+	initial := testfixture.StartHTTPSession(t, server)
+	independent := testfixture.LoginHTTPSession(t, server)
 
-	responses := race(refreshPath, refreshPath, initial.RefreshToken)
-	if responses[0].status == http.StatusUnauthorized {
+	responses := race(testfixture.RefreshPath, testfixture.RefreshPath, initial.RefreshToken)
+	if responses[0].Status == http.StatusUnauthorized {
 		responses[0], responses[1] = responses[1], responses[0]
 	}
-	next := readHTTPTokenPair(t, responses[0])
+	next := testfixture.ReadHTTPTokenPair(t, responses[0])
 	assertRefreshHTTPRejected(t, responses[1])
 	sid := httpSessionID(t, initial)
 	assert.Equal(t, sid, httpSessionID(t, next))
@@ -38,48 +40,57 @@ func TestRefreshHTTPSameTokenRaceRevokesTheOnlySuccessor(t *testing.T) {
 	hash := refreshHash(t, next.RefreshToken)
 	assert.Contains(t, state.tokens, hash)
 	assert.Nil(t, state.tokens[hash])
-	assertRefreshHTTPRejected(t, postRefreshToken(t, server, refreshPath, next.RefreshToken))
-	readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, independent.RefreshToken))
+	assertRefreshHTTPRejected(t, testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, next.RefreshToken))
+	testfixture.ReadHTTPTokenPair(
+		t,
+		testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, independent.RefreshToken),
+	)
 }
 
 func TestRefreshHTTPLogoutRaceAlwaysRevokesSession(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	server, race := newAuthRaceServer(t, pool)
-	initial := startHTTPSession(t, server)
-	independent := loginHTTPSession(t, server)
+	initial := testfixture.StartHTTPSession(t, server)
+	independent := testfixture.LoginHTTPSession(t, server)
 
-	responses := race(refreshPath, logoutPath, initial.RefreshToken)
+	responses := race(testfixture.RefreshPath, logoutPath, initial.RefreshToken)
 	assertHTTPLogout(t, responses[1])
 	sid := httpSessionID(t, initial)
 	state := readRefreshSession(t, pool, sid)
 	assert.NotNil(t, state.revokedAt)
 	oldHash := refreshHash(t, initial.RefreshToken)
-	if responses[0].status == http.StatusOK {
-		next := readHTTPTokenPair(t, responses[0])
+	if responses[0].Status == http.StatusOK {
+		next := testfixture.ReadHTTPTokenPair(t, responses[0])
 		assert.Equal(t, sid, httpSessionID(t, next))
 		assert.Len(t, state.tokens, 2)
 		assert.NotNil(t, state.tokens[oldHash])
 		newHash := refreshHash(t, next.RefreshToken)
 		assert.Contains(t, state.tokens, newHash)
 		assert.Nil(t, state.tokens[newHash])
-		assertRefreshHTTPRejected(t, postRefreshToken(t, server, refreshPath, next.RefreshToken))
+		assertRefreshHTTPRejected(
+			t,
+			testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, next.RefreshToken),
+		)
 	} else {
 		assertRefreshHTTPRejected(t, responses[0])
 		assert.Len(t, state.tokens, 1)
 		assert.Contains(t, state.tokens, oldHash)
 		assert.Nil(t, state.tokens[oldHash])
 	}
-	assertRefreshHTTPRejected(t, postRefreshToken(t, server, refreshPath, initial.RefreshToken))
-	readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, independent.RefreshToken))
+	assertRefreshHTTPRejected(t, testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, initial.RefreshToken))
+	testfixture.ReadHTTPTokenPair(
+		t,
+		testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, independent.RefreshToken),
+	)
 }
 
 func newAuthRaceServer(
 	t *testing.T,
 	pool *pgxpool.Pool,
-) (*httptest.Server, func(firstPath, secondPath, secret string) [2]authHTTPResponse) {
+) (*httptest.Server, func(firstPath, secondPath, secret string) [2]testfixture.AuthHTTPResponse) {
 	t.Helper()
-	app, err := application.New(t.Context(), authConfig(t), application.WithPool(pool))
+	app, err := application.New(t.Context(), testfixture.AuthConfig(t), application.WithPool(pool))
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 
@@ -100,13 +111,13 @@ func newAuthRaceServer(
 	}))
 	t.Cleanup(server.Close)
 
-	return server, func(firstPath, secondPath, secret string) [2]authHTTPResponse {
+	return server, func(firstPath, secondPath, secret string) [2]testfixture.AuthHTTPResponse {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 		defer cancel()
 
 		type result struct {
-			response authHTTPResponse
+			response testfixture.AuthHTTPResponse
 			err      error
 		}
 		var results [2]chan result
@@ -116,12 +127,12 @@ func newAuthRaceServer(
 			channel := make(chan result, 1)
 			results[i] = channel
 			go func() {
-				response, sendErr := sendAuthHTTPRequest(
+				response, sendErr := testfixture.SendAuthHTTPRequest(
 					ctx,
 					client,
 					http.MethodPost,
 					server.URL+path,
-					refreshBody(secret),
+					testfixture.RefreshBody(secret),
 					http.Header{raceHeader: {"1"}},
 				)
 				channel <- result{response: response, err: sendErr}
@@ -135,7 +146,7 @@ func newAuthRaceServer(
 			}
 		}
 		close(release)
-		var responses [2]authHTTPResponse
+		var responses [2]testfixture.AuthHTTPResponse
 		for i, channel := range results {
 			select {
 			case result := <-channel:

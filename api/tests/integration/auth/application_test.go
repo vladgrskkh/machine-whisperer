@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"context"
@@ -19,12 +19,14 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/usecase/auth"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 func TestAccountCreation(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
 	signup := auth.NewSignup(postgres.New(pool), hasher)
 	ctx, cancel := context.WithCancel(t.Context())
@@ -67,7 +69,7 @@ func TestAccountCreation(t *testing.T) {
 
 func TestConcurrentSignup(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	signup := auth.NewSignup(postgres.New(pool), password.Argon2id{})
 	results := make(chan error, 6)
 	start := make(chan struct{})
@@ -102,8 +104,8 @@ func TestConcurrentSignup(t *testing.T) {
 //nolint:tparallel // The database failure check must follow all signup error cases.
 func TestSignupHTTP(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	request := func(t *testing.T, body string) (int, map[string]json.RawMessage) {
 		t.Helper()
@@ -173,8 +175,8 @@ func TestSignupHTTP(t *testing.T) {
 
 func TestApplicationWithDatabase(t *testing.T) {
 	t.Parallel()
-	existing := accountPostgres.Pool(t)
-	config := authConfig(t)
+	existing := testutil.Postgres(t)
+	config := testfixture.AuthConfig(t)
 	config.Database.URL = existing.Config().ConnString()
 	app, err := application.New(t.Context(), config, application.WithDatabase(config.Database))
 	require.NoError(t, err)
@@ -194,8 +196,8 @@ func TestApplicationWithDatabase(t *testing.T) {
 
 func TestSignupRateLimit(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(
 		t,
 		pool,
 		application.Config{RateLimits: application.RateLimitsConfig{IP: middleware.RateLimitConfig{Limit: 1}}},

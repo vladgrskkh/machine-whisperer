@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package history_test
 
 import (
 	"encoding/base64"
@@ -18,6 +18,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 const (
@@ -37,23 +39,27 @@ func TestTelemetryHistoryOwnerAccess(t *testing.T) {
 	}))
 	t.Cleanup(analytics.Close)
 	server, owner, machineID := startHistoryServer(t, analytics.URL)
-	_, other := signupEnrollmentUser(t, server, `{"email":"other@example.com","password":"long enough password"}`)
+	_, other := testfixture.SignupEnrollmentUser(
+		t,
+		server,
+		`{"email":"other@example.com","password":"long enough password"}`,
+	)
 
 	path := historyPath(machineID)
-	unauthenticated := authHTTPRequest(t, server, http.MethodGet, path, "", nil)
-	assert.Equal(t, http.StatusUnauthorized, unauthenticated.status)
-	foreign := authHTTPRequest(t, server, http.MethodGet, path, "", bearer(other.AccessToken))
-	missing := authHTTPRequest(t, server, http.MethodGet, historyPath(uuid.NewString()), "", owner)
-	assert.Equal(t, http.StatusNotFound, foreign.status)
-	assert.Equal(t, http.StatusNotFound, missing.status)
-	assert.JSONEq(t, missing.body, foreign.body)
+	unauthenticated := testfixture.AuthHTTPRequest(t, server, http.MethodGet, path, "", nil)
+	assert.Equal(t, http.StatusUnauthorized, unauthenticated.Status)
+	foreign := testfixture.AuthHTTPRequest(t, server, http.MethodGet, path, "", testfixture.Bearer(other.AccessToken))
+	missing := testfixture.AuthHTTPRequest(t, server, http.MethodGet, historyPath(uuid.NewString()), "", owner)
+	assert.Equal(t, http.StatusNotFound, foreign.Status)
+	assert.Equal(t, http.StatusNotFound, missing.Status)
+	assert.JSONEq(t, missing.Body, foreign.Body)
 	assert.Zero(t, calls.Load())
 
-	response := authHTTPRequest(t, server, http.MethodGet, path, "", owner)
-	require.Equal(t, http.StatusOK, response.status, response.body)
-	assert.Equal(t, "no-store", response.header.Get("Cache-Control"))
-	assert.Equal(t, "application/json", response.header.Get("Content-Type"))
-	assert.JSONEq(t, emptyHistoryPage, response.body)
+	response := testfixture.AuthHTTPRequest(t, server, http.MethodGet, path, "", owner)
+	require.Equal(t, http.StatusOK, response.Status, response.Body)
+	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
+	assert.Equal(t, "application/json", response.Header.Get("Content-Type"))
+	assert.JSONEq(t, emptyHistoryPage, response.Body)
 	assert.EqualValues(t, 1, calls.Load())
 }
 
@@ -85,9 +91,9 @@ func TestTelemetryHistoryRejectsInvalidQuery(t *testing.T) {
 		path + "?cursor=" + base64.RawURLEncoding.EncodeToString([]byte(cursorBody+`,"unexpected":true}`)),
 		path + "?cursor=" + strings.Repeat("A", 513),
 	} {
-		response := authHTTPRequest(t, server, http.MethodGet, target, "", owner)
-		assert.Equal(t, http.StatusBadRequest, response.status, target)
-		assert.Contains(t, response.body, `"invalid_input"`, target)
+		response := testfixture.AuthHTTPRequest(t, server, http.MethodGet, target, "", owner)
+		assert.Equal(t, http.StatusBadRequest, response.Status, target)
+		assert.Contains(t, response.Body, `"invalid_input"`, target)
 	}
 	assert.Zero(t, calls.Load())
 }
@@ -125,16 +131,16 @@ func TestTelemetryHistoryAnalyticsFailureIsSanitized(t *testing.T) {
 		if target == "" {
 			analytics.Close()
 		}
-		response := authHTTPRequest(t, server, http.MethodGet, path+target, "", owner)
-		assert.NotContains(t, response.body, sensitive)
-		assert.NotContains(t, response.body, analytics.URL)
-		assert.NotContains(t, response.body, historyAnalyticsKey)
+		response := testfixture.AuthHTTPRequest(t, server, http.MethodGet, path+target, "", owner)
+		assert.NotContains(t, response.Body, sensitive)
+		assert.NotContains(t, response.Body, analytics.URL)
+		assert.NotContains(t, response.Body, historyAnalyticsKey)
 		if target == "?limit=1" {
-			assert.Equal(t, http.StatusBadRequest, response.status)
-			assert.Contains(t, response.body, `"invalid_input"`)
+			assert.Equal(t, http.StatusBadRequest, response.Status)
+			assert.Contains(t, response.Body, `"invalid_input"`)
 		} else {
-			assert.Equal(t, http.StatusServiceUnavailable, response.status)
-			assert.Contains(t, response.body, `"telemetry_unavailable"`)
+			assert.Equal(t, http.StatusServiceUnavailable, response.Status)
+			assert.Contains(t, response.Body, `"telemetry_unavailable"`)
 		}
 	}
 	assert.Zero(t, redirects.Load())
@@ -179,14 +185,21 @@ func TestTelemetryHistoryRejectsMalformedAnalyticsPage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			limit := strconv.Itoa(index + 1)
-			response := authHTTPRequest(t, server, http.MethodGet, historyPath(machineID)+"?limit="+limit, "", owner)
-			assert.Equal(t, tc.status, response.status)
+			response := testfixture.AuthHTTPRequest(
+				t,
+				server,
+				http.MethodGet,
+				historyPath(machineID)+"?limit="+limit,
+				"",
+				owner,
+			)
+			assert.Equal(t, tc.status, response.Status)
 			if tc.status == http.StatusOK {
-				assert.JSONEq(t, responses[limit], response.body)
+				assert.JSONEq(t, responses[limit], response.Body)
 				return
 			}
-			assert.Contains(t, response.body, `"telemetry_unavailable"`)
-			assert.NotContains(t, response.body, "private invalid ID")
+			assert.Contains(t, response.Body, `"telemetry_unavailable"`)
+			assert.NotContains(t, response.Body, "private invalid ID")
 		})
 	}
 }
@@ -227,13 +240,13 @@ func TestTelemetryHistoryCursorForwarding(t *testing.T) {
 	cursor := historyCursor(machineID)
 	next := historyCursorAt(machineID, "2026-11-24T11:59:59.123456Z", "99999999-9999-4999-8999-999999999999")
 	downstreamCursor.Store(&next)
-	response := authHTTPRequest(
+	response := testfixture.AuthHTTPRequest(
 		t, server, http.MethodGet, historyPath(machineID)+"?limit=1000&cursor="+cursor, "", owner,
 	)
-	require.Equal(t, http.StatusOK, response.status, response.body)
+	require.Equal(t, http.StatusOK, response.Status, response.Body)
 	assert.Equal(t, "/internal/v1/machines/"+machineID+"/telemetry", receivedPath.Load())
 	assert.Equal(t, cursor, receivedCursor.Load())
-	assert.JSONEq(t, fmt.Sprintf(`{"items":%s,"next_cursor":%q}`, items, next), response.body)
+	assert.JSONEq(t, fmt.Sprintf(`{"items":%s,"next_cursor":%q}`, items, next), response.Body)
 }
 
 func startHistoryServer(t *testing.T, analyticsURL string) (*httptest.Server, http.Header, string) {
@@ -249,14 +262,20 @@ func startHistoryServer(t *testing.T, analyticsURL string) (*httptest.Server, ht
 		RetryMax:        time.Minute,
 		Retention:       time.Hour,
 	}}
-	server := newAuthServer(t, telemetryHistoryPostgres.Pool(t), config)
+	server := testfixture.NewAuthServer(t, testutil.Postgres(t), config)
 	t.Cleanup(server.Close)
-	owner := startHTTPSession(t, server)
-	return server, bearer(owner.AccessToken), createEnrollmentMachine(t, server, owner.AccessToken)
+	owner := testfixture.StartHTTPSession(t, server)
+	return server, testfixture.Bearer(
+			owner.AccessToken,
+		), testfixture.CreateEnrollmentMachine(
+			t,
+			server,
+			owner.AccessToken,
+		)
 }
 
 func historyPath(machineID string) string {
-	return machinesPath + "/" + machineID + "/telemetry"
+	return testfixture.MachinesPath + "/" + machineID + "/telemetry"
 }
 
 func historyCursor(machineID string) string {

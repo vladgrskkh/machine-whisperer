@@ -14,11 +14,13 @@ Use Superpowers subagent driven development with an independent review for each 
 
 ## 2. PostgreSQL containers per integration suite
 
-- [x] Give each logical suite in `api/tests/integration` its own named PostgreSQL fixture. Start its container on first use and close every started container from the package's `TestMain`. Keep a separate pool and migrated schema per test.
+- [x] Move each logical suite into its own Go package under `api/tests/integration`. Give each package a `TestMain` that owns its PostgreSQL fixture. Start the container on first use and close it after the suite finishes. Keep a separate pool and migrated schema per test.
 - [x] Verify server sharing within a suite, server isolation between suites, schema isolation, Go test selection, and cleanup. Compare the full race-enabled run at `-parallel=4` with the 272.6-second per-test-container baseline and the 74.2-second package-wide-container trial.
 
-The per-suite run took 108.2 seconds locally. It used a temporary in-memory
-PostgreSQL data mount because the Docker Desktop virtual disk was full.
+The initial per-suite fixture run in a single Go package took 108.2 seconds
+locally. The eight-package run took 140.7 seconds at `-p=2 -parallel=4`.
+Both used a temporary in-memory PostgreSQL data mount because the Docker
+Desktop virtual disk was full.
 
 ## 3. Deployment tests and Compose E2E
 

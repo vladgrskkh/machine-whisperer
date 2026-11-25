@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package telemetrystorage_test
 
 import (
 	"context"
@@ -21,14 +21,13 @@ import (
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
-
-const insertTelemetryIdentity = `INSERT INTO telemetry_events (device_id,event_id,machine_id,observed_at,payload_hash,expires_at)
-	VALUES ($1,$2,$3,$4,$5,$6)`
 
 func TestTelemetryStorageConstraints(t *testing.T) {
 	t.Parallel()
-	pool := telemetryStoragePostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	event, target := telemetryStorageEvent(t, pool)
 	deviceID, eventID, machineID := event.DeviceID, event.EventID, event.MachineID
 	observedAt, payloadHash := event.ObservedAt, event.PayloadHash
@@ -36,18 +35,35 @@ func TestTelemetryStorageConstraints(t *testing.T) {
 	ctx := t.Context()
 
 	insertIdentity := func(deviceID, eventID, machineID string, hash []byte) error {
-		_, err := pool.Exec(ctx, insertTelemetryIdentity, deviceID, eventID, machineID, observedAt, hash, expiresAt)
+		_, err := pool.Exec(
+			ctx,
+			testfixture.InsertTelemetryIdentity,
+			deviceID,
+			eventID,
+			machineID,
+			observedAt,
+			hash,
+			expiresAt,
+		)
 		return err
 	}
 	require.NoError(t, insertIdentity(deviceID, eventID, machineID, payloadHash[:]))
-	requirePGCode(t, insertIdentity(deviceID, eventID, machineID, payloadHash[:]), pgerrcode.UniqueViolation)
-	requirePGCode(t, insertIdentity(deviceID, uuid.NewString(), machineID, payloadHash[:31]), pgerrcode.CheckViolation)
-	requirePGCode(
+	testfixture.RequirePGCode(
+		t,
+		insertIdentity(deviceID, eventID, machineID, payloadHash[:]),
+		pgerrcode.UniqueViolation,
+	)
+	testfixture.RequirePGCode(
+		t,
+		insertIdentity(deviceID, uuid.NewString(), machineID, payloadHash[:31]),
+		pgerrcode.CheckViolation,
+	)
+	testfixture.RequirePGCode(
 		t,
 		insertIdentity(uuid.NewString(), eventID, machineID, payloadHash[:]),
 		pgerrcode.ForeignKeyViolation,
 	)
-	requirePGCode(
+	testfixture.RequirePGCode(
 		t,
 		insertIdentity(deviceID, uuid.NewString(), uuid.NewString(), payloadHash[:]),
 		pgerrcode.ForeignKeyViolation,
@@ -57,7 +73,7 @@ func TestTelemetryStorageConstraints(t *testing.T) {
 	_, err := pool.Exec(ctx, outbox, deviceID, eventID, machineID, observedAt)
 	require.NoError(t, err)
 	_, err = pool.Exec(ctx, outbox, deviceID, eventID, machineID, observedAt)
-	requirePGCode(t, err, pgerrcode.UniqueViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 	otherDeviceID := createTelemetryStorageDevice(t, pool, target)
 	require.NoError(t, insertIdentity(otherDeviceID, eventID, machineID, payloadHash[:]))
 	_, err = pool.Exec(ctx, outbox, otherDeviceID, eventID, machineID, observedAt)
@@ -66,7 +82,7 @@ func TestTelemetryStorageConstraints(t *testing.T) {
 
 func TestTelemetryEventAndOutboxInsertAtomically(t *testing.T) {
 	t.Parallel()
-	pool := telemetryStoragePostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	event, _ := telemetryStorageEvent(t, pool)
 	ctx := t.Context()
 	repository := telemetrypostgres.New()
@@ -115,7 +131,7 @@ func TestTelemetryEventAndOutboxInsertAtomically(t *testing.T) {
 
 func TestTelemetryMachineCursor(t *testing.T) {
 	t.Parallel()
-	pool := telemetryStoragePostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	event, target := telemetryStorageEvent(t, pool)
 	repository := telemetrypostgres.New()
 	manager := transactionpostgres.New(pool)
@@ -153,8 +169,8 @@ func TestTelemetryMachineCursor(t *testing.T) {
 
 func TestTelemetryMachineReceiptTimeIsSampledAfterLockWait(t *testing.T) {
 	t.Parallel()
-	pool := telemetryStoragePostgres.Pool(t)
-	target, _ := enrollmentMachines(t, pool)
+	pool := testutil.Postgres(t)
+	target, _ := testfixture.EnrollmentMachines(t, pool)
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
 	defer cancel()
 	blocker, err := pool.Begin(ctx)
@@ -181,7 +197,7 @@ func TestTelemetryMachineReceiptTimeIsSampledAfterLockWait(t *testing.T) {
 		results <- result{dbNow: dbNow, err: txErr}
 	}()
 	require.Eventually(t, func() bool {
-		return telemetryLockHasWaiter(ctx, pool, blockerPID)
+		return testfixture.TelemetryLockHasWaiter(ctx, pool, blockerPID)
 	}, 5*time.Second, 10*time.Millisecond)
 
 	var beforeRelease time.Time
@@ -196,17 +212,9 @@ func TestTelemetryMachineReceiptTimeIsSampledAfterLockWait(t *testing.T) {
 	}
 }
 
-func telemetryLockHasWaiter(ctx context.Context, pool *pgxpool.Pool, blockerPID int) bool {
-	var blocked bool
-	err := pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid))
-	)`, blockerPID).Scan(&blocked)
-	return err == nil && blocked
-}
-
 func TestTelemetryExpiredIdempotencyCleanup(t *testing.T) {
 	t.Parallel()
-	pool := telemetryStoragePostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	event, _ := telemetryStorageEvent(t, pool)
 	active := event
 	active.EventID = uuid.NewString()
@@ -289,7 +297,7 @@ func assertTelemetryIdentity(t *testing.T, pool *pgxpool.Pool, event telemetry.E
 
 func telemetryStorageEvent(t *testing.T, pool *pgxpool.Pool) (telemetry.Event, machine.Machine) {
 	t.Helper()
-	target, _ := enrollmentMachines(t, pool)
+	target, _ := testfixture.EnrollmentMachines(t, pool)
 	deviceID := createTelemetryStorageDevice(t, pool, target)
 	frequency := 39.1
 	return telemetry.Event{
@@ -304,7 +312,7 @@ func telemetryStorageEvent(t *testing.T, pool *pgxpool.Pool) (telemetry.Event, m
 
 func createTelemetryStorageDevice(t *testing.T, pool *pgxpool.Pool, target machine.Machine) string {
 	t.Helper()
-	device, _, _ := enrollmentDevice(target.CreatedAt)
+	device, _, _ := testfixture.EnrollmentDevice(target.CreatedAt)
 	require.NoError(t, devicepostgres.New(pool).Create(t.Context(), device))
 	_, err := pool.Exec(t.Context(),
 		`UPDATE devices SET machine_id=$1,claimed_at=$2,claim_verifier=NULL WHERE id=$3`,

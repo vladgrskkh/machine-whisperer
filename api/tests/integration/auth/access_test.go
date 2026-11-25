@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"crypto/ed25519"
@@ -20,7 +20,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -28,12 +27,13 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 func TestLoginHTTP(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	post := func(path, body string) (int, http.Header, []byte) {
 		t.Helper()
@@ -86,8 +86,8 @@ func TestLoginHTTP(t *testing.T) {
 
 func TestProtectedRouteRequiresUserBearer(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	for _, value := range []string{"", "device-key", "Bearer device-key", "Basic abc", "Bearer a b", "Bearer " + strings.Repeat("x", 8193)} {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/v1/users/me", nil)
@@ -101,30 +101,10 @@ func TestProtectedRouteRequiresUserBearer(t *testing.T) {
 	}
 }
 
-func authConfig(t *testing.T) application.Config {
-	t.Helper()
-	id, signing, verifying, _ := testutil.AuthKeys(t)
-	return application.Config{
-		Auth: application.AuthConfig{SigningKeyID: id, SigningKeyFile: signing, VerifyKeysFile: verifying},
-	}
-}
-
-func newAuthServer(t *testing.T, pool *pgxpool.Pool, config application.Config) *httptest.Server {
-	t.Helper()
-	keys := authConfig(t)
-	config.Auth.SigningKeyID = keys.Auth.SigningKeyID
-	config.Auth.SigningKeyFile = keys.Auth.SigningKeyFile
-	config.Auth.VerifyKeysFile = keys.Auth.VerifyKeysFile
-	app, err := application.New(t.Context(), config, application.WithPool(pool))
-	require.NoError(t, err)
-	t.Cleanup(app.Close)
-	return httptest.NewServer(app.Routes())
-}
-
 func TestLoginHTTPRejectsInvalidBodies(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	for _, body := range []string{
 		`{`, `null`, `[]`, `"credentials"`, `{"email":1}`, `{"password":{}}`,
@@ -166,10 +146,10 @@ func TestLoginHTTPRejectsInvalidBodies(t *testing.T) {
 
 func TestSharedAuthIPBudget(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	var seconds atomic.Int64
 	now := func() time.Time { return time.Unix(seconds.Load(), 0) }
-	server := newAuthServer(
+	server := testfixture.NewAuthServer(
 		t,
 		pool,
 		application.Config{
@@ -180,46 +160,53 @@ func TestSharedAuthIPBudget(t *testing.T) {
 		},
 	)
 	t.Cleanup(server.Close)
-	pair := startHTTPSession(t, server)
-	logoutPair := loginHTTPSession(t, server)
-	paths := []string{"/v1/auth/signup", "/v1/auth/login", refreshPath}
+	pair := testfixture.StartHTTPSession(t, server)
+	logoutPair := testfixture.LoginHTTPSession(t, server)
+	paths := []string{"/v1/auth/signup", "/v1/auth/login", testfixture.RefreshPath}
 	headers := func(spoof string) http.Header {
 		return http.Header{"X-Forwarded-For": {strings.Repeat("spoof,", 2000) + spoof, "198.51.100.8"}}
 	}
 	for index := range 30 {
 		path := paths[index%len(paths)]
 		spoof := fmt.Sprintf("192.0.2.%d", index+1)
-		response := authHTTPRequest(t, server, http.MethodPost, path, `{}`, headers(spoof))
-		assert.Equal(t, http.StatusBadRequest, response.status)
+		response := testfixture.AuthHTTPRequest(t, server, http.MethodPost, path, `{}`, headers(spoof))
+		assert.Equal(t, http.StatusBadRequest, response.Status)
 	}
 	for _, request := range []struct{ path, body string }{
-		{refreshPath, refreshBody(pair.RefreshToken)},
+		{testfixture.RefreshPath, testfixture.RefreshBody(pair.RefreshToken)},
 		{"/v1/auth/signup", `{"email":"limited@example.com","password":"long enough password"}`},
-		{"/v1/auth/login", httpCredentials},
+		{"/v1/auth/login", testfixture.SessionSignupBody},
 	} {
-		response := authHTTPRequest(t, server, http.MethodPost, request.path, request.body, headers("198.51.100.99"))
-		assert.Equal(t, http.StatusTooManyRequests, response.status, request.path)
-		assert.Equal(t, "60", response.header.Get("Retry-After"))
-		assert.JSONEq(t, `{"error":{"code":"rate_limited","message":"Too many requests"}}`, response.body)
+		response := testfixture.AuthHTTPRequest(
+			t,
+			server,
+			http.MethodPost,
+			request.path,
+			request.body,
+			headers("198.51.100.99"),
+		)
+		assert.Equal(t, http.StatusTooManyRequests, response.Status, request.path)
+		assert.Equal(t, "60", response.Header.Get("Retry-After"))
+		assert.JSONEq(t, `{"error":{"code":"rate_limited","message":"Too many requests"}}`, response.Body)
 		if request.path != "/v1/auth/signup" {
-			assert.Equal(t, "no-store", response.header.Get("Cache-Control"))
+			assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
 		}
 	}
-	otherIP := authHTTPRequest(
-		t, server, http.MethodPost, refreshPath, `{}`, http.Header{"X-Forwarded-For": {"198.51.100.9"}},
+	otherIP := testfixture.AuthHTTPRequest(
+		t, server, http.MethodPost, testfixture.RefreshPath, `{}`, http.Header{"X-Forwarded-For": {"198.51.100.9"}},
 	)
-	assert.Equal(t, http.StatusBadRequest, otherIP.status)
-	logout := authHTTPRequest(
+	assert.Equal(t, http.StatusBadRequest, otherIP.Status)
+	logout := testfixture.AuthHTTPRequest(
 		t,
 		server,
 		http.MethodPost,
 		logoutPath,
-		refreshBody(logoutPair.RefreshToken),
+		testfixture.RefreshBody(logoutPair.RefreshToken),
 		headers("192.0.2.5"),
 	)
 	assertHTTPLogout(t, logout)
-	me := authHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers("192.0.2.5"))
-	assert.Equal(t, http.StatusUnauthorized, me.status)
+	me := testfixture.AuthHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers("192.0.2.5"))
+	assert.Equal(t, http.StatusUnauthorized, me.Status)
 	state := readRefreshSession(t, pool, httpSessionID(t, pair))
 	assert.Len(t, state.tokens, 1)
 	oldHash := refreshHash(t, pair.RefreshToken)
@@ -235,21 +222,21 @@ func TestSharedAuthIPBudget(t *testing.T) {
 	assert.Equal(t, 2, sessions)
 
 	seconds.Store(60)
-	response := authHTTPRequest(
+	response := testfixture.AuthHTTPRequest(
 		t,
 		server,
 		http.MethodPost,
-		refreshPath,
-		refreshBody(pair.RefreshToken),
+		testfixture.RefreshPath,
+		testfixture.RefreshBody(pair.RefreshToken),
 		headers("192.0.2.6"),
 	)
-	readHTTPTokenPair(t, response)
+	testfixture.ReadHTTPTokenPair(t, response)
 }
 
 func TestLoginFailuresUseIPBudget(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 
 	for range 6 {
@@ -266,7 +253,7 @@ func TestLoginFailuresUseIPBudget(t *testing.T) {
 
 func TestAccessJWTHTTP(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	id, signing, verifying, private := testutil.AuthKeys(t)
 	oldPublic, oldPrivate, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -410,8 +397,8 @@ func TestAccessJWTHTTP(t *testing.T) {
 
 func TestLoginMethodErrorsDoNotCache(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server := newAuthServer(t, pool, application.Config{})
+	pool := testutil.Postgres(t)
+	server := testfixture.NewAuthServer(t, pool, application.Config{})
 	t.Cleanup(server.Close)
 	response, err := server.Client().Get(server.URL + "/v1/auth/login")
 	require.NoError(t, err)
@@ -422,38 +409,41 @@ func TestLoginMethodErrorsDoNotCache(t *testing.T) {
 
 func TestAccessJWTsRemainValidAfterLogoutAndRefreshReuse(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
-	server, setElapsed := newSessionServer(t, pool)
-	loggedOut := startHTTPSession(t, server)
-	reused := loginHTTPSession(t, server)
-	assertHTTPLogout(t, postRefreshToken(t, server, logoutPath, loggedOut.RefreshToken))
-	readHTTPTokenPair(t, postRefreshToken(t, server, refreshPath, reused.RefreshToken))
-	assertRefreshHTTPRejected(t, postRefreshToken(t, server, refreshPath, reused.RefreshToken))
+	pool := testutil.Postgres(t)
+	server, setElapsed := testfixture.NewSessionServer(t, pool)
+	loggedOut := testfixture.StartHTTPSession(t, server)
+	reused := testfixture.LoginHTTPSession(t, server)
+	assertHTTPLogout(t, testfixture.PostRefreshToken(t, server, logoutPath, loggedOut.RefreshToken))
+	testfixture.ReadHTTPTokenPair(
+		t,
+		testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, reused.RefreshToken),
+	)
+	assertRefreshHTTPRejected(t, testfixture.PostRefreshToken(t, server, testfixture.RefreshPath, reused.RefreshToken))
 
-	getMe := func(raw string) authHTTPResponse {
+	getMe := func(raw string) testfixture.AuthHTTPResponse {
 		t.Helper()
 		headers := http.Header{"Authorization": {"Bearer " + raw}}
-		return authHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers)
+		return testfixture.AuthHTTPRequest(t, server, http.MethodGet, "/v1/users/me", "", headers)
 	}
-	assertUnauthorized := func(response authHTTPResponse) {
+	assertUnauthorized := func(response testfixture.AuthHTTPResponse) {
 		t.Helper()
-		assert.Equal(t, http.StatusUnauthorized, response.status)
-		assert.Equal(t, "Bearer", response.header.Get("WWW-Authenticate"))
-		assert.JSONEq(t, authFailedJSON, response.body)
+		assert.Equal(t, http.StatusUnauthorized, response.Status)
+		assert.Equal(t, "Bearer", response.Header.Get("WWW-Authenticate"))
+		assert.JSONEq(t, testfixture.AuthFailedJSON, response.Body)
 	}
 	assertUnauthorized(getMe(loggedOut.RefreshToken))
 	assertUnauthorized(getMe("device-key"))
 	for _, elapsed := range []time.Duration{0, 15 * time.Minute, 15*time.Minute + 29*time.Second} {
 		setElapsed(elapsed)
-		assert.Equal(t, http.StatusOK, getMe(loggedOut.AccessToken).status, elapsed)
-		assert.Equal(t, http.StatusOK, getMe(reused.AccessToken).status, elapsed)
+		assert.Equal(t, http.StatusOK, getMe(loggedOut.AccessToken).Status, elapsed)
+		assert.Equal(t, http.StatusOK, getMe(reused.AccessToken).Status, elapsed)
 	}
 	setElapsed(15*time.Minute + 30*time.Second)
 	assertUnauthorized(getMe(loggedOut.AccessToken))
 	assertUnauthorized(getMe(reused.AccessToken))
 
-	deleted := loginHTTPSession(t, server)
-	require.Equal(t, http.StatusOK, getMe(deleted.AccessToken).status)
+	deleted := testfixture.LoginHTTPSession(t, server)
+	require.Equal(t, http.StatusOK, getMe(deleted.AccessToken).Status)
 	_, err := pool.Exec(t.Context(), "DELETE FROM users")
 	require.NoError(t, err)
 	assertUnauthorized(getMe(deleted.AccessToken))

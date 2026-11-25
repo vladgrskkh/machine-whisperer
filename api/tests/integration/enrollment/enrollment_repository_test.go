@@ -1,11 +1,9 @@
 //go:build integration
 
-package integration_test
+package enrollment_test
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 	"testing"
 	"time"
@@ -20,13 +18,14 @@ import (
 	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
-	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 func TestMachineRepositoryOwnershipAndTransactions(t *testing.T) {
 	t.Parallel()
-	pool := enrollmentPostgres.Pool(t)
-	first, other := enrollmentMachines(t, pool)
+	pool := testutil.Postgres(t)
+	first, other := testfixture.EnrollmentMachines(t, pool)
 	ctx := t.Context()
 	repository := machinepostgres.New(pool)
 	assert.ErrorIs(t, repository.Create(ctx, first), machine.ErrConflict)
@@ -70,12 +69,12 @@ func TestMachineRepositoryOwnershipAndTransactions(t *testing.T) {
 
 func TestDeviceRepositoryConsumesClaimAtomically(t *testing.T) {
 	t.Parallel()
-	pool := enrollmentPostgres.Pool(t)
-	owned, other := enrollmentMachines(t, pool)
+	pool := testutil.Postgres(t)
+	owned, other := testfixture.EnrollmentMachines(t, pool)
 	ctx := t.Context()
 	repository := devicepostgres.New(pool)
 	manager := transactionpostgres.New(pool)
-	value, key, code := enrollmentDevice(owned.CreatedAt)
+	value, key, code := testfixture.EnrollmentDevice(owned.CreatedAt)
 	require.NoError(t, repository.Create(ctx, value))
 	assert.ErrorIs(t, repository.Create(ctx, value), device.ErrConflict)
 	assert.ErrorIs(
@@ -132,9 +131,9 @@ func TestDeviceRepositoryConsumesClaimAtomically(t *testing.T) {
 
 func TestDeviceRepositoryRejectsRevokedAndMissingDevices(t *testing.T) {
 	t.Parallel()
-	pool := enrollmentPostgres.Pool(t)
-	owned, _ := enrollmentMachines(t, pool)
-	value, _, _ := enrollmentDevice(owned.CreatedAt)
+	pool := testutil.Postgres(t)
+	owned, _ := testfixture.EnrollmentMachines(t, pool)
+	value, _, _ := testfixture.EnrollmentDevice(owned.CreatedAt)
 	ctx := t.Context()
 	repository := devicepostgres.New(pool)
 	manager := transactionpostgres.New(pool)
@@ -187,31 +186,4 @@ func assertConcurrentDeviceClaims(
 		}
 	}
 	assert.Equal(t, 1, successes)
-}
-
-func enrollmentMachines(t *testing.T, pool *pgxpool.Pool) (machine.Machine, machine.Machine) {
-	t.Helper()
-	ctx := t.Context()
-	users := userpostgres.New(pool)
-	firstOwner, err := users.Create(ctx, "first-owner@example.com", "test hash")
-	require.NoError(t, err)
-	otherOwner, err := users.Create(ctx, "other-owner@example.com", "test hash")
-	require.NoError(t, err)
-	now := time.Date(2026, time.November, 23, 12, 0, 0, 0, time.UTC)
-	owned := machine.Machine{ID: uuid.NewString(), OwnerUserID: firstOwner.ID, Name: "First motor", CreatedAt: now}
-	other := machine.Machine{ID: uuid.NewString(), OwnerUserID: otherOwner.ID, Name: "Other motor", CreatedAt: now}
-	repository := machinepostgres.New(pool)
-	require.NoError(t, repository.Create(ctx, owned))
-	require.NoError(t, repository.Create(ctx, other))
-	return owned, other
-}
-
-func enrollmentDevice(now time.Time) (device.Device, [32]byte, [32]byte) {
-	var key, code [32]byte
-	rand.Read(key[:])
-	rand.Read(code[:])
-	return device.Device{
-		ID: uuid.NewString(), KeyVerifier: sha256.Sum256(key[:]), ClaimVerifier: sha256.Sum256(code[:]),
-		ClaimExpiresAt: now.Add(time.Hour), CreatedAt: now,
-	}, key, code
 }

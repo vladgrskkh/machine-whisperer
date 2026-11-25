@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"context"
@@ -16,6 +16,8 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 const provisionerRole = "device_provisioner"
@@ -35,13 +37,13 @@ func TestUserRoleStorageConstraints(t *testing.T) {
 	assert.Zero(t, count)
 
 	_, err = fixture.pool.Exec(ctx, insertRole, account.ID, "unsupported_role")
-	requirePGCode(t, err, pgerrcode.CheckViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.CheckViolation)
 	_, err = fixture.pool.Exec(ctx, insertRole, uuid.NewString(), provisionerRole)
-	requirePGCode(t, err, pgerrcode.ForeignKeyViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.ForeignKeyViolation)
 	_, err = fixture.pool.Exec(ctx, insertRole, account.ID, provisionerRole)
 	require.NoError(t, err)
 	_, err = fixture.pool.Exec(ctx, insertRole, account.ID, provisionerRole)
-	requirePGCode(t, err, pgerrcode.UniqueViolation)
+	testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 	_, err = fixture.pool.Exec(ctx, "DELETE FROM users WHERE id=$1", account.ID)
 	require.NoError(t, err)
 	require.NoError(
@@ -103,7 +105,7 @@ func TestRefreshReadsRolesAfterConsumption(t *testing.T) {
 
 func TestUserRoleRepositoryTransactions(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	repository := userpostgres.New(pool)
 	ctx := t.Context()
 	account, err := repository.Create(ctx, "role-rollback@example.com", "test hash")

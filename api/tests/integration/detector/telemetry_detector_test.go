@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package detector_test
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 type alertResponse struct {
@@ -38,19 +39,24 @@ type alertResponse struct {
 }
 
 type detectorFixture struct {
-	telemetryFixture
+	testfixture.TelemetryFixture
 }
 
 func setupDetector(t *testing.T) detectorFixture {
 	t.Helper()
-	return detectorFixture{setupDeviceTelemetry(t, &telemetryDetectorPostgres)}
+	return detectorFixture{testfixture.SetupDeviceTelemetry(t)}
 }
 
-func (f detectorFixture) baseline(t *testing.T, stddev float64) machineBaselineResponse {
+func (f detectorFixture) baseline(t *testing.T, stddev float64) testfixture.MachineBaselineResponse {
 	t.Helper()
-	return readMachineBaseline(t, authHTTPRequest(t, f.server, http.MethodPut,
-		machinesPath+"/"+f.machineID+"/baseline", fmt.Sprintf(`{"mean_rms_g":10,"stddev_rms_g":%g}`, stddev),
-		bearer(f.factory.AccessToken)))
+	return testfixture.ReadMachineBaseline(t, testfixture.AuthHTTPRequest(
+		t,
+		f.Server,
+		http.MethodPut,
+		testfixture.MachinesPath+"/"+f.MachineID+"/baseline",
+		fmt.Sprintf(`{"mean_rms_g":10,"stddev_rms_g":%g}`, stddev),
+		testfixture.Bearer(f.Factory.AccessToken),
+	))
 }
 
 func detectorObservation(eventID string, observedAt time.Time, state string, reading float64) string {
@@ -61,9 +67,9 @@ func detectorObservation(eventID string, observedAt time.Time, state string, rea
 func (f detectorFixture) observe(t *testing.T, index int, state string, reading float64) string {
 	t.Helper()
 	eventID := uuid.NewString()
-	body := detectorObservation(eventID, f.observed.Add(time.Duration(index)*time.Second), state, reading)
-	response := f.post(t, body)
-	require.Equal(t, http.StatusAccepted, response.status, response.body)
+	body := detectorObservation(eventID, f.Observed.Add(time.Duration(index)*time.Second), state, reading)
+	response := f.Post(t, body)
+	require.Equal(t, http.StatusAccepted, response.Status, response.Body)
 	return eventID
 }
 
@@ -78,12 +84,18 @@ func (f detectorFixture) readings(t *testing.T, start int, readings ...float64) 
 
 func (f detectorFixture) history(t *testing.T) []alertResponse {
 	t.Helper()
-	response := authHTTPRequest(t, f.server, http.MethodGet, machinesPath+"/"+f.machineID+"/alerts", "",
-		bearer(f.factory.AccessToken))
-	require.Equal(t, http.StatusOK, response.status, response.body)
-	assert.Equal(t, "no-store", response.header.Get("Cache-Control"))
+	response := testfixture.AuthHTTPRequest(
+		t,
+		f.Server,
+		http.MethodGet,
+		testfixture.MachinesPath+"/"+f.MachineID+"/alerts",
+		"",
+		testfixture.Bearer(f.Factory.AccessToken),
+	)
+	require.Equal(t, http.StatusOK, response.Status, response.Body)
+	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
 	var alerts []alertResponse
-	require.NoError(t, json.Unmarshal([]byte(response.body), &alerts))
+	require.NoError(t, json.Unmarshal([]byte(response.Body), &alerts))
 	require.NotNil(t, alerts)
 	return alerts
 }
@@ -101,16 +113,16 @@ func acknowledgePath(alertID string) string {
 
 func (f detectorFixture) acknowledge(t *testing.T, alertID string) {
 	t.Helper()
-	response := authHTTPRequest(
+	response := testfixture.AuthHTTPRequest(
 		t,
-		f.server,
+		f.Server,
 		http.MethodPost,
 		acknowledgePath(alertID),
 		"",
-		bearer(f.factory.AccessToken),
+		testfixture.Bearer(f.Factory.AccessToken),
 	)
-	require.Equal(t, http.StatusNoContent, response.status, response.body)
-	assert.Equal(t, "no-store", response.header.Get("Cache-Control"))
+	require.Equal(t, http.StatusNoContent, response.Status, response.Body)
+	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
 }
 
 func TestTelemetryDetectorTransitions(t *testing.T) {
@@ -119,9 +131,9 @@ func TestTelemetryDetectorTransitions(t *testing.T) {
 	f.readings(t, 0, 100, 100, 100)
 	assert.Empty(t, f.history(t))
 	var baselineStateExists bool
-	require.NoError(t, f.pool.QueryRow(t.Context(), `SELECT EXISTS (
+	require.NoError(t, f.Pool.QueryRow(t.Context(), `SELECT EXISTS (
 		SELECT 1 FROM machine_detector_state WHERE machine_id=$1
-	)`, f.machineID).Scan(&baselineStateExists))
+	)`, f.MachineID).Scan(&baselineStateExists))
 	assert.False(t, baselineStateExists)
 
 	f.baseline(t, 2)
@@ -133,10 +145,10 @@ func TestTelemetryDetectorTransitions(t *testing.T) {
 	history := f.history(t)
 	require.Len(t, history, 1)
 	opened := history[0]
-	assert.Equal(t, f.machineID, opened.MachineID)
-	assert.Equal(t, f.device.DeviceID, opened.TriggerDeviceID)
+	assert.Equal(t, f.MachineID, opened.MachineID)
+	assert.Equal(t, f.Device.DeviceID, opened.TriggerDeviceID)
 	assert.Equal(t, trigger, opened.TriggerEventID)
-	assert.Equal(t, f.observed.Add(8*time.Second), opened.TriggeredAt)
+	assert.Equal(t, f.Observed.Add(8*time.Second), opened.TriggeredAt)
 	assert.InDelta(t, 4.0, opened.TriggerZScore, 0)
 	assert.EqualValues(t, 1, opened.TriggerBaselineVersion)
 	assert.InDelta(t, 10.0, opened.TriggerMeanRMSG, 0)
@@ -156,11 +168,11 @@ func TestTelemetryDetectorTransitions(t *testing.T) {
 	recovery := f.readings(t, 15, 12)
 	recovered := f.latestAlert(t)
 	require.NotNil(t, recovered.RecoveredAt)
-	assert.Equal(t, f.observed.Add(15*time.Second), *recovered.RecoveredAt)
+	assert.Equal(t, f.Observed.Add(15*time.Second), *recovered.RecoveredAt)
 	require.NotNil(t, recovered.RecoveryEventID)
 	assert.Equal(t, recovery, *recovered.RecoveryEventID)
 	require.NotNil(t, recovered.RecoveryDeviceID)
-	assert.Equal(t, f.device.DeviceID, *recovered.RecoveryDeviceID)
+	assert.Equal(t, f.Device.DeviceID, *recovered.RecoveryDeviceID)
 	require.NotNil(t, recovered.RecoveryBaselineVersion)
 	assert.EqualValues(t, 2, *recovered.RecoveryBaselineVersion)
 	assert.Equal(t, opened.TriggerEventID, recovered.TriggerEventID)
@@ -181,14 +193,14 @@ func TestTelemetryDetectorIdempotentRetry(t *testing.T) {
 	t.Parallel()
 	f := setupDetector(t)
 	f.baseline(t, 2)
-	body := detectorObservation(uuid.NewString(), f.observed, "running", 18)
+	body := detectorObservation(uuid.NewString(), f.Observed, "running", 18)
 	for range 3 {
-		require.Equal(t, http.StatusAccepted, f.post(t, body).status)
+		require.Equal(t, http.StatusAccepted, f.Post(t, body).Status)
 	}
 	f.readings(t, 1, 18)
 	assert.Empty(t, f.history(t))
 	trigger := f.readings(t, 2, 18)
-	require.Equal(t, http.StatusAccepted, f.post(t, body).status)
+	require.Equal(t, http.StatusAccepted, f.Post(t, body).Status)
 	history := f.history(t)
 	require.Len(t, history, 1)
 	assert.Equal(t, trigger, history[0].TriggerEventID)
@@ -200,11 +212,11 @@ func TestTelemetryDetectorRejectedObservationDoesNotAdvance(t *testing.T) {
 	f.baseline(t, 2)
 	first := f.readings(t, 1, 18)
 	require.Equal(t, http.StatusConflict,
-		f.post(t, detectorObservation(uuid.NewString(), f.observed, "running", 18)).status)
+		f.Post(t, detectorObservation(uuid.NewString(), f.Observed, "running", 18)).Status)
 	require.Equal(t, http.StatusConflict,
-		f.post(t, detectorObservation(first, f.observed.Add(time.Second), "running", 19)).status)
+		f.Post(t, detectorObservation(first, f.Observed.Add(time.Second), "running", 19)).Status)
 	require.Equal(t, http.StatusConflict,
-		f.post(t, detectorObservation(uuid.NewString(), f.observed.Add(6*time.Minute), "running", 18)).status)
+		f.Post(t, detectorObservation(uuid.NewString(), f.Observed.Add(6*time.Minute), "running", 18)).Status)
 	f.readings(t, 2, 18)
 	assert.Empty(t, f.history(t))
 	f.readings(t, 3, 18)
@@ -248,14 +260,17 @@ func TestTelemetryDetectorInclusiveThresholds(t *testing.T) {
 
 func TestTelemetryDetectorZeroRecoveryThresholdRequiresExactMean(t *testing.T) {
 	t.Parallel()
-	config := authConfig(t)
+	config := testfixture.AuthConfig(t)
 	config.Detector = application.DetectorConfig{
 		AlertZThreshold: 3, RecoveryZThreshold: 0,
 		AlertSustainedObservations: 3, RecoverySustainedObservations: 3,
 	}
-	f := detectorFixture{setupDeviceTelemetryWithConfig(t, &telemetryDetectorPostgres, config)}
-	readMachineBaseline(t, authHTTPRequest(t, f.server, http.MethodPut, machinesPath+"/"+f.machineID+"/baseline",
-		`{"mean_rms_g":0,"stddev_rms_g":1e300}`, bearer(f.factory.AccessToken)))
+	f := detectorFixture{testfixture.SetupDeviceTelemetryWithConfig(t, config)}
+	testfixture.ReadMachineBaseline(
+		t,
+		testfixture.AuthHTTPRequest(t, f.Server, http.MethodPut, testfixture.MachinesPath+"/"+f.MachineID+"/baseline",
+			`{"mean_rms_g":0,"stddev_rms_g":1e300}`, testfixture.Bearer(f.Factory.AccessToken)),
+	)
 
 	f.readings(t, 0, 4e300, 4e300, 4e300)
 	require.Nil(t, f.latestAlert(t).RecoveredAt)
@@ -292,33 +307,33 @@ func TestBaselineUpdateSerializesWithTelemetry(t *testing.T) {
 	f.baseline(t, 2)
 	f.readings(t, 0, 18, 18)
 	ctx := t.Context()
-	tx, err := f.pool.Begin(ctx)
+	tx, err := f.Pool.Begin(ctx)
 	require.NoError(t, err)
 	defer tx.Rollback(context.WithoutCancel(ctx))
-	_, err = tx.Exec(ctx, `SELECT id FROM machines WHERE id=$1 FOR UPDATE`, f.machineID)
+	_, err = tx.Exec(ctx, `SELECT id FROM machines WHERE id=$1 FOR UPDATE`, f.MachineID)
 	require.NoError(t, err)
-	_, err = tx.Exec(ctx, `UPDATE machine_baselines SET mean_rms_g=11, version=2 WHERE machine_id=$1`, f.machineID)
+	_, err = tx.Exec(ctx, `UPDATE machine_baselines SET mean_rms_g=11, version=2 WHERE machine_id=$1`, f.MachineID)
 	require.NoError(t, err)
 
 	const index = 2
-	body := detectorObservation(uuid.NewString(), f.observed.Add(index*time.Second), "running", 18)
+	body := detectorObservation(uuid.NewString(), f.Observed.Add(index*time.Second), "running", 18)
 	type result struct {
-		response authHTTPResponse
+		response testfixture.AuthHTTPResponse
 		err      error
 	}
 	done := make(chan result, 1)
 	go func() {
-		response, requestErr := sendAuthHTTPRequest(ctx, f.server.Client(), http.MethodPost,
-			f.server.URL+telemetryPath(f.machineID), body, bearer(f.device.APIKey))
+		response, requestErr := testfixture.SendAuthHTTPRequest(ctx, f.Server.Client(), http.MethodPost,
+			f.Server.URL+testfixture.TelemetryPath(f.MachineID), body, testfixture.Bearer(f.Device.APIKey))
 		done <- result{response, requestErr}
 	}()
 	blockerPID := int(tx.Conn().PgConn().PID())
-	require.Eventually(t, func() bool { return telemetryLockHasWaiter(ctx, f.pool, blockerPID) },
+	require.Eventually(t, func() bool { return testfixture.TelemetryLockHasWaiter(ctx, f.Pool, blockerPID) },
 		5*time.Second, 10*time.Millisecond)
 	require.NoError(t, tx.Commit(ctx))
 	item := <-done
 	require.NoError(t, item.err)
-	require.Equal(t, http.StatusAccepted, item.response.status, item.response.body)
+	require.Equal(t, http.StatusAccepted, item.response.Status, item.response.Body)
 	f.readings(t, 3, 18)
 	assert.Empty(t, f.history(t))
 	f.readings(t, 4, 18)
@@ -336,20 +351,20 @@ func TestConcurrentTelemetryDetectionOneAlert(t *testing.T) {
 	start := make(chan struct{})
 	var workers sync.WaitGroup
 	for range requests {
-		body := detectorObservation(uuid.NewString(), f.observed.Add(2*time.Second), "running", 18)
+		body := detectorObservation(uuid.NewString(), f.Observed.Add(2*time.Second), "running", 18)
 		workers.Go(func() {
 			<-start
-			response, err := sendAuthHTTPRequest(t.Context(), f.server.Client(), http.MethodPost,
-				f.server.URL+telemetryPath(f.machineID), body, bearer(f.device.APIKey))
+			response, err := testfixture.SendAuthHTTPRequest(t.Context(), f.Server.Client(), http.MethodPost,
+				f.Server.URL+testfixture.TelemetryPath(f.MachineID), body, testfixture.Bearer(f.Device.APIKey))
 			assert.NoError(t, err)
-			assert.Equal(t, http.StatusAccepted, response.status, response.body)
+			assert.Equal(t, http.StatusAccepted, response.Status, response.Body)
 		})
 	}
 	close(start)
 	workers.Wait()
 	require.Len(t, f.history(t), 1)
-	at := f.observed.Add(2 * time.Second)
-	f.assertStored(t, requests+2, requests+2, &at)
+	at := f.Observed.Add(2 * time.Second)
+	f.AssertStored(t, requests+2, requests+2, &at)
 }
 
 func TestAlertAcknowledgementDoesNotResolve(t *testing.T) {
@@ -358,18 +373,36 @@ func TestAlertAcknowledgementDoesNotResolve(t *testing.T) {
 	f.baseline(t, 2)
 	f.readings(t, 0, 18, 18, 18)
 	id := f.latestAlert(t).ID
-	_, other := signupEnrollmentUser(t, f.server, `{"email":"other@example.com","password":"long enough password"}`)
+	_, other := testfixture.SignupEnrollmentUser(
+		t,
+		f.Server,
+		`{"email":"other@example.com","password":"long enough password"}`,
+	)
 	for _, endpoint := range []struct{ method, path, missingPath string }{
-		{http.MethodGet, machinesPath + "/" + f.machineID + "/alerts", machinesPath + "/" + uuid.NewString() + "/alerts"},
+		{http.MethodGet, testfixture.MachinesPath + "/" + f.MachineID + "/alerts", testfixture.MachinesPath + "/" + uuid.NewString() + "/alerts"},
 		{http.MethodPost, acknowledgePath(id), acknowledgePath(uuid.NewString())},
 	} {
-		unauthenticated := authHTTPRequest(t, f.server, endpoint.method, endpoint.path, "", nil)
-		assert.Equal(t, http.StatusUnauthorized, unauthenticated.status)
-		forbidden := authHTTPRequest(t, f.server, endpoint.method, endpoint.path, "", bearer(other.AccessToken))
-		missing := authHTTPRequest(t, f.server, endpoint.method, endpoint.missingPath, "", bearer(other.AccessToken))
-		assert.Equal(t, http.StatusNotFound, forbidden.status)
-		assert.Equal(t, http.StatusNotFound, missing.status)
-		assert.Equal(t, missing.body, forbidden.body)
+		unauthenticated := testfixture.AuthHTTPRequest(t, f.Server, endpoint.method, endpoint.path, "", nil)
+		assert.Equal(t, http.StatusUnauthorized, unauthenticated.Status)
+		forbidden := testfixture.AuthHTTPRequest(
+			t,
+			f.Server,
+			endpoint.method,
+			endpoint.path,
+			"",
+			testfixture.Bearer(other.AccessToken),
+		)
+		missing := testfixture.AuthHTTPRequest(
+			t,
+			f.Server,
+			endpoint.method,
+			endpoint.missingPath,
+			"",
+			testfixture.Bearer(other.AccessToken),
+		)
+		assert.Equal(t, http.StatusNotFound, forbidden.Status)
+		assert.Equal(t, http.StatusNotFound, missing.Status)
+		assert.Equal(t, missing.Body, forbidden.Body)
 	}
 	assert.Nil(t, f.latestAlert(t).AcknowledgedAt)
 
@@ -405,30 +438,30 @@ func TestTelemetryDetectorTransactionRollback(t *testing.T) {
 	f := setupDetector(t)
 	f.baseline(t, 2)
 	f.readings(t, 0, 18, 18)
-	_, err := f.pool.Exec(t.Context(), `CREATE FUNCTION reject_detector_alert() RETURNS trigger
+	_, err := f.Pool.Exec(t.Context(), `CREATE FUNCTION reject_detector_alert() RETURNS trigger
 		LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced test rollback'; END; $$;
 		CREATE CONSTRAINT TRIGGER reject_detector_alert AFTER INSERT ON machine_alerts
 		DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reject_detector_alert();`)
 	require.NoError(t, err)
 
 	id := uuid.NewString()
-	at := f.observed.Add(2 * time.Second)
+	at := f.Observed.Add(2 * time.Second)
 	body := detectorObservation(id, at, "running", 18)
-	response := f.post(t, body)
-	require.Equal(t, http.StatusInternalServerError, response.status, response.body)
-	assert.JSONEq(t, internalAuthErrorJSON, response.body)
+	response := f.Post(t, body)
+	require.Equal(t, http.StatusInternalServerError, response.Status, response.Body)
+	assert.JSONEq(t, testfixture.InternalAuthErrorJSON, response.Body)
 	require.Empty(t, f.history(t))
-	previous := f.observed.Add(time.Second)
-	f.assertStored(t, 2, 2, &previous)
+	previous := f.Observed.Add(time.Second)
+	f.AssertStored(t, 2, 2, &previous)
 	var pending int
-	require.NoError(t, f.pool.QueryRow(t.Context(), `SELECT pending_alert_count FROM machine_detector_state
-		WHERE machine_id=$1`, f.machineID).Scan(&pending))
+	require.NoError(t, f.Pool.QueryRow(t.Context(), `SELECT pending_alert_count FROM machine_detector_state
+		WHERE machine_id=$1`, f.MachineID).Scan(&pending))
 	assert.Equal(t, 2, pending)
 
-	_, err = f.pool.Exec(t.Context(), `DROP TRIGGER reject_detector_alert ON machine_alerts`)
+	_, err = f.Pool.Exec(t.Context(), `DROP TRIGGER reject_detector_alert ON machine_alerts`)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusAccepted, f.post(t, body).status)
-	f.assertStored(t, 3, 3, &at)
+	require.Equal(t, http.StatusAccepted, f.Post(t, body).Status)
+	f.AssertStored(t, 3, 3, &at)
 	history := f.history(t)
 	require.Len(t, history, 1)
 	assert.Equal(t, id, history[0].TriggerEventID)

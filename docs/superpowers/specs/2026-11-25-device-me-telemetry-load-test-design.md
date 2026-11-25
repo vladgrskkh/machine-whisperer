@@ -117,14 +117,14 @@ its random Compose project, volumes, images, and temporary credentials.
 
 ## Test-container lifecycle
 
-The API integration package uses named PostgreSQL fixtures for account and
-auth, device enrollment, device telemetry, machine baselines, telemetry
-detection, telemetry history, telemetry storage, and outbox export. Each
-fixture starts its own container on first use. Tests create and migrate
+The API integration tests use separate Go packages for account and auth,
+device enrollment, device telemetry, machine baselines, telemetry detection,
+telemetry history, telemetry storage, and outbox export. Each package's
+`TestMain` owns a PostgreSQL fixture that starts on first use and closes
+after the tests finish, including when a test fails. Tests create and migrate
 random schemas, use schema-scoped pools, and drop their schemas during cleanup.
-The package's `TestMain` closes every started container after the tests finish,
-including when a test fails. Tests keep their existing names and can run in
-parallel.
+Shared setup lives in the integration test tree. Tests keep their existing
+names and can run in parallel.
 
 ## Local k6 load test
 

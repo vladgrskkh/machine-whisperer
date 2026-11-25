@@ -63,13 +63,20 @@ make lint
 ```
 
 Unit tests use real HTTP connections and require permission to bind loopback
-ports. Each database integration suite starts its own disposable
-`postgres:18-alpine` Testcontainer on first use. Each test gets a connection
-pool and a freshly migrated schema. The package's `TestMain` stops every
-started container after the tests finish. These fixtures require Docker and
-use the container's URL.
+ports. Each database integration suite lives in its own package under
+`tests/integration`. It starts a disposable `postgres:18-alpine` Testcontainer
+on first use and stops it in `TestMain` after the suite finishes. Each test
+gets a connection pool and a freshly migrated schema. These fixtures require
+Docker and use the container's URL.
+
 `make test-integration` also runs the race detector. Lint includes
-integration-tagged code. To regenerate the hashing mock used by handler tests:
+integration-tagged code. To run a focused integration test:
+
+```sh
+go test -tags=integration -race ./tests/integration/devicetelemetry -run '^TestDeviceMeTelemetry'
+```
+
+To regenerate the hashing mock used by handler tests:
 
 ```sh
 mockery --name PasswordHasher --dir internal/usecase/auth --output internal/handler/auth/authmock --outpkg authmock --filename password_hasher.go --with-expecter

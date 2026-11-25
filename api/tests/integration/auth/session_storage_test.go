@@ -1,6 +1,6 @@
 //go:build integration
 
-package integration_test
+package auth_test
 
 import (
 	"context"
@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgerrcode"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,12 +19,14 @@ import (
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	transactionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 	userpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
+	"github.com/vladgrskkh/machine-whisperer/api/tests/integration/internal/testfixture"
 )
 
 //nolint:tparallel // Subtests exercise the shared session lifecycle in order.
 func TestSessionStorage(t *testing.T) {
 	t.Parallel()
-	pool := accountPostgres.Pool(t)
+	pool := testutil.Postgres(t)
 	repository := sessionpostgres.New(pool)
 	userRepo := userpostgres.New(pool)
 	manager := transactionpostgres.New(pool)
@@ -84,7 +85,7 @@ func TestSessionStorage(t *testing.T) {
 			duplicate.SessionID = rolledBack.ID
 			return repository.InsertRefresh(ctx, duplicate)
 		})
-		requirePGCode(t, err, pgerrcode.UniqueViolation)
+		testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 		assertSessionAbsent(t, pool, rolledBack.ID)
 	})
 	t.Run("cancellation rolls back user and session", func(t *testing.T) { testSessionCancellation(t, pool, first) })
@@ -145,7 +146,7 @@ func TestSessionStorage(t *testing.T) {
 				Exec(ctx, "INSERT INTO commit_probe (value) VALUES (1),(1)")
 			return insertErr
 		})
-		requirePGCode(t, err, pgerrcode.UniqueViolation)
+		testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
 		assertSessionAbsent(t, pool, rolledBack.ID)
 	})
 	t.Run("constraints", func(t *testing.T) { testSessionConstraints(t, pool, first, refresh) })
@@ -192,16 +193,9 @@ func testSessionConstraints(t *testing.T, pool *pgxpool.Pool, first session.Sess
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := pool.Exec(t.Context(), tt.query, tt.args...)
-			requirePGCode(t, err, tt.code)
+			testfixture.RequirePGCode(t, err, tt.code)
 		})
 	}
-}
-
-func requirePGCode(t *testing.T, err error, code string) {
-	t.Helper()
-	var pgErr *pgconn.PgError
-	require.ErrorAs(t, err, &pgErr)
-	assert.Equal(t, code, pgErr.Code)
 }
 
 func assertSessionAbsent(t *testing.T, pool *pgxpool.Pool, id string) {
