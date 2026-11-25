@@ -117,18 +117,22 @@ Compose runs these services:
 GitHub Actions builds the API and Analytics images on pull requests to validate
 the Dockerfiles and Compose smoke stack. A successful push to `main` publishes
 both images to Docker Hub. The repository owner and token are supplied as the
-GitHub Actions `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets; the
+the main-only `dockerhub-publish` environment secrets `DOCKERHUB_PUBLISH_USERNAME` and `DOCKERHUB_PUBLISH_TOKEN`; the
 `DOCKERHUB_NAMESPACE` Actions variable selects a Docker Hub user or organization
 and defaults to the login username. Docker Hub repositories are named
 `machine-whisperer-api` and `machine-whisperer-analytics` within that namespace.
 The workflow publishes an immutable `sha-<full-commit>` tag and a moving `latest`
-tag. Pull requests never publish images.
+tag. Both repositories enforce `^sha-[0-9a-f]{40}$` as immutable. Reruns reuse
+the existing SHA digest. Only after both images exist, a serialized job checks
+the head of main before promoting the pair. Production and backup use pinned
+SHA tags. The backup checks both running image references before stopping the
+services. Pull requests never publish images.
 
 Compose retains build contexts for local development and CI, and also names the
 registry image used by the API, API migration, Analytics and Analytics migration
 services. The server runbook pulls the selected image tag and starts with
 `--no-build`, so the VPS does not compile application images. The default
-example tag is `latest`; upgrades should select the immutable SHA tag produced
+example tag is `latest`; production deployments must select the immutable SHA tag produced
 by the successful main-branch workflow.
 
 Registry credentials are not application credentials. GitHub Actions uses the

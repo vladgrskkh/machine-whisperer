@@ -87,6 +87,46 @@ class RestoreTest(unittest.TestCase):
         with tarfile.open(self.backup / "letsencrypt.tar", "w") as archive:
             archive.add(secrets / "token", arcname="letsencrypt/accounts/token")
 
+    def test_backup_requires_running_images_to_match_the_saved_pin(self):
+        self.create_backup()
+        snippet = RUNBOOK.split("## Back up the volumes", 1)[1].split("```bash\n", 1)[1].split("\n```", 1)[0]
+        compose_yaml = Path(__file__).resolve().parents[1] / "compose.yaml"
+        (self.checkout / "deploy/compose.yaml").write_bytes(compose_yaml.read_bytes())
+        pinned = "sha-" + "a" * 40
+        for tag, mismatch, accepted in [
+            ("latest", "", False), (pinned, "api", False), (pinned, "analytics", False), (pinned, "", True),
+        ]:
+            with self.subTest(tag=tag, mismatch=mismatch):
+                marker = self.scratch / "stopped"
+                marker.unlink(missing_ok=True)
+                saved_env = f"DOCKERHUB_NAMESPACE=org\nIMAGE_TAG={tag}\n"
+                (self.checkout / "deploy/.env.server").write_text(saved_env)
+                functions = r"""
+                mw() {
+                    case "$1" in
+                        config) HOME="$DOCKER_CLI_HOME" command docker compose --env-file deploy/.env.server -f deploy/compose.yaml "$@" ;;
+                        ps) echo "${!#}" ;;
+                        stop) touch "$MARKER"; exit 87 ;;
+                        *) return 1 ;;
+                    esac
+                }
+                docker() {
+                    [[ "$1" == inspect ]] || return 1
+                    local svc="${!#}" tag="$TAG"
+                    [[ "$svc" != "$MISMATCH" ]] || tag=latest
+                    echo "docker.io/org/machine-whisperer-$svc:$tag"
+                }
+                """
+                env = self.env | {"TAG": tag, "MISMATCH": mismatch, "MARKER": str(marker),
+                                  "DOCKER_CLI_HOME": str(Path.home()), "IMAGE_TAG": "latest", "DOCKERHUB_NAMESPACE": "override"}
+                result = run_bash(functions + snippet, self.checkout, env)
+                self.assertEqual(marker.exists(), accepted, result.stderr)
+                if accepted:
+                    self.assertEqual(result.returncode, 87, result.stderr)
+                    self.assertEqual(next(self.scratch.glob("mw-backup.*/env.server")).read_text(), saved_env)
+                else:
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+
     def test_restores_to_separate_worktree(self):
         self.create_backup()
 

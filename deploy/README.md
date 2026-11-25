@@ -22,10 +22,21 @@ on port 80 during both issuance and renewal.
 
 After all checks pass on a push to `main`, GitHub Actions publishes
 `machine-whisperer-api` and `machine-whisperer-analytics` to Docker Hub.
-Set the repository Actions secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`
-to the publishing account and its write token. Set the optional repository
-Actions variable `DOCKERHUB_NAMESPACE` when publishing to an organization.
-The default namespace is the publishing account's username.
+In GitHub Settings → Environments, use the `dockerhub-publish` environment
+with the deployment branch rule allowing only `main`. Add environment secrets
+`DOCKERHUB_PUBLISH_USERNAME` (publishing account) and `DOCKERHUB_PUBLISH_TOKEN`
+(write token). After adding them, delete the old `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN` repository secrets. Keep the new names exclusive to this
+environment. Use the optional Actions variable `DOCKERHUB_NAMESPACE` for an
+organization. It defaults to the publishing username.
+
+Before the first release, open **Settings → General → Tag mutability** on
+both Docker Hub repositories. Select **Specific tags are immutable** and
+save `^sha-[0-9a-f]{40}$`. On a rerun, CI reuses an existing commit image.
+After both images are available, a serialized job promotes their SHA tags to
+`latest` if the commit is still the head of `main`. Use the SHA tag for
+production and recovery. `latest` is a convenience alias updated separately
+on each repository. [Docker Hub immutable tags](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/)
 
 Public images can be pulled anonymously. For private images, configure a
 Docker credential store for the VPS operator, run
@@ -45,7 +56,7 @@ install -d -m 0755 deploy/acme-webroot
 ```
 
 Set `DOCKERHUB_NAMESPACE` in `deploy/.env.server` to the Docker Hub user or
-organization that owns both repositories. For a release, check out the published
+organization that owns both repositories. For every production deployment, check out the published
 commit and set `IMAGE_TAG` to `sha-` followed by its full 40-character Git SHA.
 The example value `latest` tracks the moving tag.
 
@@ -240,8 +251,24 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
 
 ```bash
 (
-    set -eu
+    set -euo pipefail
+    unset IMAGE_TAG DOCKERHUB_NAMESPACE
     umask 077
+    tag=$(sed -n 's/^IMAGE_TAG=//p' deploy/.env.server)
+    if [[ ! "$tag" =~ ^sha-[0-9a-f]{40}$ ]]; then
+        echo 'Set IMAGE_TAG in deploy/.env.server to the deployed SHA tag before backing up.' >&2
+        exit 1
+    fi
+    for service in api analytics; do
+        expected=$(mw config --format json "$service" | python3 -c \
+            'import json, sys; print(json.load(sys.stdin)["services"][sys.argv[1]]["image"])' "$service")
+        container=$(mw ps -q "$service")
+        running=$(docker inspect --format '{{.Config.Image}}' "${container:?service must be running}")
+        if [[ "$expected" != *":$tag" || "${running#docker.io/}" != "${expected#docker.io/}" ]]; then
+            echo "Running $service image differs from the saved release configuration." >&2
+            exit 1
+        fi
+    done
     backup=$(mktemp -d "$HOME/mw-backup.XXXXXXXX")
     printf 'Backup directory: %s\n' "$backup"
     git rev-parse HEAD > "$backup/revision"
@@ -258,8 +285,8 @@ encrypted off-host storage. [Docker volume backups](https://docs.docker.com/engi
     tar -C deploy -cpf "$backup/secrets.tar" secrets
     sudo tar -C deploy -cpf - letsencrypt > "$backup/letsencrypt.tar"
     printf 'Backup complete: %s\n' "$backup"
+    mw up -d --no-build
 )
-mw up -d
 ```
 
 The archive commands cover the example layout. For custom `MW_SECRETS_DIR` or

@@ -256,8 +256,9 @@
 
 **Interfaces:**
 - API and `api-migrate` use the same image, `docker.io/${DOCKERHUB_NAMESPACE}/machine-whisperer-api:${IMAGE_TAG}`. Analytics and `analytics-migrate` use `docker.io/${DOCKERHUB_NAMESPACE}/machine-whisperer-analytics:${IMAGE_TAG}`. Keep Compose build contexts for CI/smoke and include `IMAGE_TAG=latest` in the non-secret example env.
-- A GitHub Actions publish job runs only for a successful `push` to `main`, after `lint`, `test`, `build`, API integration, Analytics, deployment smoke and mobile checks pass. It logs in using secrets `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; optional variable `DOCKERHUB_NAMESPACE` selects an organization and otherwise defaults to the login username.
-- Publish both repositories with `sha-${{ github.sha }}` and `latest` tags. Pull requests build and smoke-test but never publish.
+- A GitHub Actions publish job runs only for a successful `push` to `main`, after `lint`, `test`, `build`, API integration, Analytics, deployment smoke and mobile checks pass. It logs in using main-only `dockerhub-publish` environment secrets `DOCKERHUB_PUBLISH_USERNAME` and `DOCKERHUB_PUBLISH_TOKEN`; optional variable `DOCKERHUB_NAMESPACE` selects an organization and otherwise defaults to the login username.
+- Protect SHA tags on both Docker Hub repositories with the immutable-tag regex `^sha-[0-9a-f]{40}$`. Reuse existing SHA images on reruns. A serialized promotion job waits for both SHA images and verifies the current main head before updating the two `latest` aliases. Pull requests build and smoke-test but never publish.
+- Require a pinned SHA for production and backup. Before backup, compare both running container image references against the saved Compose configuration.
 - The runbook sets the Docker Hub namespace and image tag on the VPS, runs `mw pull`, then starts with `mw up -d --no-build`. For releases, it pins the full commit SHA tag. A private Docker Hub repository requires a separate read-only pull token stored in the VPS Docker credential store, not in app secrets or `.env.server`.
 - GitHub Actions secrets are only for image publication. `prepare-secrets.sh` continues to generate runtime credentials on the VPS; no app secrets are added to the registry workflow.
 
