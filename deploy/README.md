@@ -171,6 +171,34 @@ uncertain outcome, the script uses the generated password to identify the
 new owner for rollback. If the script asks for manual inspection, verify the
 demo account and fixture state before retrying.
 
+### Run the k6 scenarios
+
+Run k6 on the Docker host after deployment and a successful seed. Use the same
+operator account that owns the mode `0600` fixture file. The runner uses the
+public HTTPS API origin saved by the seed and mounts the fixture read-only.
+
+```bash
+SCENARIO=all SIMULATIONS=1 deploy/scripts/run-k6-demo.sh
+SCENARIO=recovery SIMULATIONS=1 deploy/scripts/run-k6-demo.sh
+```
+
+`SCENARIO` defaults to `all`. Select `healthy`, `alert`, `recovery`, or
+`unknown` to run one group. `SIMULATIONS` defaults to `1` and selects that
+many independent machines and devices per group. To run two simulations of
+each scenario, set `SIMULATIONS=2` for both the seed and the runner and select
+`SCENARIO=all` for the run. Use at most the number of fixtures seeded per group.
+
+Each simulated device submits one short sequence. The run checks HTTP 202,
+the expected alert state, and the appearance of every submitted event in
+telemetry history within a 30-second polling window. Run one invocation at a
+time on a fixture set. You can rerun it immediately after completion. The
+`alert` scenario leaves an active alert on its demo machine for inspection,
+and the `recovery` scenario opens and recovers an alert on a separate machine.
+
+These synthetic readings exercise the API, detector, and history pipeline.
+They use a fixed baseline and do not represent measured vibration or validate
+sensor accuracy or production capacity.
+
 ## Logs and Prometheus
 
 ```bash
