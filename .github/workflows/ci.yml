@@ -99,6 +99,8 @@ jobs:
         run: deploy/scripts/test-image-publish-config.sh
       - name: Test the backup restore runbook
         run: python3 deploy/scripts/test-runbook-restore.py
+      - name: Test synthetic demo seeding
+        run: python3 -B deploy/scripts/test-seed-demo.py
       - name: Build the API and Analytics images
         run: docker compose --env-file deploy/.env.server.example -f deploy/compose.yaml build api analytics
       - name: Smoke test the server stack

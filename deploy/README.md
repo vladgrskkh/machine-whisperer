@@ -135,6 +135,38 @@ curl --silent --show-error --output /dev/null --write-out '%{http_code}\n' \
     https://onerep.mooo.com/v1/users/me
 ```
 
+## Seed synthetic demo data
+
+After the release is merged and deployed, run the seed from the monorepo
+root on the Docker host with the matching `deploy/.env.server` and a healthy
+Compose stack. Use the same Compose project name as the running deployment.
+
+```bash
+COMPOSE_PROJECT_NAME=machine-whisperer SIMULATIONS=1 python3 deploy/scripts/seed-demo-data.py
+```
+
+Set `DEMO_OWNER_EMAIL` to register a different unused email. The default is
+`demo@machine-whisperer.test`. The seed creates a separate owner with one
+machine and one claimed software device per scenario (`healthy`, `alert`,
+`recovery`, and `unknown`). Set `SIMULATIONS` to 1, 2, or 3 to choose how many
+independent fixtures to create per scenario within the enrollment rate limit.
+Each machine starts with a baseline mean of 0.04 g and standard deviation of
+0.005 g. The seed creates the fixtures for subsequent k6 telemetry runs.
+
+The script uses the public HTTPS origin from the Compose `DOMAIN` for the
+owner routes. It grants the new owner the `device_provisioner` role before
+login and revokes it when provisioning finishes. Provisioning runs inside
+the API container over verified internal TLS. Keep the existing Nginx
+provisioning allowlist in place.
+
+The script writes the generated owner password and device keys to
+`deploy/secrets/k6-demo-fixtures.json` with mode `0600`. Keep this file out of
+Git, terminal output, and shared logs. An existing fixture file or an email
+already registered with the API stops the seed. On failure, the script uses
+the IDs returned by the API to roll back the new owner and its fixtures.
+If a creation response is lost or the script reports a rollback failure,
+inspect the deployment before retrying.
+
 ## Logs and Prometheus
 
 ```bash
