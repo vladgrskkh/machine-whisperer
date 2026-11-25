@@ -9,7 +9,7 @@ package main
 // @tag.name internal
 // @tag.description Restricted manufacturing operations.
 // @tag.name operational
-// @tag.description API listener health probes.
+// @tag.description Process health and API documentation.
 
 // @securityDefinitions.bearerauth UserAccessJWT
 // @bearerFormat JWT

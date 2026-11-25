@@ -95,7 +95,7 @@ func serve(ctx context.Context, address string) error {
 // @tag.name internal
 // @tag.description Restricted manufacturing operations.
 // @tag.name operational
-// @tag.description API listener health probes.
+// @tag.description Process health and API documentation.
 //
 // @securityDefinitions.apikey UserAccessJWT
 // @in header

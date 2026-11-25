@@ -1,7 +1,7 @@
 .PHONY: run build test test-integration lint tools migrate-up migrate-down migrate-status swagger swagger-check
 
 SWAGGER_DIR := docs/openapi
-SWAGGER_SOURCES := --dir cmd/api,internal/application,internal/handler,internal/domain/telemetry \
+SWAGGER_SOURCES := --dir cmd/api,internal/application,internal/handler,internal/domain/telemetry,docs/openapi \
 	--parseInternal --outputTypes yaml
 SWAGGER_INIT := go run github.com/swaggo/swag/cmd/swag@v1.16.6 init $(SWAGGER_SOURCES) --generalInfo main.go
 OPENAPI_INIT := go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc6 init $(SWAGGER_SOURCES) \

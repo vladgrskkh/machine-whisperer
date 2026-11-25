@@ -5,7 +5,14 @@
 The generated [OpenAPI 3.1 YAML](docs/openapi/openapi.yaml) and
 [Swagger 2.0 YAML](docs/openapi/swagger.yaml) describe all API operations,
 including restricted manufacturing and the process health probe. Both files
-come from the same Go handler annotations.
+come from the same Go handler annotations. Fetch them from a running API at
+`GET /v1/openapi.yaml` and `GET /v1/swagger.yaml`.
+
+Open `/v1/swagger/` on the running API to browse the OpenAPI 3.1 contract and
+try requests. Use **Authorize** to supply a credential for protected operations.
+The UI keeps credentials in memory for the current page and disables remote
+validation. The API embeds the browser assets from [Swagger UI 5.36.0](https://github.com/swagger-api/swagger-ui/releases/tag/v5.36.0)
+alongside their [licenses and notices](docs/openapi/swagger/).
 
 After changing an HTTP route or its contract, update the handler annotations and
 run these commands from `api/`.

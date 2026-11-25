@@ -1461,6 +1461,45 @@ paths:
       summary: Submit a telemetry observation by machine ID
       tags:
       - telemetry
+  /v1/openapi.yaml:
+    get:
+      operationId: downloadOpenAPI
+      produces:
+      - application/yaml
+      responses:
+        "200":
+          description: OpenAPI 3 YAML.
+          schema:
+            type: string
+      summary: Download the OpenAPI 3 specification
+      tags:
+      - operational
+  /v1/swagger.yaml:
+    get:
+      operationId: downloadSwagger
+      produces:
+      - application/yaml
+      responses:
+        "200":
+          description: Swagger 2 YAML.
+          schema:
+            type: string
+      summary: Download the Swagger 2 specification
+      tags:
+      - operational
+  /v1/swagger/:
+    get:
+      operationId: openSwaggerUI
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: Interactive API documentation.
+          schema:
+            type: string
+      summary: Open the interactive Swagger UI
+      tags:
+      - operational
   /v1/users/me:
     get:
       operationId: getCurrentUser
@@ -1506,5 +1545,5 @@ swagger: "2.0"
 tags:
 - description: Restricted manufacturing operations.
   name: internal
-- description: API listener health probes.
+- description: Process health and API documentation.
   name: operational

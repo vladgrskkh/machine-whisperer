@@ -5,6 +5,7 @@ ENV CGO_ENABLED=0
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd ./cmd
+COPY docs/openapi ./docs/openapi
 COPY internal ./internal
 RUN go build -trimpath -o /out/api ./cmd/api
 RUN GOBIN=/out go install -trimpath \
