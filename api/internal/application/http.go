@@ -63,8 +63,11 @@ func (a *Application) Routes() http.Handler {
 		owner.Post("/v1/alerts/{id}/acknowledge", alerts.NewAcknowledge(a.acknowledgeAlert).ServeHTTP)
 	})
 
-	router.With(middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter)).
-		Post("/v1/machines/{machine_id}/telemetry", telemetry.NewIngest(a.ingestTelemetry).ServeHTTP)
+	deviceTelemetry := router.With(
+		middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter),
+	)
+	deviceTelemetry.Post("/v1/devices/me/telemetry", telemetry.NewDeviceIngest(a.ingestTelemetry).ServeHTTP)
+	deviceTelemetry.Post("/v1/machines/{machine_id}/telemetry", telemetry.NewIngest(a.ingestTelemetry).ServeHTTP)
 
 	return router
 }
