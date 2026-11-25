@@ -1,0 +1,38 @@
+extensions:
+  jaeger_query:
+    storage:
+      traces: local
+    http:
+      endpoint: 0.0.0.0:16686
+    grpc:
+      endpoint: 127.0.0.1:16685
+  jaeger_storage:
+    backends:
+      local:
+        badger:
+          ephemeral: false
+          directories:
+            keys: /tmp/badger/keys
+            values: /tmp/badger/values
+          ttl:
+            spans: 24h
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  jaeger_storage_exporter:
+    trace_storage: local
+
+service:
+  extensions: [jaeger_storage, jaeger_query]
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [jaeger_storage_exporter]

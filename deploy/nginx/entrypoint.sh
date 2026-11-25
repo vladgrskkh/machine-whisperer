@@ -13,8 +13,16 @@ case "$MW_PROVISIONING_CIDR" in
     */*) ;;
     *) echo 'Invalid MW_PROVISIONING_CIDR' >&2; exit 1 ;;
 esac
+trace_percent=${MW_NGINX_TRACE_SAMPLE_PERCENT:-1}
+case "$trace_percent" in
+    0) MW_TRACE_SAMPLE_RULES='* off;' ;;
+    100) MW_TRACE_SAMPLE_RULES='* on;' ;;
+    [1-9]|[1-9][0-9]) MW_TRACE_SAMPLE_RULES="$trace_percent% on; * off;" ;;
+    *) echo 'Invalid MW_NGINX_TRACE_SAMPLE_PERCENT' >&2; exit 1 ;;
+esac
+export MW_TRACE_SAMPLE_RULES
 template=bootstrap.conf.template
 if [ -s "$certs/live/$DOMAIN/fullchain.pem" ] && [ -s "$certs/live/$DOMAIN/privkey.pem" ]; then
     template=default.conf.template
 fi
-envsubst '${DOMAIN} ${MW_PROVISIONING_CIDR}' < "$templates/$template" > "$output"
+envsubst '${DOMAIN} ${MW_PROVISIONING_CIDR} ${MW_TRACE_SAMPLE_RULES}' < "$templates/$template" > "$output"

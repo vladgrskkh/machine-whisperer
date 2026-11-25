@@ -224,7 +224,9 @@ The contract suite archives both k6 scripts with synthetic fixtures and Docker
 network access disabled. The end-to-end suite generates its own credentials
 and certificate, publishes random loopback ports, and starts one Compose
 project. It checks ingress and authentication, device claim, telemetry
-submission and history, k6 scenarios, and database persistence. The k6
+submission and history, k6 scenarios, database persistence, and Jaeger traces
+across the HTTP and outbox paths. It also verifies that ingestion and history
+stay available with the Collector stopped. The k6
 container joins the project's edge network and verifies TLS using the
 disposable certificate. The suite removes the project's containers, images,
 volumes, networks, and temporary fixtures when it finishes.
@@ -319,6 +321,37 @@ the updated config.
 mw run --rm --no-deps --entrypoint promtool prometheus check config /etc/prometheus/prometheus.yml
 mw up -d --no-deps --force-recreate prometheus
 ```
+
+## Distributed traces
+
+Jaeger's HTTP UI and query API listen on host loopback at `127.0.0.1:16686`.
+Open `http://127.0.0.1:16686` on your workstation after connecting the tunnel.
+
+```bash
+ssh -N -L 127.0.0.1:16686:127.0.0.1:16686 operator@onerep.mooo.com
+```
+
+Search `api` for `GET /v1/machines/{machine_id}/telemetry` and `outbox.deliver`.
+Each sampled delivery attempt links to the sampled `telemetry.ingest` spans
+that accepted its readings. Jaeger retains spans for 24 hours in its own
+`jaeger-data` volume. The database backup and restore procedures exclude it.
+
+`MW_NGINX_TRACE_SAMPLE_PERCENT` sets the edge rate as a whole percentage from
+0 to 100. `OTEL_TRACES_SAMPLER_ARG` sets the Go root rate from 0 to 1. Both
+default to 1% in production. Use `100` and `1` respectively on the disposable
+stack to collect every request. Child spans follow the trusted parent decision.
+A worker attempt carrying a sampled producer link is sampled independently
+of the Go root rate. Before sizing the tracing services on the host, compare
+Badger disk growth, process memory, API p95, and outbox throughput at the
+intended sampling rate and with tracing disabled on a disposable workload.
+
+Nginx and the Go services send OTLP to the Collector over their separate
+internal networks. The Collector drops raw request attributes and event records
+before writing to Jaeger. It retains links only on API worker attempt spans.
+The stock Collector operates on whole links, so the API constructs each link
+with identifiers and flags alone. Keep the trace networks limited to trusted
+Compose members. Trace queues and retry windows are bounded and can drop spans
+when the backend is unavailable.
 
 ## Upgrade and public TLS renewal
 

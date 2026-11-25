@@ -1,0 +1,62 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        max_recv_msg_size_mib: 4
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 128
+    spike_limit_mib: 32
+  transform/allowlist:
+    error_mode: propagate
+    trace_statements:
+      - 'keep_keys(resource.attributes, ["service.name", "service.namespace"])'
+      - 'keep_keys(scope.attributes, [])'
+      - 'set(scope.version, "")'
+      - 'set(span.attributes["http.request.method"], span.attributes["http.method"]) where resource.attributes["service.name"] == "nginx"'
+      - 'set(span.attributes["http.response.status_code"], span.attributes["http.status_code"]) where resource.attributes["service.name"] == "nginx"'
+      - >-
+        set(span.attributes["http.request.method"], "_OTHER") where span.attributes["http.request.method"] != nil and
+        not ContainsValue(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"], span.attributes["http.request.method"])
+      - >-
+        keep_keys(span.attributes, ["http.route", "http.request.method", "http.response.status_code",
+        "db.system.name", "db.operation.name", "db.query.summary", "error.type", "outcome", "outbox.links.dropped"])
+      - 'set(span.status.message, "")'
+      - 'set(span.trace_state, "")'
+      - 'set(span.events, [])'
+      # The stock transform processor cannot edit individual link fields. The
+      # API's outbox worker sets only ID and flag fields, with no attributes or
+      # tracestate. Remove whole links from every other kind of span.
+      - 'set(span.links, []) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
+  batch:
+    timeout: 1s
+    send_batch_size: 256
+    send_batch_max_size: 512
+
+exporters:
+  otlp_grpc/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+    timeout: 3s
+    sending_queue:
+      num_consumers: 2
+      queue_size: 64
+      block_on_overflow: false
+    retry_on_failure:
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 15s
+
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, transform/allowlist, batch]
+      exporters: [otlp_grpc/jaeger]

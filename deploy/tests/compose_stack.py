@@ -54,7 +54,8 @@ class ComposeStack:
             "MW_PROXY_IP": f"{edge}.2", "MW_API_IP": f"{edge}.3",
             "MW_PROVISIONING_CIDR": "192.0.2.0/24", "MW_SECRETS_DIR": str(self.secrets),
             "MW_CERT_DIR": str(self.certificates), "MW_ACME_WEBROOT": str(self.webroot),
-            "COMPOSE_PROFILES": "",
+            "COMPOSE_PROFILES": "", "MW_NGINX_TRACE_SAMPLE_PERCENT": "100",
+            "OTEL_TRACES_SAMPLER_ARG": "1",
         }
         self.override = work / "e2e.yaml"
         self.override.write_text(f"""services:
@@ -68,6 +69,9 @@ class ComposeStack:
   prometheus:
     ports: !override
       - "127.0.0.1::9090"
+  jaeger:
+    ports: !override
+      - "127.0.0.1::16686"
 """)
         self.untrusted = work / "untrusted.yaml"
         self.untrusted.write_text("""secrets:
@@ -99,6 +103,10 @@ class ComposeStack:
         self.started = True
         self.compose("run", "--rm", "--no-deps", "-T", "--entrypoint", "/bin/promtool", "prometheus",
                      "check", "config", "/etc/prometheus/prometheus.yml", timeout=120)
+        for service, config in (
+            ("otel-collector", "/etc/otelcol-contrib/config.yaml"), ("jaeger", "/etc/jaeger/config.yaml"),
+        ):
+            self.compose("run", "--rm", "--no-deps", "-T", service, "validate", f"--config={config}", timeout=180)
         self.compose("build", "api", "analytics", timeout=600)
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "240", timeout=300)
 
