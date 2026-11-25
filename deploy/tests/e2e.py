@@ -624,6 +624,7 @@ exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --q
         )
         services = ("postgres", "clickhouse", "prometheus")
         container_ids = {service: self.stack.inspect(service)["Id"] for service in services}
+        recreation_started = time.time()
         self.stack.compose(
             "up", "-d", "--no-build", "--no-deps", "--force-recreate", "--wait",
             "--wait-timeout", "240", *services, timeout=300,
@@ -646,6 +647,9 @@ FROM pg_roles WHERE rolname = 'mw_postgres_exporter'
             caught=NETWORK_ERRORS,
         )
         self.assertEqual(restored, sample)
+        eventually("a fresh ClickHouse scrape after recreation", lambda: (
+            self.prometheus_value('timestamp(up{job="clickhouse"} == 1)') or 0
+        ) >= recreation_started, timeout=45)
         eventually("PostgreSQL statistics after rerunning exporter setup", lambda: (
             self.prometheus_value('timestamp(pg_up{job="postgres"} == 1)') or 0
         ) >= setup_completed, timeout=45)
