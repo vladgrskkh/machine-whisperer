@@ -29,6 +29,7 @@ import (
 // @Router /healthz [get]
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
+	router.Use(a.metrics.HTTP(router))
 	schema := *httplog.SchemaECS
 	schema.RequestURL = ""
 	schema.RequestReferer = ""
@@ -74,10 +75,12 @@ func (a *Application) Routes() http.Handler {
 		owner.Put("/v1/machines/{id}/baseline", machines.NewSetBaseline(a.setBaseline).ServeHTTP)
 		owner.Get("/v1/machines/{id}/alerts", alerts.NewList(a.listAlerts).ServeHTTP)
 		owner.Get("/v1/machines/{machine_id}/telemetry", telemetry.NewHistory(a.telemetryHistory).ServeHTTP)
-		owner.Post("/v1/alerts/{id}/acknowledge", alerts.NewAcknowledge(a.acknowledgeAlert).ServeHTTP)
+		owner.Post("/v1/alerts/{id}/acknowledge",
+			alerts.NewAcknowledge(a.acknowledgeAlert, a.metrics.RecordAcknowledgement).ServeHTTP)
 	})
 
 	deviceTelemetry := router.With(
+		telemetry.ObserveIngest(a.metrics),
 		middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter),
 	)
 	deviceTelemetry.Post("/v1/devices/me/telemetry", telemetry.NewDeviceIngest(a.ingestTelemetry).ServeHTTP)

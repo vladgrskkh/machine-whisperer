@@ -54,8 +54,10 @@ migration state; `make migrate-down` rolls back the latest migration and may
 remove stored data.
 
 The API listens on `API_ADDRESS` (default `:8080`). Startup checks the database
-with a 10-second deadline. On shutdown, it drains HTTP requests and waits for
-the outbox worker before closing the pool.
+with a 10-second deadline. A separate HTTP listener serves Prometheus at
+`GET /metrics` on `API_METRICS_ADDRESS`. The default binds to loopback. On
+shutdown the API drains both listeners and waits for the background workers
+before closing the pool.
 
 `POST /v1/auth/signup` accepts JSON `email` and `password`. It returns `201` with
 `id`, canonical `email` and `created_at`; it does not create a login session.
@@ -71,6 +73,7 @@ Rate limiting runs before password hashing or refresh-token rotation. Configurat
 | --- | --- | --- |
 | `DATABASE_URL` | Required | PostgreSQL connection string |
 | `API_ADDRESS` | `:8080` | HTTP listen address |
+| `API_METRICS_ADDRESS` | `127.0.0.1:9091` | Private Prometheus HTTP listen address. Use a specific IP or hostname. |
 | `AUTH_RATE_LIMIT` | `30` | Auth and enrollment attempts per client IP in each window |
 | `AUTH_RATE_LIMIT_WINDOW` | `1m` | Window duration, using Go duration syntax |
 | `AUTH_RATE_LIMIT_MAX_CLIENTS` | `10000` | Maximum active client windows |

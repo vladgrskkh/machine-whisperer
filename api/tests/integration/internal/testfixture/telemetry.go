@@ -19,6 +19,7 @@ import (
 
 type TelemetryFixture struct {
 	Pool      *pgxpool.Pool
+	App       *application.Application
 	Server    *httptest.Server
 	Factory   HTTPTokenPair
 	Device    FactoryEnrollment
@@ -59,7 +60,7 @@ func SetupDeviceTelemetryWithConfig(
 	var observed time.Time
 	require.NoError(t, pool.QueryRow(t.Context(), "SELECT clock_timestamp()").Scan(&observed))
 	return TelemetryFixture{
-		Pool: pool, Server: server, Factory: factory,
+		Pool: pool, App: app, Server: server, Factory: factory,
 		Device: device, MachineID: machineID, Observed: observed.UTC().Truncate(time.Second),
 	}
 }

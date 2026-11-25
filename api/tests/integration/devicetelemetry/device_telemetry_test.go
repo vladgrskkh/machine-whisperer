@@ -117,6 +117,9 @@ func TestDeviceTelemetryRejectsUnclaimedRevokedAndWrongMachine(t *testing.T) {
 	)
 	assert.Equal(t, http.StatusUnauthorized, response.Status)
 	f.AssertStored(t, 0, 0, nil)
+	metrics := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"machine_not_found\"} 3\n")
+	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"unauthorized\"} 1\n")
 }
 
 func TestDeviceTelemetryRejectsRevocationBetweenAuthenticationAndIngest(t *testing.T) {
@@ -271,6 +274,10 @@ func TestDeviceTelemetryValidatesV1Payload(t *testing.T) {
 	assert.Equal(t, http.StatusAccepted, response.Status)
 	assert.Equal(t, "no-store", response.Header.Get("Cache-Control"))
 	f.AssertStored(t, 1, 1, &f.Observed)
+	metrics := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, metrics, "mw_telemetry_ingest_requests_total{outcome=\"invalid\"} 20\n")
+	assert.Contains(t, metrics, "mw_detector_observations_total{outcome=\"no_baseline\"} 1\n")
+	assert.Contains(t, metrics, "mw_detector_observations_total{outcome=\"unknown_state\"} 0\n")
 }
 
 func TestDeviceTelemetryIdenticalRetryIsIdempotent(t *testing.T) {
@@ -304,6 +311,10 @@ func TestDeviceTelemetryIdenticalRetryIsIdempotent(t *testing.T) {
 		eventID, observed.Format(time.RFC3339Nano)), payload)
 	assert.False(t, receivedAt.Before(f.Observed))
 	assert.WithinDuration(t, observed.Add(30*24*time.Hour), expiresAt, 0)
+	body := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, body, "mw_telemetry_ingest_requests_total{outcome=\"accepted_new\"} 2\n")
+	assert.Contains(t, body, "mw_telemetry_ingest_requests_total{outcome=\"accepted_replay\"} 2\n")
+	assert.Contains(t, body, "mw_detector_observations_total{outcome=\"no_baseline\"} 2\n")
 }
 
 func TestDeviceTelemetryConflictingEventIDReturnsConflict(t *testing.T) {
@@ -314,6 +325,8 @@ func TestDeviceTelemetryConflictingEventIDReturnsConflict(t *testing.T) {
 	response := f.Post(t, strings.Replace(body, "0.043", "0.044", 1))
 	assert.Equal(t, http.StatusConflict, response.Status)
 	f.AssertStored(t, 1, 1, &f.Observed)
+	assert.Contains(t, testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App)),
+		"mw_telemetry_ingest_requests_total{outcome=\"conflict\"} 1\n")
 }
 
 func seedExpiredTelemetryBacklog(t *testing.T, f testfixture.TelemetryFixture, observedAt time.Time) {
@@ -415,6 +428,9 @@ func TestDeviceTelemetryRejectsFutureStaleAndOutOfOrderEvents(t *testing.T) {
 	f.AssertStored(t, 0, 0, &latest)
 	assert.Equal(t, http.StatusAccepted, f.Post(t, observationJSON(uuid.NewString(), latest)).Status)
 	f.AssertStored(t, 1, 1, &latest)
+	body := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, body, "mw_telemetry_ingest_requests_total{outcome=\"outside_window\"} 2\n")
+	assert.Contains(t, body, "mw_telemetry_ingest_requests_total{outcome=\"out_of_order\"} 1\n")
 }
 
 func TestDeviceTelemetryRejectsFutureUTCYearOverflow(t *testing.T) {

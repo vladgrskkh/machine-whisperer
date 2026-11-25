@@ -19,6 +19,7 @@ import (
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/metrics"
 	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
@@ -97,7 +98,9 @@ func TestOutboxStaleLeaseCannotAcknowledge(t *testing.T) {
 	updated, err = repository.MarkDelivered(t.Context(), oldToken, keys)
 	require.NoError(t, err)
 	assert.Zero(t, updated)
-	require.NoError(t, repository.Reschedule(t.Context(), oldToken, keys, time.Hour, "analytics_http"))
+	rescheduled, err := repository.Reschedule(t.Context(), oldToken, keys, time.Hour, "analytics_http")
+	require.NoError(t, err)
+	assert.Zero(t, rescheduled)
 	updated, err = repository.MarkDelivered(t.Context(), newToken, keys)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, updated)
@@ -115,7 +118,9 @@ func TestOutboxRetryBackoff(t *testing.T) {
 	token, _, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
 	require.NoError(t, err)
 	keys := []telemetry.EventKey{{DeviceID: event.DeviceID, EventID: event.EventID}}
-	require.NoError(t, repository.Reschedule(t.Context(), token, keys, time.Hour, "analytics_http"))
+	rescheduled, err := repository.Reschedule(t.Context(), token, keys, time.Hour, "analytics_http")
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, rescheduled)
 	_, events, err := repository.ClaimBatch(t.Context(), 1, outboxTestLease)
 	require.NoError(t, err)
 	assert.Empty(t, events)
@@ -211,6 +216,11 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 		assert.Equal(c, 1, delivered)
 		assert.Equal(c, 1, total)
 	}, 3*time.Second, 20*time.Millisecond)
+
+	metricsServer := testfixture.NewAPIMetricsServer(t, app)
+	body := testfixture.WaitForAPIMetrics(t, metricsServer, "mw_outbox_delivered_events_total 1\n")
+	assert.Contains(t, body, "mw_outbox_claimed_events_total 1\n")
+	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
 }
 
 func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
@@ -250,6 +260,9 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second)
+	observations := metrics.New(pool, nil)
+	metricsServer := httptest.NewServer(observations.Handler())
+	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
 		telemetrypostgres.NewOutbox(pool),
 		sender,
@@ -257,6 +270,7 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: 2 * time.Minute,
 		},
 		slog.New(slog.DiscardHandler),
+		observations,
 	)
 	for _, backoff := range []time.Duration{time.Minute, 2 * time.Minute, 2 * time.Minute} {
 		claimed, err := export.ProcessOnce(t.Context())
@@ -278,6 +292,69 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 		FROM telemetry_outbox WHERE event_id=$1`, event.EventID).Scan(&delivered, &cleared))
 	assert.True(t, delivered)
 	assert.True(t, cleared)
+	body := testfixture.APIMetrics(t, metricsServer)
+	assert.Contains(t, body, "mw_outbox_claimed_events_total 4\n")
+	assert.Contains(t, body, "mw_outbox_delivered_events_total 1\n")
+	assert.Contains(t, body, "mw_outbox_retried_events_total{reason=\"analytics_http\"} 3\n")
+	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"analytics_http\"} 3\n")
+	assert.Contains(t, body, "mw_outbox_send_duration_seconds_count{outcome=\"analytics_http\"} 3\n")
+	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
+}
+
+func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
+	t.Parallel()
+	pool := testutil.Postgres(t)
+	event := insertOutboxRow(t, pool, nil)
+	var requests atomic.Int64
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempt := requests.Add(1)
+		if attempt <= 2 {
+			_, err := pool.Exec(
+				r.Context(),
+				"UPDATE telemetry_outbox SET available_at=now(),lease_until=now() WHERE event_id=$1",
+				event.EventID,
+			)
+			assert.NoError(t, err)
+		}
+		if attempt == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	observations := metrics.New(pool, nil)
+	metricsServer := httptest.NewServer(observations.Handler())
+	t.Cleanup(metricsServer.Close)
+	export := telemetryusecase.NewExport(
+		telemetrypostgres.NewOutbox(pool),
+		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second),
+		telemetryusecase.ExportSettings{
+			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: time.Minute,
+		},
+		slog.New(slog.DiscardHandler),
+		observations,
+	)
+	claimed, err := export.ProcessOnce(t.Context())
+	require.ErrorIs(t, err, telemetry.ErrAnalyticsHTTP)
+	require.Equal(t, 1, claimed)
+	claimed, err = export.ProcessOnce(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, claimed)
+	stale := testfixture.APIMetrics(t, metricsServer)
+	assert.Contains(t, stale, "mw_outbox_claimed_events_total 2\n")
+	assert.Contains(t, stale, "mw_outbox_send_attempts_total{outcome=\"analytics_http\"} 1\n")
+	assert.Contains(t, stale, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
+	assert.Contains(t, stale, "mw_outbox_retried_events_total{reason=\"analytics_http\"} 0\n")
+	assert.Contains(t, stale, "mw_outbox_delivered_events_total 0\n")
+
+	claimed, err = export.ProcessOnce(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, claimed)
+	acknowledged := testfixture.APIMetrics(t, metricsServer)
+	assert.Contains(t, acknowledged, "mw_outbox_claimed_events_total 3\n")
+	assert.Contains(t, acknowledged, "mw_outbox_send_attempts_total{outcome=\"success\"} 2\n")
+	assert.Contains(t, acknowledged, "mw_outbox_delivered_events_total 1\n")
 }
 
 func assertOutboxRetry(t *testing.T, pool *pgxpool.Pool, eventID string, backoff time.Duration) {

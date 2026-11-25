@@ -33,3 +33,11 @@ type OutboxEvent struct {
 	Payload      json.RawMessage `json:"payload"`
 	AttemptCount int64           `json:"-"`
 }
+
+type OutboxSnapshot struct {
+	At                      time.Time
+	Pending                 int64
+	OldestPendingAgeSeconds float64
+	Retried                 int64
+	OldestRetryAgeSeconds   float64
+}

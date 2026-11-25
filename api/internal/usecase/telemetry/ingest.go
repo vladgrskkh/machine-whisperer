@@ -41,7 +41,12 @@ type TransactionManager interface {
 }
 
 type ObservationDetector interface {
-	Observe(context.Context, telemetry.Event) error
+	Observe(context.Context, telemetry.Event) (Detection, error)
+}
+
+type IngestResult struct {
+	Replay    bool
+	Detection Detection
 }
 
 type Ingest struct {
@@ -58,39 +63,46 @@ func (i *Ingest) Ingest(
 	ctx context.Context,
 	deviceID, assignedMachineID, requestedMachineID string,
 	observation telemetry.Observation,
-) error {
+) (IngestResult, error) {
 	if assignedMachineID == "" || assignedMachineID != requestedMachineID {
-		return machine.ErrNotFound
+		return IngestResult{}, machine.ErrNotFound
 	}
 	normalized, err := normalizeObservation(observation)
 	if err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	event := telemetry.Event{
 		Observation: normalized,
 		DeviceID:    deviceID,
 		MachineID:   requestedMachineID,
 	}
-	return i.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
-		return i.store(txCtx, event)
+	var result IngestResult
+	err = i.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
+		var storeErr error
+		result, storeErr = i.store(txCtx, event)
+		return storeErr
 	})
+	if err != nil {
+		return IngestResult{}, err
+	}
+	return result, nil
 }
 
-func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
+func (i *Ingest) store(ctx context.Context, event telemetry.Event) (IngestResult, error) {
 	if err := i.repository.LockActiveDeviceForTelemetry(ctx, event.DeviceID, event.MachineID); err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	cursor, dbNow, err := i.repository.LockMachineForTelemetry(ctx, event.MachineID)
 	if err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	event.ReceivedAt = dbNow
 	if !event.ObservedAt.After(dbNow.Add(-telemetry.RetryWindow)) || event.ObservedAt.After(dbNow.Add(maxFutureSkew)) {
-		return ErrObservationWindow
+		return IngestResult{}, ErrObservationWindow
 	}
 	payload, err := json.Marshal(event.Observation)
 	if err != nil {
-		return fmt.Errorf("encode normalized telemetry observation: %w", err)
+		return IngestResult{}, fmt.Errorf("encode normalized telemetry observation: %w", err)
 	}
 	event.PayloadHash = sha256.Sum256(payload)
 	if err = i.repository.DeleteExpiredTelemetryEvents(
@@ -100,32 +112,33 @@ func (i *Ingest) store(ctx context.Context, event telemetry.Event) error {
 		event.EventID,
 		dbNow,
 	); err != nil {
-		return err
+		return IngestResult{}, err
 	}
 
 	hash, found, err := i.repository.FindTelemetryEvent(ctx, event.DeviceID, event.EventID)
 	if err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	if found {
 		if hash == event.PayloadHash {
-			return nil
+			return IngestResult{Replay: true}, nil
 		}
-		return telemetry.ErrEventConflict
+		return IngestResult{}, telemetry.ErrEventConflict
 	}
 	if cursor != nil && event.ObservedAt.Before(*cursor) {
-		return ErrObservationOrder
+		return IngestResult{}, ErrObservationOrder
 	}
 	if err = i.repository.InsertTelemetryEvent(ctx, event); err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	if err = i.repository.InsertTelemetryOutbox(ctx, event); err != nil {
-		return err
+		return IngestResult{}, err
 	}
 	if err = i.repository.UpdateMachineTelemetryCursor(ctx, event.MachineID, event.ObservedAt); err != nil {
-		return err
+		return IngestResult{}, err
 	}
-	return i.detector.Observe(ctx, event)
+	detection, err := i.detector.Observe(ctx, event)
+	return IngestResult{Detection: detection}, err
 }
 
 func normalizeObservation(value telemetry.Observation) (telemetry.Observation, error) {

@@ -4,18 +4,22 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	telemetryhandler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	alertpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/alert/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/credential"
 	devicepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/device/postgres"
 	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/metrics"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
 	analyticshttp "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/analytics"
 	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
@@ -45,6 +49,8 @@ type Application struct {
 	ingestTelemetry  *telemetry.Ingest
 	telemetryHistory *telemetry.ListHistory
 	telemetryWorker  *telemetryworker.Worker
+	outbox           *telemetrypostgres.Outbox
+	metrics          *metrics.Metrics
 	createMachine    *machine.Create
 	listMachines     *machine.List
 	machineDetail    *machine.Detail
@@ -61,8 +67,7 @@ type Option func(context.Context, *Application) error
 
 func New(ctx context.Context, config Config, options ...Option) (*Application, error) {
 	// Route-only callers can omit relay settings. LoadConfig always requires them.
-	relayConfigured := config.Relay != (RelayConfig{})
-	if relayConfigured {
+	if config.Relay != (RelayConfig{}) {
 		if err := config.Relay.validate(); err != nil {
 			return nil, err
 		}
@@ -136,10 +141,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		claimTTL,
 		analyticshttp.NewHistoryClient(config.Relay.AnalyticsURL, config.Relay.AnalyticsAPIKey),
 	)
-	app.setupDetection(transactions, detectorConfig)
-	if relayConfigured {
-		app.setupRelay(config.Relay)
-	}
+	app.setupTelemetry(transactions, detectorConfig, config.Relay)
 
 	return app, nil
 }
@@ -168,18 +170,27 @@ func (a *Application) setupEnrollment(
 	a.setBaseline = machine.NewSetBaseline(machines, transactions)
 }
 
-func (a *Application) setupDetection(transactions *transactionpostgres.Manager, config DetectorConfig) {
+func (a *Application) setupTelemetry(
+	transactions *transactionpostgres.Manager,
+	detection DetectorConfig,
+	relay RelayConfig,
+) {
+	a.metrics = metrics.New(a.pool, telemetryhandler.IngestOutcomes())
+	a.outbox = telemetrypostgres.NewOutbox(a.pool)
 	repository := telemetrypostgres.New()
-	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(config))
+	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(detection))
 	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector)
 	alerts := alertpostgres.New(a.pool)
 	a.listAlerts = alert.NewList(alerts)
 	a.acknowledgeAlert = alert.NewAcknowledge(alerts)
+	if relay != (RelayConfig{}) {
+		a.setupRelay(relay)
+	}
 }
 
 func (a *Application) setupRelay(config RelayConfig) {
 	export := telemetry.NewExport(
-		telemetrypostgres.NewOutbox(a.pool),
+		a.outbox,
 		analyticshttp.NewHTTPClient(config.AnalyticsURL, config.AnalyticsAPIKey, config.HTTPTimeout),
 		telemetry.ExportSettings{
 			BatchSize: config.BatchSize,
@@ -189,14 +200,22 @@ func (a *Application) setupRelay(config RelayConfig) {
 			Retention: config.Retention,
 		},
 		a.logger,
+		a.metrics,
 	)
 	a.telemetryWorker = telemetryworker.New(export, config.BatchSize, config.PollInterval, a.logger)
 }
 
 func (a *Application) RunWorkers(ctx context.Context) {
+	var workers sync.WaitGroup
 	if a.telemetryWorker != nil {
-		a.telemetryWorker.Run(ctx)
+		workers.Go(func() { a.telemetryWorker.Run(ctx) })
 	}
+	a.runOutboxSnapshots(ctx)
+	workers.Wait()
+}
+
+func (a *Application) MetricsHandler() http.Handler {
+	return a.metrics.Handler()
 }
 
 func (a *Application) Close() {

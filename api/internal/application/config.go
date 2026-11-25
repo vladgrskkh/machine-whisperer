@@ -18,12 +18,13 @@ import (
 )
 
 type Config struct {
-	Database   DatabaseConfig
-	Auth       AuthConfig
-	Device     DeviceConfig
-	RateLimits RateLimitsConfig
-	Relay      RelayConfig
-	Detector   DetectorConfig
+	Database       DatabaseConfig
+	Auth           AuthConfig
+	Device         DeviceConfig
+	RateLimits     RateLimitsConfig
+	Relay          RelayConfig
+	Detector       DetectorConfig
+	MetricsAddress string
 }
 
 type DatabaseConfig struct {
@@ -109,6 +110,7 @@ type environmentConfig struct {
 	RateLimits          rateLimitsEnvironmentConfig
 	Relay               RelayConfig
 	Detector            DetectorConfig
+	MetricsAddress      string `env:"API_METRICS_ADDRESS"           envDefault:"127.0.0.1:9091"`
 }
 
 type databaseEnvironmentConfig struct {
@@ -158,9 +160,10 @@ func LoadConfig() (Config, error) {
 			SigningKeyFile: settings.Auth.SigningKeyFile,
 			VerifyKeysFile: settings.Auth.VerifyKeysFile,
 		},
-		Device:   DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
-		Relay:    settings.Relay,
-		Detector: settings.Detector,
+		Device:         DeviceConfig{ClaimTTL: settings.Device.ClaimTTL},
+		Relay:          settings.Relay,
+		Detector:       settings.Detector,
+		MetricsAddress: settings.MetricsAddress,
 		RateLimits: RateLimitsConfig{
 			IP: middleware.RateLimitConfig{
 				Limit:      settings.RateLimits.IPLimit,

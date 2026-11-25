@@ -35,6 +35,26 @@ type DetectorSettings struct {
 	RecoverySustainedObservations int
 }
 
+type DetectorOutcome string
+
+const (
+	DetectorEvaluated    DetectorOutcome = "evaluated"
+	DetectorNoBaseline   DetectorOutcome = "no_baseline"
+	DetectorUnknownState DetectorOutcome = "unknown_state"
+)
+
+type AlertTransition string
+
+const (
+	AlertOpened    AlertTransition = "opened"
+	AlertRecovered AlertTransition = "recovered"
+)
+
+type Detection struct {
+	Outcome    DetectorOutcome
+	Transition AlertTransition
+}
+
 type Detector struct {
 	repository DetectionRepository
 	settings   DetectorSettings
@@ -44,13 +64,17 @@ func NewDetector(repository DetectionRepository, settings DetectorSettings) *Det
 	return &Detector{repository: repository, settings: settings}
 }
 
-func (d *Detector) Observe(ctx context.Context, event telemetry.Event) error {
+func (d *Detector) Observe(ctx context.Context, event telemetry.Event) (Detection, error) {
 	baseline, state, exists, err := d.repository.Load(ctx, event.MachineID)
-	if err != nil || !exists {
-		return err
+	if err != nil {
+		return Detection{}, err
+	}
+	if !exists {
+		return Detection{Outcome: DetectorNoBaseline}, nil
 	}
 
 	previous := state
+	result := Detection{Outcome: DetectorEvaluated}
 	if state.BaselineVersion != baseline.Version || event.OperatingState == "unknown" {
 		state.BaselineVersion = baseline.Version
 		state.PendingAlertCount = 0
@@ -64,11 +88,24 @@ func (d *Detector) Observe(ctx context.Context, event telemetry.Event) error {
 		} else {
 			changedAlert = d.updateAlert(event, baseline, &state, z)
 		}
+	} else {
+		result.Outcome = DetectorUnknownState
 	}
 	if state == previous && changedAlert == nil {
-		return nil
+		return result, nil
 	}
-	return d.repository.SaveTransition(ctx, event.MachineID, state, changedAlert)
+	if err := d.repository.SaveTransition(ctx, event.MachineID, state, changedAlert); err != nil {
+		return Detection{}, err
+	}
+	if changedAlert != nil {
+		switch {
+		case changedAlert.ID == "":
+			result.Transition = AlertOpened
+		case changedAlert.RecoveredAt != nil:
+			result.Transition = AlertRecovered
+		}
+	}
+	return result, nil
 }
 
 func (d *Detector) detectAlert(

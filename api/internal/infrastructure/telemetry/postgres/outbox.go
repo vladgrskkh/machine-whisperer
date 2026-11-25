@@ -21,6 +21,23 @@ func NewOutbox(pool *pgxpool.Pool) *Outbox {
 	return &Outbox{pool: pool}
 }
 
+func (r *Outbox) Snapshot(ctx context.Context) (telemetry.OutboxSnapshot, error) {
+	var snapshot telemetry.OutboxSnapshot
+	err := r.pool.QueryRow(ctx, `SELECT statement_timestamp(),count(*),
+		greatest(0,extract(epoch FROM statement_timestamp()-min(created_at)))::float8,
+		count(*) FILTER (WHERE last_error_category IS NOT NULL),
+		greatest(0,extract(epoch FROM statement_timestamp()-
+			min(created_at) FILTER (WHERE last_error_category IS NOT NULL)))::float8
+		FROM telemetry_outbox WHERE delivered_at IS NULL`).Scan(
+		&snapshot.At, &snapshot.Pending, &snapshot.OldestPendingAgeSeconds,
+		&snapshot.Retried, &snapshot.OldestRetryAgeSeconds,
+	)
+	if err != nil {
+		return telemetry.OutboxSnapshot{}, fmt.Errorf("read outbox snapshot: %w", err)
+	}
+	return snapshot, nil
+}
+
 func (r *Outbox) ClaimBatch(
 	ctx context.Context,
 	batchSize int,
@@ -85,18 +102,18 @@ func (r *Outbox) Reschedule(
 	keys []telemetry.EventKey,
 	backoff time.Duration,
 	errorCategory string,
-) error {
+) (int64, error) {
 	devices, events := outboxKeyArrays(keys)
-	_, err := r.pool.Exec(ctx, `UPDATE telemetry_outbox AS o
+	tag, err := r.pool.Exec(ctx, `UPDATE telemetry_outbox AS o
 		SET available_at=statement_timestamp()+$4::interval,lease_token=NULL,lease_until=NULL,last_error_category=$5
 		FROM unnest($2::text[]::uuid[],$3::text[]::uuid[]) AS keys(device_id,event_id)
 		WHERE (o.device_id,o.event_id)=(keys.device_id,keys.event_id) AND o.lease_token=$1
 		  AND o.delivered_at IS NULL AND o.lease_until > statement_timestamp()`,
 		leaseToken, devices, events, outboxInterval(backoff), sanitizedOutboxCategory(errorCategory))
 	if err != nil {
-		return fmt.Errorf("reschedule outbox rows: %w", err)
+		return 0, fmt.Errorf("reschedule outbox rows: %w", err)
 	}
-	return nil
+	return tag.RowsAffected(), nil
 }
 
 func (r *Outbox) DeleteDeliveredBefore(ctx context.Context, retention time.Duration, limit int) (int64, error) {

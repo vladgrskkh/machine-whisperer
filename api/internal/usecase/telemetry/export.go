@@ -22,9 +22,27 @@ type OutboxRepository interface {
 		keys []telemetry.EventKey,
 		backoff time.Duration,
 		errorCategory string,
-	) error
+	) (int64, error)
 	DeleteDeliveredBefore(ctx context.Context, retention time.Duration, limit int) (int64, error)
 }
+
+type ExportMetrics interface {
+	RecordClaimed(rows int)
+	RecordDelivered(rows int64)
+	RecordRetried(reason string, rows int64)
+	RecordSend(outcome string, duration time.Duration)
+	RecordOutboxError(operation string)
+}
+
+const (
+	OutboxSendSuccess  = "success"
+	OutboxSendCanceled = "canceled"
+
+	OutboxOperationClaim       = "claim"
+	OutboxOperationAcknowledge = "acknowledge"
+	OutboxOperationReschedule  = "reschedule"
+	OutboxOperationPrune       = "prune"
+)
 
 type ExportSettings struct {
 	BatchSize int
@@ -39,6 +57,7 @@ type Export struct {
 	sender     BatchSender
 	settings   ExportSettings
 	logger     *slog.Logger
+	metrics    ExportMetrics
 }
 
 func NewExport(
@@ -46,22 +65,28 @@ func NewExport(
 	sender BatchSender,
 	settings ExportSettings,
 	logger *slog.Logger,
+	metrics ExportMetrics,
 ) *Export {
-	return &Export{repository: repository, sender: sender, settings: settings, logger: logger}
+	return &Export{repository: repository, sender: sender, settings: settings, logger: logger, metrics: metrics}
 }
 
 func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 	token, events, err := e.repository.ClaimBatch(ctx, e.settings.BatchSize, e.settings.Lease)
 	if err != nil {
-		e.logger.WarnContext(ctx, "outbox operation failed", "category", "claim")
+		e.operationFailed(ctx, OutboxOperationClaim, 0)
 		return 0, err
 	}
 	claimed := len(events)
 	if claimed == 0 {
 		return 0, nil
 	}
+	e.metrics.RecordClaimed(claimed)
 	e.logger.DebugContext(ctx, "outbox batch claimed", "rows", claimed)
-	if err = e.sender.Send(ctx, events); err != nil {
+	started := time.Now()
+	err = e.sender.Send(ctx, events)
+	outcome := sendOutcome(ctx, err)
+	e.metrics.RecordSend(outcome, time.Since(started))
+	if err != nil {
 		return claimed, e.retry(ctx, token, events, err)
 	}
 	keys := make([]telemetry.EventKey, 0, claimed)
@@ -70,9 +95,10 @@ func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 	}
 	delivered, err := e.repository.MarkDelivered(ctx, token, keys)
 	if err != nil {
-		e.logger.WarnContext(ctx, "outbox operation failed", "category", "acknowledge", "rows", claimed)
+		e.operationFailed(ctx, OutboxOperationAcknowledge, claimed)
 		return claimed, err
 	}
+	e.metrics.RecordDelivered(delivered)
 	e.logger.InfoContext(ctx, "outbox batch acknowledged", "rows", delivered, "claimed", claimed)
 	return claimed, nil
 }
@@ -80,7 +106,7 @@ func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 func (e *Export) PruneDelivered(ctx context.Context) (int64, error) {
 	deleted, err := e.repository.DeleteDeliveredBefore(ctx, e.settings.Retention, e.settings.BatchSize)
 	if err != nil {
-		e.logger.WarnContext(ctx, "outbox operation failed", "category", "prune")
+		e.operationFailed(ctx, OutboxOperationPrune, 0)
 	} else if deleted > 0 {
 		e.logger.InfoContext(ctx, "delivered outbox rows pruned", "rows", deleted)
 	}
@@ -101,12 +127,34 @@ func (e *Export) retry(ctx context.Context, token string, events []telemetry.Out
 	}
 	var retryErr error
 	for delay, keys := range groups {
-		if err := e.repository.Reschedule(ctx, token, keys, delay, category); err != nil {
-			e.logger.WarnContext(ctx, "outbox operation failed", "category", "reschedule", "rows", len(keys))
+		retried, err := e.repository.Reschedule(ctx, token, keys, delay, category)
+		if err != nil {
+			e.operationFailed(ctx, OutboxOperationReschedule, len(keys))
 			retryErr = errors.Join(retryErr, err)
+			continue
 		}
+		e.metrics.RecordRetried(category, retried)
 	}
 	return errors.Join(sendErr, retryErr)
+}
+
+func (e *Export) operationFailed(ctx context.Context, operation string, rows int) {
+	e.metrics.RecordOutboxError(operation)
+	if rows == 0 {
+		e.logger.WarnContext(ctx, "outbox operation failed", "category", operation)
+		return
+	}
+	e.logger.WarnContext(ctx, "outbox operation failed", "category", operation, "rows", rows)
+}
+
+func sendOutcome(ctx context.Context, err error) string {
+	if err == nil {
+		return OutboxSendSuccess
+	}
+	if errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, context.Canceled) {
+		return OutboxSendCanceled
+	}
+	return analyticsErrorCategory(err)
 }
 
 func (e *Export) retryDelay(attempt int64) time.Duration {

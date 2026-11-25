@@ -241,6 +241,9 @@ func TestTelemetryDetectorUnknownDoesNotResolve(t *testing.T) {
 	assert.Nil(t, f.latestAlert(t).RecoveredAt)
 	f.readings(t, 11, 12)
 	assert.NotNil(t, f.latestAlert(t).RecoveredAt)
+	body := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, body, "mw_detector_observations_total{outcome=\"unknown_state\"} 2\n")
+	assert.Contains(t, body, "mw_detector_observations_total{outcome=\"evaluated\"} 10\n")
 }
 
 func TestTelemetryDetectorInclusiveThresholds(t *testing.T) {
@@ -425,12 +428,27 @@ func TestRecoveredAlertCanBeAcknowledgedIdempotently(t *testing.T) {
 	f.readings(t, 0, 18, 18, 18, 12, 12, 12)
 	recovered := f.latestAlert(t)
 	require.NotNil(t, recovered.RecoveredAt)
-	f.acknowledge(t, recovered.ID)
+	var acknowledgements sync.WaitGroup
+	start := make(chan struct{})
+	for range 8 {
+		acknowledgements.Go(func() {
+			<-start
+			response := testfixture.AuthHTTPRequest(t, f.Server, http.MethodPost, acknowledgePath(recovered.ID),
+				"", testfixture.Bearer(f.Factory.AccessToken))
+			assert.Equal(t, http.StatusNoContent, response.Status)
+		})
+	}
+	close(start)
+	acknowledgements.Wait()
 	acknowledged := f.latestAlert(t)
 	assert.Equal(t, recovered.RecoveredAt, acknowledged.RecoveredAt)
 	require.NotNil(t, acknowledged.AcknowledgedAt)
 	f.acknowledge(t, recovered.ID)
 	assert.Equal(t, acknowledged, f.latestAlert(t))
+	body := testfixture.APIMetrics(t, testfixture.NewAPIMetricsServer(t, f.App))
+	assert.Contains(t, body, "mw_alert_transitions_total{transition=\"opened\"} 1\n")
+	assert.Contains(t, body, "mw_alert_transitions_total{transition=\"recovered\"} 1\n")
+	assert.Contains(t, body, "mw_alert_transitions_total{transition=\"acknowledged\"} 1\n")
 }
 
 func TestTelemetryDetectorTransactionRollback(t *testing.T) {
@@ -457,6 +475,12 @@ func TestTelemetryDetectorTransactionRollback(t *testing.T) {
 	require.NoError(t, f.Pool.QueryRow(t.Context(), `SELECT pending_alert_count FROM machine_detector_state
 		WHERE machine_id=$1`, f.MachineID).Scan(&pending))
 	assert.Equal(t, 2, pending)
+	metrics := testfixture.NewAPIMetricsServer(t, f.App)
+	failed := testfixture.APIMetrics(t, metrics)
+	assert.Contains(t, failed, "mw_telemetry_ingest_requests_total{outcome=\"accepted_new\"} 2\n")
+	assert.Contains(t, failed, "mw_telemetry_ingest_requests_total{outcome=\"internal_error\"} 1\n")
+	assert.Contains(t, failed, "mw_detector_observations_total{outcome=\"evaluated\"} 2\n")
+	assert.Contains(t, failed, "mw_alert_transitions_total{transition=\"opened\"} 0\n")
 
 	_, err = f.Pool.Exec(t.Context(), `DROP TRIGGER reject_detector_alert ON machine_alerts`)
 	require.NoError(t, err)
@@ -465,4 +489,8 @@ func TestTelemetryDetectorTransactionRollback(t *testing.T) {
 	history := f.history(t)
 	require.Len(t, history, 1)
 	assert.Equal(t, id, history[0].TriggerEventID)
+	succeeded := testfixture.APIMetrics(t, metrics)
+	assert.Contains(t, succeeded, "mw_telemetry_ingest_requests_total{outcome=\"accepted_new\"} 3\n")
+	assert.Contains(t, succeeded, "mw_detector_observations_total{outcome=\"evaluated\"} 3\n")
+	assert.Contains(t, succeeded, "mw_alert_transitions_total{transition=\"opened\"} 1\n")
 }

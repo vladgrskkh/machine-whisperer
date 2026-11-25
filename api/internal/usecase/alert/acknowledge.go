@@ -2,12 +2,16 @@ package alert
 
 import "context"
 
-type Acknowledge struct{ repository Repository }
+type AcknowledgeRepository interface {
+	Acknowledge(ctx context.Context, ownerID, alertID string) (bool, error)
+}
 
-func NewAcknowledge(repository Repository) *Acknowledge {
+type Acknowledge struct{ repository AcknowledgeRepository }
+
+func NewAcknowledge(repository AcknowledgeRepository) *Acknowledge {
 	return &Acknowledge{repository: repository}
 }
 
-func (a *Acknowledge) Execute(ctx context.Context, ownerID, alertID string) error {
+func (a *Acknowledge) Execute(ctx context.Context, ownerID, alertID string) (bool, error) {
 	return a.repository.Acknowledge(ctx, ownerID, alertID)
 }
