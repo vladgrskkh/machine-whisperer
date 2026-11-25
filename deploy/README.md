@@ -78,8 +78,8 @@ to `/internal/v1/device-provisioning` from outside that CIDR. The API requires
 a JWT with the `device_provisioner` role for requests from allowed sources.
 
 Keep credentials, signing keys, private TLS keys, and backups outside Git.
-`prepare-secrets.sh` requires an empty directory. Preserve the generated files
-across upgrades and restores. If you generate a replacement
+The initial `prepare-secrets.sh` command requires an empty directory. Preserve
+the generated files across upgrades and restores. If you generate a replacement
 `clickhouse-password` file, use `openssl rand -hex 32`. Analytics and ClickHouse
 require exactly 64 lowercase hexadecimal characters and allow trailing CR/LF.
 The directory is mode `0700` and mounted files are mode `0444` so non-root
@@ -114,8 +114,11 @@ After changing `MW_PROVISIONING_CIDR`, apply the new value with `mw up -d nginx`
 PostgreSQL and ClickHouse must pass their health checks before their respective
 migration jobs can run. The API and Analytics each wait for a healthy database
 and a successful migration.
-Nginx starts after the API becomes healthy. In `mw ps -a`, both migration jobs
-should show exit code 0. Before issuance, Nginx serves the challenge path on
+The PostgreSQL exporter waits for `postgres-exporter-setup`, which provisions
+the dedicated `mw_postgres_exporter` login and grants `pg_monitor` on fresh and
+existing volumes. Nginx starts after the API becomes healthy. In `mw ps -a`,
+both migration jobs and the exporter setup job should show exit code 0. Before
+issuance, Nginx serves the challenge path on
 port 80 and returns HTTP 503 for application routes. To obtain the first
 certificate, run the following on the host in an interactive terminal. Certbot
 prompts you to review and accept the Let's Encrypt subscriber agreement. On
@@ -231,11 +234,23 @@ workload from your machine.
 ```bash
 mw ps -a
 mw logs --tail=100 api-migrate analytics-migrate postgres clickhouse
+mw logs --tail=100 postgres-exporter-setup postgres-exporter database-metrics-proxy nginx-exporter
 mw logs --follow --tail=100 nginx api analytics
 ```
 
-Prometheus listens on host loopback at `127.0.0.1:9090` and initially scrapes
-itself. Run this from a workstation and open `http://127.0.0.1:9090` there.
+Prometheus listens on host loopback at `127.0.0.1:9090` and scrapes `prometheus`,
+`api`, `analytics`, `nginx`, `postgres` and `clickhouse` every 15 seconds with a
+five-second timeout. The app endpoints listen on the private `scrape` bridge,
+and Nginx exposes `stub_status` to its exporter on `nginx-status` during both
+bootstrap and TLS operation. PostgreSQL and ClickHouse expose statistics on
+`data`. The database metrics proxy forwards only `GET /metrics` from
+`infra-scrape` to the two fixed backends. The PostgreSQL exporter uses the
+separate `postgres-exporter-password` file and leaves statement collection off.
+
+Open the Targets page via an SSH tunnel to see scrape health. `up` tracks the
+scrape listener. `pg_up` and `nginx_up` show whether each exporter reached its
+upstream, and a ClickHouse metrics upstream failure sets `up{job="clickhouse"}`
+to zero. Check `scrape_duration_seconds` and `scrape_samples_scraped` per job.
 
 ```bash
 ssh -N -L 127.0.0.1:9090:127.0.0.1:9090 operator@onerep.mooo.com
@@ -247,24 +262,28 @@ Take a backup before changing releases. Check out the intended release commit
 or tag. If upgrading a checkout that used local builds, add
 `DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
 [First startup](#first-startup). The commands below pin both images to the
-checked-out commit. Keep the existing runtime secrets.
+checked-out commit and add the exporter password if it is missing. Set
+`secrets_dir` to the existing secret directory for this deployment.
 
 ```bash
 git fetch origin
 git checkout --detach RELEASE_COMMIT_OR_TAG
 sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
+secrets_dir=deploy/secrets
+deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
 mw config --quiet
 mw pull
 mw up -d --no-build
 mw ps -a
-mw logs --tail=100 api-migrate analytics-migrate
+mw logs --tail=100 api-migrate analytics-migrate postgres-exporter-setup
 ```
 
-Verify both migration exit codes and the public HTTPS request after upgrading.
-Install the example systemd units after successful issuance. Set both paths
-in the service to the absolute location of a root-controlled deployment
-checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`
-under `[Service]`. The timer checks daily. After a successful Certbot run the
+Verify the migration and exporter setup exit codes and the public HTTPS request
+after upgrading. Install the example systemd units after successful issuance.
+Set both paths in the service to the absolute location of a root-controlled
+deployment checkout and, for a custom project, add
+`Environment=COMPOSE_PROJECT_NAME=...` under `[Service]`. The timer checks daily.
+After a successful Certbot run the
 helper checks the Nginx configuration and reloads the certificate files.
 
 ```bash
