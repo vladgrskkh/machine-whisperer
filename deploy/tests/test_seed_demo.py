@@ -14,7 +14,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from uuid import UUID
 
-SCRIPT = Path(__file__).with_name("seed-demo-data.py")
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "seed-demo-data.py"
 SPEC = importlib.util.spec_from_file_location("seed_demo", SCRIPT)
 seed = importlib.util.module_from_spec(SPEC)
 if SCRIPT.is_file():

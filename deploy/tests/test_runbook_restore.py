@@ -26,7 +26,7 @@ START_RESTORE = restore_snippet("mw config --quiet")
 
 def git(checkout, *args):
     return subprocess.run(
-        ["git", "-C", str(checkout), *args], check=True, capture_output=True, text=True,
+        ["git", "-C", str(checkout), *args], check=True, capture_output=True, text=True, timeout=30,
     ).stdout.strip()
 
 
