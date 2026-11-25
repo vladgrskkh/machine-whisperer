@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import signal
 import ssl
@@ -40,6 +41,14 @@ GRAFANA = "/grafana"
 GRAFANA_DATASOURCE = GRAFANA + "/api/datasources/uid/mw-prometheus"
 GRAFANA_PROMETHEUS = GRAFANA + "/api/datasources/proxy/uid/mw-prometheus"
 GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry")
+# ClickHouse omits these native event counters until those events occur.
+SPARSE_CLICKHOUSE_EVENTS = {
+    ("mw-clickhouse", 3, "A"): "FailedQuery",
+    ("mw-clickhouse", 3, "B"): "FailedSelectQuery",
+    ("mw-clickhouse", 3, "C"): "FailedInsertQuery",
+    ("mw-clickhouse", 7, "A"): "Merge",
+}
+POSTGRES_CACHE_RATIO = ("mw-postgres", 7, "A")
 
 
 SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -198,7 +207,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
         def dashboard_status():
             panels = (
-                ("mw-go-services", "Service scrape", {"job": "analytics", "instance": SCRAPE_TARGETS["analytics"]}),
+                ("mw-go-services", "Service scrape", {
+                    "job": "analytics", "instance_regex": re.escape(SCRAPE_TARGETS["analytics"]),
+                }),
                 ("mw-postgres", "PostgreSQL availability", {}),
                 ("mw-clickhouse", "Native endpoint scrape", {}),
                 ("mw-nginx", "Exporter scrape", {}),
@@ -379,23 +390,90 @@ class DeploymentEndToEndTest(unittest.TestCase):
         endpoint = GRAFANA_PROMETHEUS + "/api/v1" + path + "?" + urlencode(params)
         response = self.request("GET", endpoint, 200, opener=self.grafana_viewer)
         self.assertEqual(response["status"], "success", response)
+        self.assertFalse(response.get("warnings"), response)
         return response["data"]
 
     def dashboard_panel(self, uid, title):
-        panels = [panel for panel in self.grafana_dashboards[uid]["panels"] if panel["title"] == title]
+        panels = [panel for panel in self.dashboard_panels(self.grafana_dashboards[uid]["panels"])
+                  if panel["title"] == title]
         self.assertEqual(len(panels), 1, f"{uid}: {title}")
         return panels[0]
 
-    def dashboard_values(self, target, *, job="", instance="", labels=None):
+    def dashboard_panels(self, panels):
+        for panel in panels:
+            yield panel
+            yield from self.dashboard_panels(panel.get("panels", []))
+
+    def dashboard_values(self, target, *, job=None, instance_regex=None, labels=None, range_end=None):
         self.assertEqual(target["datasource"], {"type": "prometheus", "uid": "mw-prometheus"})
         # Use a two-minute rate window for the disposable stack's 15-second scrapes.
-        expression = target["expr"].replace("$__rate_interval", "2m")
-        expression = expression.replace("$job", job).replace("${instance:regex}", instance)
-        samples = self.grafana_prometheus_data("/query", {"query": expression})["result"]
+        variables = {"__rate_interval": "2m", "job": job, "instance:regex": instance_regex}
+
+        def substitute(match):
+            name = match[1] or match[2]
+            value = variables.get(name)
+            self.assertIsNotNone(value, f"Unresolved Grafana variable {match[0]} in {target['expr']}")
+            return json.dumps(value)[1:-1]
+
+        expression = re.sub(r"\$\{([\w:]+)\}|\$(\w+)", substitute, target["expr"])
+        params = {"query": expression}
+        if range_end is None:
+            data = self.grafana_prometheus_data("/query", params)
+            self.assertEqual(data["resultType"], "vector", expression)
+        else:
+            params.update(start=range_end - 60, end=range_end, step=15)
+            data = self.grafana_prometheus_data("/query_range", params)
+            self.assertEqual(data["resultType"], "matrix", expression)
         return [
-            float(sample["value"][1]) for sample in samples
+            float(value) for sample in data["result"]
             if all(sample["metric"].get(key) == value for key, value in (labels or {}).items())
+            for _, value in ([sample["value"]] if range_end is None else sample["values"])
         ]
+
+    def assert_expected_empty_dashboard_target(self, key, target, range_end):
+        event = SPARSE_CLICKHOUSE_EVENTS.get(key)
+        if event:
+            self.assertEqual(target["expr"], f'rate(ClickHouseProfileEvents_{event}{{job="clickhouse"}}[$__rate_interval])')
+            return
+        self.assertEqual(key, POSTGRES_CACHE_RATIO, f"No samples for {target['expr']}")
+        # With no cached or disk reads the ratio is undefined. Prove that
+        # both of the real counters were present but idle across the range.
+        scope = '{job="postgres",datname="machine_whisperer"}'
+        hits = f"rate(pg_stat_database_blks_hit{scope}[$__rate_interval])"
+        reads = f"rate(pg_stat_database_blks_read{scope}[$__rate_interval])"
+        self.assertEqual(target["expr"], f"({hits} / ({hits} + {reads})) >= 0")
+        for expression in (hits, reads):
+            rates = self.dashboard_values({**target, "expr": expression}, range_end=range_end)
+            self.assertTrue(rates and all(rate == 0 for rate in rates), f"Expected an idle counter for {expression}")
+
+    def assert_all_dashboard_targets(self, instances_by_job, all_instances):
+        range_end = int(time.time())
+        go_selections = [
+            {"job": job, "instance_regex": regex}
+            for job, instance in instances_by_job.items()
+            for regex in (re.escape(instance), all_instances)
+        ]
+        for uid, dashboard in self.grafana_dashboards.items():
+            selections = go_selections if uid == "mw-go-services" else [{}]
+            for panel in self.dashboard_panels(dashboard["panels"]):
+                for target in panel.get("targets", []):
+                    if target.get("hide"):
+                        continue
+                    modes = [mode for mode in ("instant", "range") if target.get(mode)]
+                    with self.subTest(dashboard=uid, panel=panel["title"], target=target["refId"]):
+                        self.assertTrue(modes, "Operational targets must declare a query mode")
+                        key = (uid, panel["id"], target["refId"])
+                        for variables in selections:
+                            for mode in modes:
+                                with self.subTest(mode=mode, **variables):
+                                    values = self.dashboard_values(
+                                        target, range_end=range_end if mode == "range" else None, **variables,
+                                    )
+                                    if not values:
+                                        self.assert_expected_empty_dashboard_target(key, target, range_end)
+                                    self.assertTrue(all(math.isfinite(value) for value in values), values)
+                                    if mode == "instant":
+                                        self.assertTrue(values and min(values) >= 0, f"Expected healthy values, got {values}")
 
     def assert_dashboard_queries(self):
         def check(uid, title, unit, *, positive=False, **variables):
@@ -425,15 +503,24 @@ class DeploymentEndToEndTest(unittest.TestCase):
         check("mw-telemetry", "ClickHouse client operations", "suffix: operations/s", positive=True,
               labels={"operation": "list_history", "outcome": "success"})
 
-        variables = self.grafana_dashboards["mw-go-services"]["templating"]["list"]
-        instance_query = next(variable["query"]["query"] for variable in variables if variable["name"] == "instance")
+        variables = {variable["name"]: variable for variable in self.grafana_dashboards["mw-go-services"]["templating"]["list"]}
+        self.assertEqual(variables["job"]["query"].split(","), ["api", "analytics"])
+        instance_variable = variables["instance"]
+        self.assertEqual(instance_variable["datasource"], {"type": "prometheus", "uid": "mw-prometheus"})
+        self.assertTrue(instance_variable["includeAll"])
+        self.assertEqual(instance_variable["allValue"], ".*")
+        instance_query = instance_variable["query"]["query"]
         self.assertEqual(instance_query, 'label_values(up{job="$job"}, instance)')
+        instances_by_job = {}
         for job in ("api", "analytics"):
             selector = instance_query.removeprefix("label_values(").removesuffix(", instance)").replace("$job", job)
             instances = self.grafana_prometheus_data("/label/instance/values", {"match[]": selector})
             self.assertEqual(instances, [SCRAPE_TARGETS[job]])
-            check("mw-go-services", "Goroutines", "short", job=job, instance=instances[0], positive=True)
-            check("mw-go-services", "HTTP p95 latency by route", "s", job=job, instance=instances[0])
+            instances_by_job[job] = instances[0]
+            scope = {"job": job, "instance_regex": re.escape(instances[0])}
+            check("mw-go-services", "Goroutines", "short", positive=True, **scope)
+            check("mw-go-services", "HTTP p95 latency by route", "s", **scope)
+        self.assert_all_dashboard_targets(instances_by_job, instance_variable["allValue"])
 
     def configure_tls_client(self):
         self.base_url = f"https://{self.stack.domain}"

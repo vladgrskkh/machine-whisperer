@@ -229,6 +229,12 @@ container joins the project's edge network and verifies TLS using the
 disposable certificate. The suite removes the project's containers, images,
 volumes, networks, and temporary fixtures when it finishes.
 
+The suite fetches the provisioned dashboards and evaluates their PromQL
+through Grafana's data source with both Go services and their instance
+selections. The query sweep uses a two-minute rate interval and one-minute
+ranges sampled every 15 seconds. Known sparse targets may return empty
+results during the workload.
+
 See the [local k6 load profile](k6/README.md) for running the longer telemetry
 workload from your machine.
 

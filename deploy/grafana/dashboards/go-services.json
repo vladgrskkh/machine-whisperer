@@ -1,7 +1,7 @@
 {
   "uid": "mw-go-services",
   "title": "Go services",
-  "description": "Runtime, business HTTP workload, and database pool metrics for API and Analytics.",
+  "description": "Go runtime, process, and HTTP workload metrics for API and Analytics.",
   "tags": [
     "go"
   ],
