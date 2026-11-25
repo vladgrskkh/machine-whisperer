@@ -190,12 +190,11 @@ def stage_fixture(path, fixtures):
 
 
 def fixture_was_published(staging_path, path):
-    if staging_path is None:
-        return False
     try:
-        return path.samefile(staging_path)
+        destination = path.stat()
     except FileNotFoundError:
         return False
+    return os.path.samestat(destination, staging_path.stat())
 
 
 def seed_demo(path, simulations):
@@ -208,6 +207,7 @@ def seed_demo(path, simulations):
 
     owner_id = None
     staging_path = None
+    publication_uncertain = False
     provisioned_devices = []
     try:
         try:
@@ -237,16 +237,26 @@ def seed_demo(path, simulations):
         })
         # Publish only after close succeeds. The hard link preserves any existing fixture.
         os.link(staging_path, path)
-    except BaseException:
-        # A signal can interrupt the caller after the link was created.
-        if owner_id is not None and not fixture_was_published(staging_path, path):
+    except BaseException as exc:
+        published = False
+        # A signal can interrupt the caller after link succeeds. A link error is definitive.
+        if staging_path is not None and not isinstance(exc, OSError):
+            try:
+                published = fixture_was_published(staging_path, path)
+            except OSError:
+                publication_uncertain = True
+                print(
+                    "Could not verify fixture publication. Inspect the demo deployment before retrying.",
+                    file=sys.stderr,
+                )
+        if owner_id is not None and not (published or publication_uncertain):
             try:
                 remove_demo_owner(owner_id, provisioned_devices)
             except SeedError:
                 print(f"Demo seed rollback failed for owner UUID {owner_id}.", file=sys.stderr)
         raise
     finally:
-        if staging_path is not None:
+        if staging_path is not None and not publication_uncertain:
             discard_staging_file(staging_path)
 
 

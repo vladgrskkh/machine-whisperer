@@ -178,6 +178,7 @@ class SeedDemoTest(unittest.TestCase):
             if private_value:
                 self.assertFalse(private_value in output, "seed output contained a credential")
         self.assertEqual(status, expected_status, output)
+        return output
 
     def test_creates_private_fixture_with_default_owner_and_one_machine_per_scenario(self):
         self.run_seed(0)
@@ -283,14 +284,18 @@ class SeedDemoTest(unittest.TestCase):
         self.assertEqual(self.deployment.calls[-3], "provision")
         self.assert_aborted()
 
-    def test_publish_collision_keeps_winning_fixture_and_removes_demo_owner(self):
+    def test_definite_link_failure_rolls_back_without_probing_existing_fixture(self):
         def existing_fixture(_source, destination):
             destination.write_text("concurrent fixture")
             raise FileExistsError()
 
-        with patch.object(seed.os, "link", side_effect=existing_fixture):
+        with (
+            patch.object(seed.os, "link", side_effect=existing_fixture),
+            patch.object(Path, "stat", side_effect=PermissionError()) as probe,
+        ):
             self.run_seed(1)
 
+        probe.assert_not_called()
         self.assert_aborted(expect_fixture=True)
         self.assertEqual(self.fixture_path.read_text(), "concurrent fixture")
 
@@ -322,6 +327,33 @@ class SeedDemoTest(unittest.TestCase):
         self.assertTrue(self.fixture_path.is_file())
         self.assertEqual(self.deployment.owners.get("demo@machine-whisperer.test"), OWNER_ID)
         self.assertNotIn("cleanup", self.deployment.calls)
+
+    def test_failed_publication_probe_preserves_data_and_warns(self):
+        real_link = os.link
+        real_stat = Path.stat
+
+        def interrupted_link(source, destination):
+            real_link(source, destination)
+            raise KeyboardInterrupt
+
+        def inaccessible_fixture(path, *args, **kwargs):
+            if path == self.fixture_path:
+                raise PermissionError(KEY_SECRET)
+            return real_stat(path, *args, **kwargs)
+
+        with (
+            patch.object(seed.os, "link", side_effect=interrupted_link),
+            patch.object(Path, "stat", autospec=True, side_effect=inaccessible_fixture),
+        ):
+            output = self.run_seed(1)
+
+        self.assertIn("Inspect the demo deployment before retrying", output)
+        self.assertTrue(self.fixture_path.is_file())
+        self.assertEqual(self.deployment.owners.get("demo@machine-whisperer.test"), OWNER_ID)
+        self.assertNotIn("cleanup", self.deployment.calls)
+        private_staging, = set(self.secrets.iterdir()) - {self.fixture_path}
+        self.assertTrue(private_staging.samefile(self.fixture_path))
+        self.assertEqual(stat.S_IMODE(private_staging.stat().st_mode), 0o600)
 
     def test_staging_unlink_failure_after_publication_preserves_fixture_and_owner(self):
         real_unlink = Path.unlink
