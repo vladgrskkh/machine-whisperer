@@ -69,6 +69,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
             self.assert_migrations_and_health()
             self.assert_ingress()
+            self.assert_api_documentation()
             self.assert_owner_and_device_http()
             self.run_k6_scenarios()
             self.assert_persistence_across_container_recreation()
@@ -108,6 +109,28 @@ class DeploymentEndToEndTest(unittest.TestCase):
     def configure_tls_client(self):
         self.base_url = f"https://{self.stack.domain}"
         self.opener = self.stack.https_opener(seed.RejectRedirects())
+
+    def assert_api_documentation(self):
+        specs = DEPLOY.parent / "api" / "docs" / "openapi"
+        for name in ("openapi.yaml", "swagger.yaml"):
+            status, headers, body = self.response("GET", f"/v1/{name}")
+            self.assertEqual(status, 200, name)
+            self.assertEqual(headers.get_content_type(), "application/yaml", name)
+            self.assertTrue(body == (specs / name).read_bytes(), f"Stale {name} in the API image")
+
+        status, headers, body = self.response("GET", "/v1/swagger/")
+        self.assertEqual(status, 200)
+        self.assertEqual(headers.get_content_type(), "text/html")
+        self.assertIn(b'url: "/v1/openapi.yaml"', body)
+
+        for asset, media_types in (
+            ("swagger-ui.css", ("text/css",)),
+            ("swagger-ui-bundle.js", ("text/javascript", "application/javascript")),
+        ):
+            status, headers, body = self.response("GET", f"/v1/swagger/{asset}")
+            self.assertEqual(status, 200, asset)
+            self.assertIn(headers.get_content_type(), media_types, asset)
+            self.assertTrue(body, f"Empty Swagger UI asset {asset}")
 
     def response(self, method, path, body=None, token=None, headers=None):
         headers = dict(headers or {})

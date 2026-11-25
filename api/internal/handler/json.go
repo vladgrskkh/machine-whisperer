@@ -6,12 +6,14 @@ import (
 )
 
 type errorResponse struct {
-	Error errorDetail `json:"error"`
-}
+	Error errorDetail `json:"error" validate:"required"`
+} // @name ErrorResponse
 type errorDetail struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
+	// Machine-readable error code.
+	Code string `json:"code" validate:"required"`
+	// Human-readable detail. The wording may change.
+	Message string `json:"message" validate:"required"`
+} // @name ErrorDetail
 
 func Error(w http.ResponseWriter, status int, code, message string) {
 	JSON(w, status, errorResponse{Error: errorDetail{Code: code, Message: message}})

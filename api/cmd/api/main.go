@@ -87,6 +87,26 @@ func serve(ctx context.Context, address string) error {
 	return run(ctx, address, app.Routes(), app.RunWorkers)
 }
 
+// @title Machine Whisperer API
+// @version 1
+// @description HTTP API for user accounts, device enrollment, machines, alerts and telemetry.
+// @BasePath /
+//
+// @tag.name internal
+// @tag.description Restricted manufacturing operations.
+// @tag.name operational
+// @tag.description Process health and API documentation.
+//
+// @securityDefinitions.apikey UserAccessJWT
+// @in header
+// @name Authorization
+// @description Send one Authorization header with the complete value Bearer <access_token>.
+//
+// @securityDefinitions.apikey DeviceBearer
+// @in header
+// @name Authorization
+// @description Send one Authorization header with the complete value Bearer <device_id.secret>.
+// @description The device must be claimed. Authentication supplies the telemetry_writer role.
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	address := os.Getenv("API_ADDRESS")

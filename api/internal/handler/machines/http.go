@@ -28,11 +28,35 @@ type Detailer interface {
 }
 
 type machineResponse struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	CreatedAt time.Time `json:"created_at"`
-}
+	ID        string    `json:"id"         validate:"required" format:"uuid"`
+	Name      string    `json:"name"       validate:"required"                    minLength:"1" maxLength:"100"`
+	CreatedAt time.Time `json:"created_at" validate:"required" format:"date-time"`
+} // @name Machine
 
+//nolint:unused // Documents the JSON field read by the machine creation handler.
+type machineNameBody struct {
+	// After trimming, the name must contain 1–100 Unicode code points and no control characters.
+	Name string `json:"name" validate:"required" minLength:"1"`
+} // @name MachineName
+
+// NewCreate handles machine creation for the authenticated owner.
+//
+// @Summary Create a machine
+// @ID createMachine
+// @Tags machines
+// @Description Creates a machine owned by the authenticated user.
+// @Description Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+// @Accept json
+// @Produce json
+// @Security UserAccessJWT
+// @Param body body MachineName true "Machine name."
+// @Success 201 {object} Machine "Machine created."
+// @Failure 400 {object} ErrorResponse "Invalid machine name or request body (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines [post]
 func NewCreate(usecase Creator) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := middleware.UserID(r.Context())
@@ -59,6 +83,20 @@ func NewCreate(usecase Creator) http.Handler {
 	})
 }
 
+// NewList handles requests to list the current user's machines.
+//
+// @Summary List the user's machines
+// @ID listMachines
+// @Tags machines
+// @Description Returns an empty array when the user owns no machines.
+// @Produce json
+// @Security UserAccessJWT
+// @Success 200 {array} Machine "Owned machines."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines [get]
 func NewList(usecase Lister) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := middleware.UserID(r.Context())
@@ -79,6 +117,23 @@ func NewList(usecase Lister) http.Handler {
 	})
 }
 
+// NewDetail handles a request for one machine.
+//
+// @Summary Get a machine
+// @ID getMachine
+// @Tags machines
+// @Description The machine must belong to the caller.
+// @Produce json
+// @Security UserAccessJWT
+// @Param id path string true "Machine UUID." Format(uuid)
+// @Success 200 {object} Machine "Machine details."
+// @Failure 400 {object} ErrorResponse "Invalid machine ID (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "The machine is unavailable to the caller (`machine_not_found`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines/{id} [get]
 func NewDetail(usecase Detailer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := middleware.UserID(r.Context())

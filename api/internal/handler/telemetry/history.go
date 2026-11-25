@@ -35,6 +35,28 @@ type HistoryLister interface {
 	Execute(ctx context.Context, ownerID, machineID string, limit int, cursor string) (telemetry.HistoryPage, error)
 }
 
+// NewHistory handles owner requests for telemetry history.
+//
+// @Summary Read machine telemetry history
+// @ID listMachineTelemetry
+// @Tags telemetry
+// @Description The machine must belong to the caller. Observations are available after export.
+// @Description Orders by descending observation time, device ID and event ID. Empty pages have an empty items array. An exhausted page has a null next_cursor.
+// @Description Provide each of limit and cursor at most once.
+// @Produce json
+// @Security UserAccessJWT
+// @Param machine_id path string true "Machine UUID." Format(uuid)
+// @Param limit query int false "Maximum number of observations." minimum(1) maximum(1000) default(100)
+// @Param cursor query string false "Opaque cursor bound to this machine. Use the previous next_cursor. Maximum 512 bytes." minlength(1) maxlength(512)
+// @Success 200 {object} HistoryPage "Telemetry history page."
+// @Failure 400 {object} ErrorResponse "Invalid machine ID, limit or cursor (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "The machine is unavailable to the caller (`machine_not_found`)."
+// @Failure 503 {object} ErrorResponse "History could not be served. Retry later (`telemetry_unavailable`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines/{machine_id}/telemetry [get]
 func NewHistory(list HistoryLister) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ownerID, ok := middleware.UserID(r.Context())

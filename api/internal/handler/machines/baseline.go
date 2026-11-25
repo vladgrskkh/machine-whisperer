@@ -24,13 +24,40 @@ type BaselineSetter interface {
 }
 
 type baselineResponse struct {
-	MachineID  string    `json:"machine_id"`
-	MeanRMSG   float64   `json:"mean_rms_g"`
-	StddevRMSG float64   `json:"stddev_rms_g"`
-	Version    int64     `json:"version"`
-	UpdatedAt  time.Time `json:"updated_at"`
-}
+	MachineID string `json:"machine_id" validate:"required" format:"uuid"`
+	// Mean RMS vibration in g.
+	MeanRMSG float64 `json:"mean_rms_g" validate:"required" format:"double" minimum:"0"`
+	// Standard deviation of RMS vibration in g. Strictly positive.
+	StddevRMSG float64   `json:"stddev_rms_g" validate:"required" format:"double"    minimum:"0"`
+	Version    int64     `json:"version"      validate:"required" format:"int64"     minimum:"1"`
+	UpdatedAt  time.Time `json:"updated_at"   validate:"required" format:"date-time"`
+} // @name Baseline
 
+//nolint:unused // Documents the JSON fields read by the baseline update handler.
+type baselineBody struct {
+	// Mean RMS vibration in g. Must be finite and nonnegative.
+	MeanRMSG float64 `json:"mean_rms_g" validate:"required" format:"double" minimum:"0"`
+	// Standard deviation of RMS vibration in g. Must be finite and strictly positive.
+	StddevRMSG float64 `json:"stddev_rms_g" validate:"required" format:"double" minimum:"0"`
+} // @name BaselineInput
+
+// NewGetBaseline handles reads of a machine's current baseline.
+//
+// @Summary Get the current vibration baseline
+// @ID getMachineBaseline
+// @Tags machines
+// @Description The machine must belong to the caller.
+// @Produce json
+// @Security UserAccessJWT
+// @Param id path string true "Machine UUID." Format(uuid)
+// @Success 200 {object} Baseline "Current baseline."
+// @Failure 400 {object} ErrorResponse "Invalid machine ID (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "No baseline is available for this machine and owner (`baseline_not_found`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines/{id}/baseline [get]
 func NewGetBaseline(usecase BaselineGetter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ownerID, machineID, ok := baselineTarget(w, r)
@@ -42,6 +69,26 @@ func NewGetBaseline(usecase BaselineGetter) http.Handler {
 	})
 }
 
+// NewSetBaseline handles writes to a machine's current baseline.
+//
+// @Summary Set the current vibration baseline
+// @ID setMachineBaseline
+// @Tags machines
+// @Description The machine must belong to the caller. Repeating the same values preserves the version and timestamp.
+// @Description Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+// @Accept json
+// @Produce json
+// @Security UserAccessJWT
+// @Param id path string true "Machine UUID." Format(uuid)
+// @Param body body BaselineInput true "RMS vibration mean and standard deviation in g."
+// @Success 200 {object} Baseline "Stored baseline."
+// @Failure 400 {object} ErrorResponse "Invalid machine ID, baseline values or request body (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "The machine is unavailable to the caller (`machine_not_found`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines/{id}/baseline [put]
 func NewSetBaseline(usecase BaselineSetter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ownerID, machineID, ok := baselineTarget(w, r)

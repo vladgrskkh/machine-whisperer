@@ -3,6 +3,12 @@
 !go.sum
 !cmd/
 !cmd/**
+!docs/
+!docs/openapi/
+!docs/openapi/*.go
+!docs/openapi/*.yaml
+!docs/openapi/swagger/
+!docs/openapi/swagger/**
 !internal/
 !internal/**
 !migrations/

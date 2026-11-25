@@ -1,5 +1,37 @@
 # Machine Whisperer API
 
+## HTTP contract
+
+The generated [OpenAPI 3.1 YAML](docs/openapi/openapi.yaml) and
+[Swagger 2.0 YAML](docs/openapi/swagger.yaml) describe all API operations,
+including restricted manufacturing and the process health probe. Both files
+come from the same Go handler annotations. Fetch them from a running API at
+`GET /v1/openapi.yaml` and `GET /v1/swagger.yaml`.
+
+Open `/v1/swagger/` on the running API to browse the OpenAPI 3.1 contract and
+try requests. Use **Authorize** to supply a credential for protected operations.
+The UI keeps credentials in memory for the current page and disables remote
+validation. The API embeds the browser assets from [Swagger UI 5.36.0](https://github.com/swagger-api/swagger-ui/releases/tag/v5.36.0)
+alongside their [licenses and notices](docs/openapi/swagger/).
+
+After changing an HTTP route or its contract, update the handler annotations and
+run these commands from `api/`.
+
+```sh
+make swagger
+git diff -- docs/openapi
+make swagger-check
+```
+
+Commit both regenerated files with the change. CI runs `make swagger-check`
+to regenerate and compare both copies. Swaggo v1 generates Swagger 2.0, and Swaggo v2 generates OpenAPI 3.1 from the
+same handler comments. A pinned yq expression fixes the OpenAPI 3 schema
+keywords for nullable fields and the strictly positive standard deviation.
+The commands use the Go toolchain and download generation dependencies on
+first use.
+
+## Local development
+
 The API requires Go 1.26.5, PostgreSQL and golangci-lint v2.12.2.
 Install the pinned tools with `make tools`, create a PostgreSQL database and
 provision the key files described below, then:

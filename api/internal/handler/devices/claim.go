@@ -21,11 +21,41 @@ type claimRequest struct {
 }
 
 type claimResponse struct {
-	DeviceID  string `json:"device_id"`
-	MachineID string `json:"machine_id"`
-	Status    string `json:"status"`
-}
+	DeviceID  string `json:"device_id"  validate:"required" format:"uuid"`
+	MachineID string `json:"machine_id" validate:"required" format:"uuid"`
+	Status    string `json:"status"     validate:"required"               enums:"claimed"`
+} // @name ClaimedDevice
 
+//nolint:unused // Documents the JSON fields read by decodeClaim.
+type deviceClaimBody struct {
+	DeviceID  string `json:"device_id"  validate:"required" format:"uuid"`
+	MachineID string `json:"machine_id" validate:"required" format:"uuid"`
+	// Single-use claim code from the QR payload, a canonical unpadded base64url encoding of 32 bytes.
+	ClaimCode string `json:"claim_code" validate:"required" minLength:"43" maxLength:"43"`
+} // @name DeviceClaim
+
+// NewClaim handles a user's device claim.
+//
+// @Summary Claim a device for a machine
+// @ID claimDevice
+// @Tags devices
+// @Description Binds the device to a machine owned by the caller and consumes the single-use claim code.
+// @Description Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
+// @Description Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
+// @Accept json
+// @Produce json
+// @Security UserAccessJWT
+// @Param body body DeviceClaim true "QR claim credentials and selected machine ID."
+// @Success 200 {object} ClaimedDevice "Device claimed."
+// @Failure 400 {object} ErrorResponse "Invalid device ID, machine ID, claim code or request body (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "The device, claim code or machine is unavailable (`claim_unavailable`)."
+// @Failure 429 {object} ErrorResponse "The shared per-IP request budget was exceeded (`rate_limited`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Header 429 {integer} Retry-After "Seconds until another attempt can be made."
+// @Router /v1/devices/claim [post]
 func NewClaim(usecase Claimer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		owner, ok := middleware.UserID(r.Context())

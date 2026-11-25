@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/httplog/v3"
 
+	apidocs "github.com/vladgrskkh/machine-whisperer/api/docs/openapi"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/alerts"
@@ -18,6 +19,14 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 )
 
+// Routes builds the API router and attaches endpoint middleware.
+//
+// @Summary Check process health
+// @ID checkProcessHealth
+// @Tags operational
+// @Description Process probe on the API listener.
+// @Success 200 "Process is running."
+// @Router /healthz [get]
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
 	schema := *httplog.SchemaECS
@@ -35,6 +44,11 @@ func (a *Application) Routes() http.Handler {
 	router.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	router.Get("/v1/swagger.yaml", apidocs.ServeSwagger)
+	router.Get("/v1/openapi.yaml", apidocs.ServeOpenAPI)
+	swaggerUI := apidocs.SwaggerUI()
+	router.Get("/v1/swagger", swaggerUI.ServeHTTP)
+	router.Get("/v1/swagger/*", swaggerUI.ServeHTTP)
 	limit := middleware.RateLimit(a.rateLimitConfig)
 	access := middleware.AccessToken(a.verifier)
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)
