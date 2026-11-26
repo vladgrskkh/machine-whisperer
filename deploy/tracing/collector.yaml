@@ -91,27 +91,24 @@ processors:
         ContainsValue(["dev", "test", "staging", "prod"], log.cache["env"])
       - >-
         set(log.attributes["machine.id"], log.cache["machine_id"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed",
-        "machine baseline set"], log.cache["msg"]) and IsString(log.cache["machine_id"]) and
+        IsString(log.cache["machine_id"]) and
         IsMatch(log.cache["machine_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
       - >-
         set(log.attributes["device.id"], log.cache["device_id"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed"], log.cache["msg"]) and
         IsString(log.cache["device_id"]) and IsMatch(log.cache["device_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
       - >-
         set(log.attributes["rows"], Int(log.cache["rows"])) where log.attributes["service.name"] == "analytics" and
-        log.cache["msg"] == "analytics telemetry batch store failed" and IsDouble(log.cache["rows"]) and
+        IsDouble(log.cache["rows"]) and
         log.cache["rows"] >= 1.0 and log.cache["rows"] <= 1000.0
       - >-
         set(log.attributes["failure.category"], log.cache["failure_category"]) where log.attributes["service.name"] == "api" and
-        log.cache["msg"] == "telemetry ingest failed" and
         ContainsValue(["invalid_input", "machine_not_found", "event_conflict", "outside_window", "out_of_order", "internal_error"], log.cache["failure_category"])
       - >-
         set(log.attributes["db.response.status_code"], log.cache["sqlstate"]) where log.attributes["service.name"] == "postgres" and
         IsString(log.cache["sqlstate"]) and IsMatch(log.cache["sqlstate"], "^[0-9A-Z]{5}$") and log.cache["sqlstate"] != "00000"
       - >-
         set(log.attributes["failure.category"], log.cache["category"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["outbox batch delivery failed", "outbox operation failed"], log.cache["msg"]) and
+        log.attributes["failure.category"] == nil and
         ContainsValue(["analytics_http", "analytics_timeout", "analytics_request", "analytics_transport", "claim",
         "acknowledge", "reschedule", "prune"], log.cache["category"])
   filter/log_noise:

@@ -19,7 +19,7 @@
           "refId": "A",
           "datasource": {"type": "loki", "uid": "mw-loki"},
           "editorMode": "code",
-          "expr": "{service_name=\"api\"} |= \"telemetry ingest failed\"",
+          "expr": "{service_name=\"api\"} | failure_category!=\"\" | http_response_status_code!=\"\"",
           "queryType": "range"
         }
       ],
