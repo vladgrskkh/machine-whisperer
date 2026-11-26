@@ -45,7 +45,7 @@ test:
 	go test ./... -v -count=1
 
 test-integration:
-	go test -tags=integration ./... -v -count=1 -race
+	go test -tags=integration ./... -v -count=1 -race $(GO_TEST_FLAGS)
 
 lint:
 	golangci-lint run --build-tags=integration --timeout=5m

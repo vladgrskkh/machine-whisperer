@@ -10,10 +10,10 @@ build:
 	go build ./...
 
 test:
-	go test ./... -race -count=1
+	go test ./... -race -count=1 $(GO_TEST_FLAGS)
 
 test-integration:
-	go test -tags=integration ./tests/integration -race -count=1
+	go test -tags=integration ./tests/integration -race -count=1 $(GO_TEST_FLAGS)
 
 lint:
 	golangci-lint run --config ../api/.golangci.yml --build-tags=integration --timeout=5m

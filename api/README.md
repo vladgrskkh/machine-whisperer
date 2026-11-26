@@ -1,5 +1,7 @@
 # Machine Whisperer API
 
+[![API coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvladgrskkh%2Fmachine-whisperer%2Fcoverage-badges%2Fapi.json)](https://github.com/vladgrskkh/machine-whisperer/actions/workflows/ci.yml)
+
 ## HTTP contract
 
 The generated [OpenAPI 3.1 YAML](docs/openapi/openapi.yaml) and
@@ -110,6 +112,13 @@ integration-tagged code. To run a focused integration test:
 ```sh
 go test -tags=integration -race ./tests/integration/devicetelemetry -run '^TestDeviceMeTelemetry'
 ```
+
+CI merges statement coverage from the unit and integration-tagged suites for
+the API badge. The merge counts each statement once, including where the
+suites overlap. Reports cover the API command and application packages and
+exclude generated Go files, test helpers, and mocks. The run summary shows
+the suite and merged totals. Download the Go profiles and HTML reports from
+the run's Artifacts section.
 
 To regenerate the hashing mock used by handler tests:
 

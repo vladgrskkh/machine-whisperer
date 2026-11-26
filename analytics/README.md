@@ -1,5 +1,7 @@
 # Telemetry analytics
 
+[![Analytics coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fvladgrskkh%2Fmachine-whisperer%2Fcoverage-badges%2Fanalytics.json)](https://github.com/vladgrskkh/machine-whisperer/actions/workflows/ci.yml)
+
 Analytics receives telemetry from the API outbox relay on
 `POST /internal/v1/telemetry-batches`. It validates every observation, sends
 one synchronous ClickHouse insert per batch, and returns HTTP 204 after
@@ -82,3 +84,9 @@ Prometheus endpoint.
 exercises inserts, retries, history pagination, and storage failures through
 the HTTP routes.
 Install the pinned linter with `make tools`, then run `make lint`.
+
+CI merges statement coverage from the unit and integration suites for the
+Analytics badge. The integration suite covers the internal packages it
+reaches, and the unit suite also covers the command packages. Reports exclude
+generated Go files. The run summary shows the suite and merged totals.
+Download the Go profiles and HTML reports from the run's Artifacts section.

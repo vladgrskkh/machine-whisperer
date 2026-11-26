@@ -1,0 +1,69 @@
+name: Export Go coverage
+description: Summarize statement coverage and upload the native Go profile and HTML report
+
+inputs:
+  service:
+    description: Service directory
+    required: true
+  suite:
+    description: Test suite name
+    required: true
+  profiles:
+    description: Paths of input profiles, one per line, for merged coverage
+  note:
+    description: Optional context for interpreting the coverage percentage
+
+outputs:
+  percentage:
+    description: Statement coverage percentage
+    value: ${{ steps.report.outputs.percentage }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Go coverage report
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.service }}
+      env:
+        SERVICE: ${{ inputs.service }}
+        SUITE: ${{ inputs.suite }}
+        PROFILES: ${{ inputs.profiles }}
+        NOTE: ${{ inputs.note }}
+      run: |
+        profile="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.out"
+        report="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.html"
+        inputs=("$profile")
+        if [[ -n "$PROFILES" ]]; then
+          mapfile -t inputs < <(printf '%s' "$PROFILES")
+        fi
+        module=$(go list -m)
+        go run "$GITHUB_ACTION_PATH/profile.go" -module "$module" "${inputs[@]}" > "$profile.filtered"
+        mv "$profile.filtered" "$profile"
+
+        percentage=$(LC_ALL=C awk '
+          NR > 1 {
+            statements += $(NF - 1)
+            if ($NF > 0) covered += $(NF - 1)
+          }
+          END { printf "%.1f%%", statements ? 100 * covered / statements : 0 }
+        ' "$profile")
+        go tool cover -html="$profile" -o "$report"
+        printf 'percentage=%s\n' "$percentage" >> "$GITHUB_OUTPUT"
+        {
+          printf '| Service | Suite | Statement coverage |\n'
+          printf '| --- | --- | --- |\n'
+          printf '| %s | %s | %s |\n\n' "$SERVICE" "$SUITE" "$percentage"
+          if [[ -n "$NOTE" ]]; then
+            printf '%s\n\n' "$NOTE"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+    - name: Upload Go coverage report
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.service }}-${{ inputs.suite }}-coverage
+        path: |
+          ${{ runner.temp }}/${{ inputs.service }}-${{ inputs.suite }}-coverage.out
+          ${{ runner.temp }}/${{ inputs.service }}-${{ inputs.suite }}-coverage.html
+        if-no-files-found: error
+        overwrite: true
