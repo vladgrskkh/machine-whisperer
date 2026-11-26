@@ -2,6 +2,7 @@ package telemetry
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -22,10 +23,13 @@ type IngestBatch struct {
 	tracer     trace.Tracer
 	repository TelemetryRepository
 	recorder   BatchRecorder
+	logger     *slog.Logger
 }
 
-func NewIngestBatch(repository TelemetryRepository, recorder BatchRecorder, tracer trace.Tracer) *IngestBatch {
-	return &IngestBatch{repository: repository, recorder: recorder, tracer: tracer}
+func NewIngestBatch(
+	repository TelemetryRepository, recorder BatchRecorder, logger *slog.Logger, tracer trace.Tracer,
+) *IngestBatch {
+	return &IngestBatch{repository: repository, recorder: recorder, logger: logger, tracer: tracer}
 }
 
 func (i *IngestBatch) Execute(ctx context.Context, events []domain.Event) (err error) {
@@ -33,6 +37,7 @@ func (i *IngestBatch) Execute(ctx context.Context, events []domain.Event) (err e
 	defer func() { spanutil.End(span, err) }()
 	if err = i.repository.StoreBatch(ctx, events); err != nil {
 		i.recorder.RecordBatchStorageError()
+		i.logger.ErrorContext(ctx, "analytics telemetry batch store failed", "rows", len(events))
 		return err
 	}
 	i.recorder.RecordStoredBatch(len(events))

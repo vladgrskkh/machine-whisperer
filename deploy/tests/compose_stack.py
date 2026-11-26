@@ -59,7 +59,7 @@ class ComposeStack:
             "MW_PROXY_IP": f"{edge}.2", "MW_API_IP": f"{edge}.3",
             "MW_PROVISIONING_CIDR": "192.0.2.0/24", "MW_SECRETS_DIR": str(self.secrets),
             "MW_CERT_DIR": str(self.certificates), "MW_ACME_WEBROOT": str(self.webroot),
-            "COMPOSE_PROFILES": "", "MW_NGINX_TRACE_SAMPLE_PERCENT": "100",
+            "COMPOSE_PROFILES": "", "APP_ENV": "test", "MW_NGINX_TRACE_SAMPLE_PERCENT": "100",
             "OTEL_TRACES_SAMPLER_ARG": "1", "MW_FLUENT_FORWARD_PORT": fluent_port,
         }
         self.override = work / "e2e.yaml"

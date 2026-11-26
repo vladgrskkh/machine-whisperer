@@ -114,7 +114,7 @@ func New(ctx context.Context, config Config, options ...Option) (*Application, e
 		return nil, errors.New("auth initialization failed")
 	}
 
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := NewLogger(os.Stderr, os.Getenv("APP_ENV"), slog.LevelDebug)
 	app := &Application{
 		verifier: signer, logger: logger, rateLimitConfig: config.RateLimits.IP,
 		tracerProvider: noop.NewTracerProvider(), propagator: propagation.TraceContext{},
@@ -199,13 +199,13 @@ func (a *Application) setupEnrollment(
 		claimTTL,
 		deviceTracer,
 	)
-	a.claim = device.NewClaim(devices, transactions, deviceTracer)
+	a.claim = device.NewClaim(devices, transactions, a.logger, deviceTracer)
 	a.createMachine = machine.NewCreate(machines, token.IDs{}, machineTracer)
 	a.listMachines = machine.NewList(machines, machineTracer)
 	a.machineDetail = machine.NewDetail(machines, machineTracer)
 	a.telemetryHistory = telemetry.NewListHistory(machines, history, telemetryTracer)
 	a.getBaseline = machine.NewGetBaseline(machines, machineTracer)
-	a.setBaseline = machine.NewSetBaseline(machines, transactions, machineTracer)
+	a.setBaseline = machine.NewSetBaseline(machines, transactions, a.logger, machineTracer)
 }
 
 func (a *Application) setupTelemetry(
@@ -218,7 +218,7 @@ func (a *Application) setupTelemetry(
 	repository := telemetrypostgres.New()
 	telemetryTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/telemetry")
 	detector := telemetry.NewDetector(repository, telemetry.DetectorSettings(detection), telemetryTracer)
-	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector, a.metrics, telemetryTracer)
+	a.ingestTelemetry = telemetry.NewIngest(repository, transactions, detector, a.metrics, a.logger, telemetryTracer)
 	alerts := alertpostgres.New(a.pool)
 	alertTracer := a.tracerProvider.Tracer(instrumentationScope + "usecase/alert")
 	a.listAlerts = alert.NewList(alerts, alertTracer)

@@ -77,8 +77,31 @@ processors:
         set(log.attributes["request.id"], log.cache["request_id"]) where log.attributes["service.name"] == "nginx" and
         IsString(log.cache["request_id"]) and IsMatch(log.cache["request_id"], "^[0-9a-f]{32}$")
       - >-
-        set(log.trace_id.string, log.cache["trace_id"]) where ContainsValue(["api", "nginx"], log.attributes["service.name"]) and
+        set(log.trace_id.string, log.cache["trace_id"]) where ContainsValue(["api", "analytics", "nginx"], log.attributes["service.name"]) and
         IsString(log.cache["trace_id"]) and IsMatch(log.cache["trace_id"], "^[0-9a-f]{32}$")
+      - >-
+        set(log.span_id.string, log.cache["span_id"]) where ContainsValue(["api", "analytics", "nginx"], log.attributes["service.name"]) and
+        IsString(log.cache["trace_id"]) and IsMatch(log.cache["trace_id"], "^[0-9a-f]{32}$") and
+        IsString(log.cache["span_id"]) and IsMatch(log.cache["span_id"], "^[0-9a-f]{16}$")
+      - >-
+        set(log.attributes["app"], log.cache["app"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
+        log.cache["app"] == log.attributes["service.name"]
+      - >-
+        set(log.attributes["env"], log.cache["env"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
+        ContainsValue(["dev", "test", "staging", "prod"], log.cache["env"])
+      - >-
+        set(log.attributes["machine.id"], log.cache["machine_id"]) where log.attributes["service.name"] == "api" and
+        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed",
+        "machine baseline set"], log.cache["msg"]) and IsString(log.cache["machine_id"]) and
+        IsMatch(log.cache["machine_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      - >-
+        set(log.attributes["device.id"], log.cache["device_id"]) where log.attributes["service.name"] == "api" and
+        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed"], log.cache["msg"]) and
+        IsString(log.cache["device_id"]) and IsMatch(log.cache["device_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      - >-
+        set(log.attributes["rows"], Int(log.cache["rows"])) where log.attributes["service.name"] == "analytics" and
+        log.cache["msg"] == "analytics telemetry batch store failed" and IsDouble(log.cache["rows"]) and
+        log.cache["rows"] >= 1.0 and log.cache["rows"] <= 1000.0
       - >-
         set(log.attributes["failure.category"], log.cache["failure_category"]) where log.attributes["service.name"] == "api" and
         log.cache["msg"] == "telemetry ingest failed" and
@@ -99,7 +122,9 @@ processors:
         set(log.body, log.cache["msg"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
         ContainsValue(["api stopped", "trace provider shutdown failed", "starting analytics servers", "analytics servers stopped",
         "analytics server stopped", "outbox relay started", "outbox relay stopped", "outbox batch claimed",
-        "outbox batch acknowledged", "delivered outbox rows pruned", "outbox batch delivery failed", "outbox operation failed"], log.cache["msg"])
+        "outbox batch acknowledged", "delivered outbox rows pruned", "outbox batch delivery failed", "outbox operation failed",
+        "device claimed", "machine baseline set", "telemetry alert opened", "telemetry alert recovered",
+        "analytics telemetry batch store failed"], log.cache["msg"])
   filter/log_noise:
     error_mode: propagate
     log_conditions:

@@ -2,6 +2,7 @@ package machine
 
 import (
 	"context"
+	"log/slog"
 
 	"go.opentelemetry.io/otel/trace"
 
@@ -35,12 +36,15 @@ func (g *GetBaseline) Execute(ctx context.Context, ownerID, machineID string) (_
 
 type SetBaseline struct {
 	tracer       trace.Tracer
+	logger       *slog.Logger
 	repository   BaselineRepository
 	transactions TransactionManager
 }
 
-func NewSetBaseline(repository BaselineRepository, transactions TransactionManager, tracer trace.Tracer) *SetBaseline {
-	return &SetBaseline{tracer: tracer, repository: repository, transactions: transactions}
+func NewSetBaseline(
+	repository BaselineRepository, transactions TransactionManager, logger *slog.Logger, tracer trace.Tracer,
+) *SetBaseline {
+	return &SetBaseline{tracer: tracer, logger: logger, repository: repository, transactions: transactions}
 }
 
 func (s *SetBaseline) Execute(
@@ -61,5 +65,6 @@ func (s *SetBaseline) Execute(
 	if err != nil {
 		return machine.Baseline{}, err
 	}
+	s.logger.InfoContext(ctx, "machine baseline set", "machine_id", stored.MachineID)
 	return stored, nil
 }

@@ -3,6 +3,7 @@ package device
 import (
 	"context"
 	"crypto/subtle"
+	"log/slog"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -23,28 +24,31 @@ type TransactionManager interface {
 
 type Claim struct {
 	tracer       trace.Tracer
+	logger       *slog.Logger
 	repository   ClaimRepository
 	transactions TransactionManager
 }
 
-func NewClaim(repository ClaimRepository, transactions TransactionManager, tracer trace.Tracer) *Claim {
-	return &Claim{tracer: tracer, repository: repository, transactions: transactions}
+func NewClaim(
+	repository ClaimRepository, transactions TransactionManager, logger *slog.Logger, tracer trace.Tracer,
+) *Claim {
+	return &Claim{tracer: tracer, logger: logger, repository: repository, transactions: transactions}
 }
 
 func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, code device.Secret) (err error) {
 	ctx, span := c.tracer.Start(ctx, "device.claim")
 	defer func() { spanutil.End(span, err, device.ErrClaimUnavailable) }()
 	verifier := code.Verifier()
-	return c.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
-		value, err := c.repository.FindForClaim(txCtx, deviceID)
-		if err != nil {
-			return err
+	err = c.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
+		value, findErr := c.repository.FindForClaim(txCtx, deviceID)
+		if findErr != nil {
+			return findErr
 		}
 		if subtle.ConstantTimeCompare(verifier[:], value.ClaimVerifier[:]) != 1 {
 			return device.ErrClaimUnavailable
 		}
-		if err = c.repository.LockMachineOwner(txCtx, machineID, ownerUserID); err != nil {
-			return err
+		if lockErr := c.repository.LockMachineOwner(txCtx, machineID, ownerUserID); lockErr != nil {
+			return lockErr
 		}
 		// Waiting on either row can take the claim past expiry.
 		now := time.Now().UTC()
@@ -53,4 +57,8 @@ func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID stri
 		}
 		return c.repository.Claim(txCtx, deviceID, machineID, ownerUserID, now)
 	})
+	if err == nil {
+		c.logger.InfoContext(ctx, "device claimed", "machine_id", machineID, "device_id", deviceID)
+	}
+	return err
 }

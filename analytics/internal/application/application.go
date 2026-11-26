@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -32,6 +33,7 @@ type Application struct {
 	history        *telemetry.ListHistory
 	tracerProvider trace.TracerProvider
 	propagator     propagation.TextMapPropagator
+	logger         *slog.Logger
 }
 
 type Option func(context.Context, *Application) error
@@ -39,6 +41,7 @@ type Option func(context.Context, *Application) error
 func New(ctx context.Context, cfg config.Config, options ...Option) (*Application, error) {
 	app := &Application{
 		ingestKey: cfg.IngestKey, tracerProvider: noop.NewTracerProvider(), propagator: propagation.TraceContext{},
+		logger: slog.New(slog.DiscardHandler),
 	}
 	for _, option := range options {
 		if err := option(ctx, app); err != nil {
@@ -57,7 +60,7 @@ func New(ctx context.Context, cfg config.Config, options ...Option) (*Applicatio
 		app.tracerProvider.Tracer(instrumentationScope+"infrastructure/clickhouse"),
 	)
 	tracer := app.tracerProvider.Tracer(instrumentationScope + "usecase/telemetry")
-	app.ingest = telemetry.NewIngestBatch(repository, app.metrics, tracer)
+	app.ingest = telemetry.NewIngestBatch(repository, app.metrics, app.logger, tracer)
 	app.history = telemetry.NewListHistory(repository, tracer)
 	return app, nil
 }

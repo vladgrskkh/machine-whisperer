@@ -116,6 +116,14 @@ server {
         proxy_set_header Authorization "";
         proxy_set_header Cookie "";
     }
+    location ^~ /loki/api/v1/ {
+        auth_basic "Loki";
+        auth_basic_user_file /run/secrets/loki_htpasswd;
+        set $loki_query_endpoint loki-query-proxy:3100;
+        proxy_pass http://$loki_query_endpoint;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+    }
     location / {
         return 404;
     }

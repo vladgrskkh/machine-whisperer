@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
@@ -147,11 +146,13 @@ func logIngestFailure(ctx context.Context, logger *slog.Logger, status int, cate
 	if status == http.StatusInternalServerError {
 		level = slog.LevelError
 	}
-	attributes := []slog.Attr{slog.Int("http.response.status_code", status), slog.String("failure_category", category)}
-	if span := trace.SpanContextFromContext(ctx); span.IsValid() && span.IsSampled() {
-		attributes = append(attributes, slog.String("trace_id", span.TraceID().String()))
-	}
-	logger.LogAttrs(ctx, level, "telemetry ingest failed", attributes...)
+	deviceID, machineID, _ := middleware.DeviceBinding(ctx)
+	logger.LogAttrs(ctx, level, "telemetry ingest failed",
+		slog.Int("http.response.status_code", status),
+		slog.String("failure_category", category),
+		slog.String("machine_id", machineID),
+		slog.String("device_id", deviceID),
+	)
 }
 
 func decodeObservation(body io.Reader) (telemetry.Observation, error) {

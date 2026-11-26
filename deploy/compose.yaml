@@ -51,6 +51,7 @@ services:
         aliases: [nginx-status]
       grafana-proxy: {}
       jaeger-proxy: {}
+      loki-proxy: {}
       trace-edge: {}
     volumes:
       - ./nginx:/opt/mw/nginx:ro
@@ -59,7 +60,7 @@ services:
       - ./nginx/status.conf:/etc/nginx/conf.d/status.conf:ro
       - ${MW_CERT_DIR:-./letsencrypt}:/etc/letsencrypt:ro
       - ${MW_ACME_WEBROOT:-./acme-webroot}:/var/www/acme:ro
-    secrets: [internal_ca, jaeger_htpasswd]
+    secrets: [internal_ca, jaeger_htpasswd, loki_htpasswd]
     depends_on:
       api: {condition: service_healthy}
 
@@ -114,6 +115,7 @@ services:
       trace-apps: {}
     environment:
       <<: *app-tracing
+      APP_ENV: ${APP_ENV:-prod}
       API_ADDRESS: ":8443"
       API_METRICS_ADDRESS: api-metrics:9091
       API_TLS_CERT_FILE: /run/secrets/api_cert
@@ -216,6 +218,7 @@ services:
       trace-apps: {}
     environment:
       <<: [*clickhouse-client, *app-tracing]
+      APP_ENV: ${APP_ENV:-prod}
       ANALYTICS_METRICS_ADDRESS: analytics-metrics:9091
       ANALYTICS_INGEST_API_KEY_FILE: /run/secrets/analytics_token
     secrets: [clickhouse_password, analytics_token]
@@ -330,7 +333,7 @@ services:
   loki-query-proxy:
     image: nginx:1.31.10-alpine3.24-slim
     restart: unless-stopped
-    networks: [monitoring, log-store]
+    networks: [monitoring, log-store, loki-proxy]
     volumes:
       - ./nginx/loki-query.conf:/etc/nginx/conf.d/default.conf:ro
 
@@ -363,6 +366,8 @@ networks:
   grafana-proxy:
     internal: true
   jaeger-proxy:
+    internal: true
+  loki-proxy:
     internal: true
   trace-edge:
     internal: true
@@ -406,3 +411,5 @@ secrets:
     file: ${MW_SECRETS_DIR:-./secrets}/grafana-admin-password
   jaeger_htpasswd:
     file: ${MW_SECRETS_DIR:-./secrets}/jaeger-htpasswd
+  loki_htpasswd:
+    file: ${MW_SECRETS_DIR:-./secrets}/loki-htpasswd

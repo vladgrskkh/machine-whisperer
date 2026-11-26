@@ -42,7 +42,8 @@ GRAFANA = "/grafana"
 GRAFANA_DATASOURCE = GRAFANA + "/api/datasources/uid/mw-prometheus"
 GRAFANA_PROMETHEUS = GRAFANA + "/api/datasources/proxy/uid/mw-prometheus"
 GRAFANA_LOKI_PROXY = GRAFANA + "/api/datasources/proxy/uid/mw-loki"
-GRAFANA_LOKI = GRAFANA_LOKI_PROXY + "/loki/api/v1"
+LOKI = "/loki/api/v1"
+GRAFANA_LOKI = GRAFANA_LOKI_PROXY + LOKI
 INGEST_FAILURE_DASHBOARD = "mw-api-ingest-failures"
 GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry",
                       INGEST_FAILURE_DASHBOARD)
@@ -109,6 +110,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assert_application_without_grafana()
             self.assert_application_metrics()
             self.assert_service_logs_in_grafana()
+            self.assert_loki_access()
             self.assert_tracing_during_loki_outage()
             self.assert_jaeger_access()
             # The p95 panels need requests between two scrapes of the same histogram.
@@ -467,6 +469,31 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertEqual(result["resultType"], "streams")
         return result["result"]
 
+    def assert_loki_access(self):
+        labels = LOKI + "/labels"
+        status, headers, _ = self.response("GET", labels)
+        self.assertEqual(status, 401)
+        self.assertEqual(headers["WWW-Authenticate"], 'Basic realm="Loki"')
+
+        jaeger_password = (self.stack.secrets / "jaeger-password").read_text().strip()
+        jaeger_credentials = base64.b64encode(f"jaeger:{jaeger_password}".encode()).decode()
+        self.request("GET", labels, 401, headers={"Authorization": f"Basic {jaeger_credentials}"}, decode=False)
+
+        password = (self.stack.secrets / "loki-password").read_text().strip()
+        credentials = base64.b64encode(f"loki:{password}".encode()).decode()
+        auth = {"Authorization": f"Basic {credentials}"}
+        self.assertIn("service_name", self.request("GET", labels, 200, headers=auth)["data"])
+        params = urlencode({"query": '{service_name="api"}', "limit": 1})
+        query = self.request("GET", LOKI + "/query_range?" + params, 200, headers=auth)
+        self.assertEqual(query["data"]["resultType"], "streams")
+        self.assertTrue(query["data"]["result"])
+
+        self.request("POST", labels, 405, {}, headers=auth, decode=False)
+        for path in (LOKI + "/push", LOKI + "/delete", "/otlp/v1/logs"):
+            self.request("POST", path, 404, {}, headers=auth, decode=False)
+        for path in ("/loki/config", "/ready"):
+            self.request("GET", path, 404, headers=auth, decode=False)
+
     def assert_service_logs_in_grafana(self):
         ip = self.stack.network_address("otel-collector", "trace-apps")
         trace_apps = f"{self.stack.project}_trace-apps"
@@ -503,7 +530,12 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.request("GET", "/untraced-log-check", 404, decode=False)
         edge_without_trace = eventually("a failure log from an untraced Nginx route", lambda: self.loki_range(
             '{service_name="nginx"} | http_response_status_code="404"', untraced))
-        self.assertTrue(all("trace_id" not in row["stream"] for row in edge_without_trace))
+        self.assertTrue(all({"trace_id", "span_id"}.isdisjoint(row["stream"]) for row in edge_without_trace))
+
+        claim = eventually("the device claim with its machine and device IDs", lambda: self.loki_range(
+            '{service_name="api"} |= "device claimed"'
+            + f' | machine_id="{self.machine_id}" | device_id="{self.device_id}"', start))
+        self.assertEqual(claim[0]["values"][0][1], "device claimed")
 
         now = time.time_ns()
         private = "private-canary-" + secrets.token_hex(10)
@@ -522,9 +554,14 @@ class DeploymentEndToEndTest(unittest.TestCase):
             "queries": [{**query, "maxLines": 20, "intervalMs": 1000, "maxDataPoints": 100}],
         }, headers={"Origin": self.base_url}, opener=self.grafana_viewer)
         self.assertIn("telemetry ingest failed", json.dumps(panel_data["results"][query["refId"]]["frames"]))
-        trace_id = failure[0]["stream"]["trace_id"]
+        fields = failure[0]["stream"]
+        self.assertEqual((fields["app"], fields["env"]), ("api", "test"))
+        self.assertEqual((fields["machine_id"], fields["device_id"]), (self.machine_id, self.device_id))
+        trace_id, span_id = fields["trace_id"], fields["span_id"]
         self.assertRegex(trace_id, r"^[0-9a-f]{32}$")
-        self.assertTrue(eventually("the failure log's sampled trace in Jaeger", lambda: JaegerQuery(self.stack).get(trace_id)))
+        self.assertRegex(span_id, r"^[0-9a-f]{16}$")
+        trace = eventually("the failure log's sampled trace in Jaeger", lambda: JaegerQuery(self.stack).get(trace_id))
+        self.assertEqual([service_name(span) for span in trace if span["spanId"] == span_id], ["api"])
         self.logged_trace_id = trace_id
         self.logged_trace_start = now
         edge = eventually(
@@ -534,6 +571,8 @@ class DeploymentEndToEndTest(unittest.TestCase):
             timeout=30,
         )
         self.assertRegex(edge[0]["stream"]["request_id"], r"^[0-9a-f]{32}$")
+        edge_span_id = edge[0]["stream"]["span_id"]
+        self.assertEqual([service_name(span) for span in trace if span["spanId"] == edge_span_id], ["nginx"])
 
         # A real SQL error reaches Loki as a SQLSTATE and a fixed body.
         self.stack.compose("exec", "-T", "postgres", "psql", "-Xq", "-U", "machine_whisperer",
@@ -856,6 +895,8 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
         self.owner_token = owner_token
         self.device_key = api_key
+        self.machine_id = machine
+        self.device_id = device_id
         self.history_path = history_path
         self.observation = observation
         self.assert_recorded_traces(ingest_start, ingest_end, (machine, device_id, observation["event_id"]))

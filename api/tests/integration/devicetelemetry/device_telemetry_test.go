@@ -551,12 +551,14 @@ func TestDeviceTelemetryLogsExcludeSecretsAndBody(t *testing.T) {
 	assert.NotContains(t, entries, eventID)
 	assert.NotContains(t, entries, "vibration_rms_g")
 	assert.NotContains(t, entries, "private_body_canary")
-	var logged, loggedFailure bool
+	var logged, loggedFailure, loggedClaim bool
 	for line := range strings.SplitSeq(strings.TrimSpace(entries), "\n") {
 		var entry struct {
 			Message  string `json:"msg"`
 			Category string `json:"failure_category"`
 			Status   int    `json:"http.response.status_code"`
+			Machine  string `json:"machine_id"`
+			Device   string `json:"device_id"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(line), &entry))
 		if entry.Message == "POST "+path {
@@ -566,8 +568,16 @@ func TestDeviceTelemetryLogsExcludeSecretsAndBody(t *testing.T) {
 			loggedFailure = true
 			assert.Equal(t, "invalid_input", entry.Category)
 			assert.Equal(t, http.StatusBadRequest, entry.Status)
+			assert.Equal(t, f.MachineID, entry.Machine)
+			assert.Equal(t, f.Device.ClaimPayload.DeviceID, entry.Device)
+		}
+		if entry.Message == "device claimed" {
+			loggedClaim = true
+			assert.Equal(t, f.MachineID, entry.Machine)
+			assert.Equal(t, f.Device.ClaimPayload.DeviceID, entry.Device)
 		}
 	}
 	assert.True(t, logged)
 	assert.True(t, loggedFailure, "rejected ingest should emit a safe business event")
+	assert.True(t, loggedClaim, "successful claim should emit a safe business event")
 }

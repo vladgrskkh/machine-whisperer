@@ -45,6 +45,7 @@ func run(ctx context.Context, logger *slog.Logger) error {
 	}()
 	app, err := application.New(ctx, cfg,
 		application.WithTracing(traces.Provider, traces.Propagator), application.WithClickHouse(cfg.ClickHouse),
+		application.WithLogger(logger),
 	)
 	if err != nil {
 		return err
@@ -127,7 +128,7 @@ func resolveMetricsAddress(address string) (string, error) {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	logger := application.NewLogger(os.Stderr, os.Getenv("APP_ENV"))
 	err := run(ctx, logger)
 	stop()
 	if err != nil {
