@@ -410,12 +410,11 @@ Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
 Search `machine-whisperer` for `machine.history.load` to open the app's history trace.
-Nginx continues W3C trace context on the exact machine telemetry URL, which
-also serves legacy device POST requests. Requests without valid context start
-at Nginx. The edge samples using its own request ID and forwards its own
-sampling flag. The other public API paths replace client trace context.
-Trace IDs carry diagnostic context. The API enforces its existing access and
-machine ownership checks independently.
+Nginx continues valid W3C trace context on public `/v1/` routes. Requests
+without valid context start at Nginx, and factory provisioning always starts
+a fresh trace. The edge samples using its own request ID and forwards its
+own sampling flag. Trace IDs carry diagnostic context. The API enforces its
+existing access and machine ownership checks independently.
 
 The app uploads OTLP/HTTP protobuf to `POST /otlp/v1/traces`. Nginx checks the
 user's access token through the existing API profile route and enforces a

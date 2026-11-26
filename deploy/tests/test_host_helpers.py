@@ -122,7 +122,14 @@ class CertificateHelperTest(unittest.TestCase):
             self.assertIn("proxy_set_header Upgrade $http_upgrade;", tls)
             self.assertIn("proxy_set_header Connection $grafana_connection_upgrade;", tls)
             self.assertIn("1% on; * off;", tls)
-            self.assertEqual(tls.count("otel_trace_context inject;"), 2)
+            self.assertIn('split_clients "$request_id" $mw_trace_sampled {', tls)
+            public = tls.split("    location /v1/ {\n", 1)[1].split("\n    }", 1)[0]
+            factory = tls.split("    location = /internal/v1/device-provisioning {\n", 1)[1].split("\n    }", 1)[0]
+            self.assertIn("otel_trace_context propagate;", public)
+            self.assertIn("add_header X-Mw-Sampled-Trace $mw_sampled_trace_id always;", public)
+            self.assertIn("otel_trace_context inject;", factory)
+            self.assertEqual(tls.count("otel_trace_context propagate;"), 1)
+            self.assertEqual(tls.count("otel_trace_context inject;"), 1)
             self.assertIn('proxy_set_header traceparent "00-$otel_trace_id-$otel_span_id-$mw_trace_flags";', tls)
             self.assertIn('proxy_set_header tracestate "";', tls)
             self.assertIn('proxy_set_header baggage "";', tls)
