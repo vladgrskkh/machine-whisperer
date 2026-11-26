@@ -26,10 +26,14 @@ on port 80 during both issuance and renewal.
 
 ## Docker Hub images
 
-After all checks pass on a push to `main`, GitHub Actions publishes
-`machine-whisperer-api` and `machine-whisperer-analytics` to Docker Hub.
-In GitHub Settings → Environments, use the `dockerhub-publish` environment
-with the deployment branch rule allowing only `main`. Add environment secrets
+GitHub Actions runs checks on `main` pushes and pull requests. A pushed
+`release-X.Y.Z` Git tag on a commit in `main` history also runs the checks.
+After they pass, the release jobs publish `machine-whisperer-api` and
+`machine-whisperer-analytics` to Docker Hub.
+
+In GitHub Settings → Environments → `dockerhub-publish`, add a **Tag** rule
+for `release-*` under **Selected branches and tags**. Remove the former
+`main` branch rule when the tag workflow lands. Add environment secrets
 `DOCKERHUB_PUBLISH_USERNAME` (publishing account) and `DOCKERHUB_PUBLISH_TOKEN`
 (write token). After adding them, delete the old `DOCKERHUB_USERNAME` and
 `DOCKERHUB_TOKEN` repository secrets. Keep the new names exclusive to this
@@ -38,11 +42,23 @@ organization. It defaults to the publishing username.
 
 Before the first release, open **Settings → General → Tag mutability** on
 both Docker Hub repositories. Select **Specific tags are immutable** and
-save `^sha-[0-9a-f]{40}$`. On a rerun, CI reuses an existing commit image.
-After both images are available, a serialized job promotes their SHA tags to
-`latest` if the commit is still the head of `main`. Use the SHA tag for
-production and recovery. `latest` is a convenience alias updated separately
-on each repository. [Docker Hub immutable tags](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/)
+save `^(sha-[0-9a-f]{40}|release-[0-9]+\.[0-9]+\.[0-9]+)$`.
+
+To publish the current `main` commit as `release-0.1.0`:
+
+```bash
+git fetch origin main
+git tag -a release-0.1.0 origin/main -m 'Release 0.1.0'
+git push origin refs/tags/release-0.1.0
+```
+
+CI builds or reuses each `sha-<commit>` image and adds the matching
+`release-0.1.0` image tag to both repositories. A serialized job updates
+both `latest` tags after both versioned images are available and only for the
+highest matching Git release tag. If that tag's checks or build fail,
+`latest` stays at the previously promoted release. Docker Hub updates the two
+repositories separately. If the second update fails, rerun the workflow to
+finish it. Use the SHA tag for production and recovery. [Docker Hub immutable tags](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/)
 
 Public images can be pulled anonymously. For private images, configure a
 Docker credential store for the VPS operator, run
@@ -443,8 +459,9 @@ docker run --rm --network none -v "$volume:/data:ro" --entrypoint du nginx:1.31.
 
 ## Upgrade and public TLS renewal
 
-Take a backup before changing releases. Check out the intended release commit
-or tag. If upgrading a checkout that used local builds, add
+Take a backup before changing releases. Wait for the Docker Hub release jobs
+to finish, then check out the intended release tag or its commit. If upgrading
+a checkout that used local builds, add
 `DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
 [First startup](#first-startup). The commands below pin both images to the
 checked-out commit and add any missing PostgreSQL exporter, Grafana, Jaeger,
@@ -452,7 +469,7 @@ and Loki credentials. Set `secrets_dir` to the existing host directory
 configured by `MW_SECRETS_DIR`.
 
 ```bash
-git fetch origin
+git fetch --tags origin
 git checkout --detach RELEASE_COMMIT_OR_TAG
 sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
 secrets_dir=deploy/secrets

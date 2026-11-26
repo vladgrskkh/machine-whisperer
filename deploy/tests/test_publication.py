@@ -17,15 +17,24 @@ class PublicationTest(unittest.TestCase):
         cls.workflow = json.loads(result.stdout)
         cls.jobs = cls.workflow["jobs"]
 
-    def test_only_protected_main_jobs_can_publish_after_all_checks(self):
+    def test_only_release_tag_jobs_can_publish_after_all_checks(self):
+        self.assertEqual(self.workflow.get("on", self.workflow.get("true")), {
+            "push": {"branches": ["main"], "tags": ["release-[0-9]+.[0-9]+.[0-9]+"]},
+            "pull_request": {"branches": ["main"]},
+        })
         self.assertNotIn("secrets.DOCKERHUB_", json.dumps(self.workflow.get("env", {})))
+        check_release = self.jobs["check-release"]
         publish = self.jobs["publish"]
         promote = self.jobs["promote"]
-        self.assertEqual(publish["if"], "github.event_name == 'push' && github.ref == 'refs/heads/main'")
-        self.assertCountEqual(publish["needs"], ["analytics", "build", "deployment", "integration", "lint", "mobile", "test"])
+        self.assertEqual(publish["if"], "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-') && !github.event.deleted")
+        self.assertEqual(check_release["if"], publish["if"])
+        self.assertEqual(check_release["steps"][0]["with"]["fetch-depth"], 0)
+        self.assertCountEqual(publish["needs"], [
+            "analytics", "build", "check-release", "deployment", "integration", "lint", "mobile", "test",
+        ])
         self.assertCountEqual(publish["strategy"]["matrix"]["service"], ["analytics", "api"])
         self.assertEqual(publish["concurrency"], {
-            "group": "dockerhub-sha-${{ matrix.service }}-${{ github.sha }}", "queue": "max",
+            "group": "dockerhub-sha-${{ matrix.service }}-${{ needs.check-release.outputs.commit }}", "queue": "max",
         })
         self.assertEqual(publish["env"]["DOCKERHUB_NAMESPACE"],
                          "${{ vars.DOCKERHUB_NAMESPACE || secrets.DOCKERHUB_PUBLISH_USERNAME }}")
@@ -41,14 +50,15 @@ class PublicationTest(unittest.TestCase):
         self.assertEqual(publish["environment"], "dockerhub-publish")
         self.assertEqual(build["with"]["context"], "./${{ matrix.service }}")
         self.assertIs(build["with"]["push"], True)
-        release_tag = "docker.io/${{ env.DOCKERHUB_NAMESPACE }}/machine-whisperer-${{ matrix.service }}:sha-${{ github.sha }}"
+        release_tag = ("docker.io/${{ env.DOCKERHUB_NAMESPACE }}/machine-whisperer-${{ matrix.service }}"
+                       ":sha-${{ needs.check-release.outputs.commit }}")
         self.assertEqual(build["with"]["tags"].splitlines(), [release_tag])
         self.assertLess(steps.index(login), steps.index(probe))
         self.assertLess(steps.index(probe), steps.index(build))
         self.assertEqual(build["if"], "steps.release.outputs.exists == 'false'")
         self.assertEqual(probe["env"]["RELEASE_IMAGE"], release_tag)
 
-        self.assertEqual(promote["needs"], "publish")
+        self.assertEqual(promote["needs"], ["check-release", "publish"])
         self.assertEqual(promote["if"], publish["if"])
         self.assertNotIn("strategy", promote)
         self.assertEqual(promote["environment"], "dockerhub-publish")
@@ -88,28 +98,86 @@ esac
                     self.assertEqual(output.read_text().strip(), expected)
                     self.assertEqual(log.read_text().splitlines(), [f"buildx imagetools inspect {image}"])
 
-    def test_promotion_only_retags_the_current_main_revision(self):
+    def test_publication_validates_tag_and_main_ancestry(self):
+        check_release = self.jobs["check-release"]["steps"][-1]["run"]
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            fake_tool(work, "git", """#!/bin/bash
+if [[ "$*" == 'rev-parse --verify tag-object^{commit}' ]]; then
+    echo abc
+    exit 0
+fi
+[[ "$*" == 'merge-base --is-ancestor abc origin/main' ]] || exit 9
+exit "$GIT_STATUS"
+""")
+            output = work / "out"
+            for tag, status, valid in (("release-0.1.0", 0, True), ("release-0.1.0", 1, False),
+                                       ("release-0.1.0-rc.1", 0, False)):
+                with self.subTest(tag=tag, status=status):
+                    output.write_text("")
+                    env = tool_env(work, GITHUB_REF_NAME=tag, GITHUB_SHA="tag-object", GIT_STATUS=str(status),
+                                   GITHUB_OUTPUT=str(output))
+                    result = run(["bash", "-eu", "-o", "pipefail", "-c", check_release], env=env, check=False)
+                    self.assertEqual(result.returncode == 0, valid)
+                    self.assertEqual(output.read_text(), "commit=abc\n" if valid else "")
+
+    def test_release_aliases_and_latest_use_the_verified_commit_images(self):
         promotion = self.jobs["promote"]["steps"][-1]["run"]
         with tempfile.TemporaryDirectory() as scratch:
             work = Path(scratch)
-            fake_tool(work, "gh", """#!/bin/bash
-[[ "$*" == 'api repos/org/repo/git/ref/heads/main --jq .object.sha' ]] || exit 9
-echo "$HEAD_SHA"
+            fake_tool(work, "git", """#!/bin/bash
+[[ "$*" == 'ls-remote --tags --sort=-version:refname origin refs/tags/release-*' ]] || exit 9
+printf '%s\\n' "$RELEASE_REFS"
 """)
             fake_tool(work, "docker", """#!/bin/sh
-echo "$*" >> "$LOG"
+[ "$1 $2" = "buildx imagetools" ] || exit 9
+if [ "$3" = create ]; then
+    echo "$*" >> "$LOG"
+    exit 0
+fi
+[ "$3" = inspect ] && [ "$5" = --format ] && [ "$6" = '{{printf "%s" .Manifest.Digest}}' ] || exit 9
+case "$4" in
+    *-api:*) digest=sha256:api;;
+    *-analytics:*) digest=sha256:analytics;;
+    *) exit 9;;
+esac
+case "$4" in
+    *:sha-abc) echo "$digest";;
+    *:release-0.1.9)
+        case "$MODE" in
+            missing) echo "ERROR: $4: not found" >&2; exit 1;;
+            existing) echo "$digest";;
+            conflict) echo "sha256:different";;
+            denied) echo "ERROR: unauthorized" >&2; exit 1;;
+        esac;;
+    *) exit 9;;
+esac
 """)
             log = work / "calls"
             env = tool_env(
-                work, LOG=str(log), GITHUB_SHA="abc", GITHUB_REPOSITORY="org/repo", DOCKERHUB_NAMESPACE="org",
+                work, LOG=str(log), RELEASE_COMMIT="abc", GITHUB_REF="refs/tags/release-0.1.9",
+                GITHUB_REF_NAME="release-0.1.9", DOCKERHUB_NAMESPACE="org",
             )
-            for head in ("abc", "older"):
-                with self.subTest(head=head):
+            ref = "tag-object\trefs/tags/release-0.1.9\nabc\trefs/tags/release-0.1.9^{}"
+            newer = "newer\trefs/tags/release-0.1.10"
+            version_aliases, latest_aliases = ([
+                "buildx imagetools create --prefer-index=false"
+                f" --tag docker.io/org/machine-whisperer-{service}:{tag}"
+                f" docker.io/org/machine-whisperer-{service}@sha256:{service}"
+                for service in ("api", "analytics")
+            ] for tag in ("release-0.1.9", "latest"))
+            cases = (
+                ("missing", ref, True, version_aliases + latest_aliases),
+                ("missing", newer + "\n" + ref, True, version_aliases),
+                ("existing", "abc\trefs/tags/release-0.1.9", True, latest_aliases),
+                ("conflict", ref, False, []),
+                ("denied", ref, False, []),
+                ("missing", "other\trefs/tags/release-0.1.9", False, []),
+            )
+            for mode, refs, success, expected in cases:
+                with self.subTest(mode=mode, refs=refs):
                     log.write_text("")
-                    run(["bash", "-eu", "-o", "pipefail", "-c", promotion], env={**env, "HEAD_SHA": head})
-                    expected = []
-                    if head == "abc":
-                        for service in ("api", "analytics"):
-                            image = f"docker.io/org/machine-whisperer-{service}"
-                            expected.append(f"buildx imagetools create --prefer-index=false --tag {image}:latest {image}:sha-abc")
+                    result = run(["bash", "-eu", "-o", "pipefail", "-c", promotion],
+                                 env={**env, "MODE": mode, "RELEASE_REFS": refs}, check=False)
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
                     self.assertEqual(log.read_text().splitlines(), expected)
