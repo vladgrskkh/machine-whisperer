@@ -424,13 +424,17 @@ only stream label.
 
 Docker forwards logs for API, Analytics, Nginx, PostgreSQL and ClickHouse to
 the Collector at `127.0.0.1:24224`. Set `MW_FLUENT_FORWARD_PORT` in the Compose
-env file if the host port is in use. The Collector processes the ordinary
-Docker log records locally and sends allowlisted fields and fixed message text
-to Loki using native OTLP/HTTP. Native error text, request paths and bodies,
-credentials, and SQL query text and values are excluded from the centralized
-store. Loki listens on an internal storage network shared with the Collector
-and the query proxy. Grafana and the public Nginx route both reach the
-read-only query proxy.
+env file if the host port is in use. The Collector forwards original Docker
+log lines to Loki over OTLP/HTTP with allowlisted searchable metadata. It keeps
+HTTP response records and drops debug records without an HTTP status. For
+public HTTPS requests, Nginx labels responses below `400` as `INFO`, `4xx` as
+`WARN`, and `5xx` as `ERROR`. Saved lines can include SQL text, values, or
+request details emitted by a service. Loki listens on an internal storage
+network shared with the Collector and the query proxy. Grafana and the public
+Nginx route both reach the read-only query proxy.
+
+After changing the Nginx templates or `deploy/tracing/collector.yaml`, run
+`mw up -d --no-deps --force-recreate nginx otel-collector` to load the changes.
 
 For direct queries, use HTTPS under `https://<DOMAIN>/loki/api/v1/`. Sign in
 as `loki` with the password in `deploy/secrets/loki-password` (or the equivalent
@@ -457,10 +461,11 @@ which keeps their own output out of the forwarding path.
 [Docker dual logging](https://docs.docker.com/engine/logging/dual-logging/)
 
 Loki keeps seven days in `loki-data`, with a 256 MiB container memory ceiling
-and a 160 MiB Go runtime target. WAL replay has a 64 MB memory ceiling. On a 3.8 GiB disposable Docker host, 40,000
-synthetic records across the five services increased the volume from 140 KiB
-to 5.4 MiB including the WAL and a forced flush. Sampled memory peaked near
-100 MiB for Loki and 78 MiB for the Collector. Use 2 GiB as the initial disk
+and a 160 MiB Go runtime target. WAL replay has a 64 MB memory ceiling. On a
+3.8 GiB disposable Docker host, 40,000 synthetic records with short, fixed
+messages increased the volume from 140 KiB to 5.4 MiB including the WAL and a
+forced flush. Sampled memory peaked near 100 MiB for Loki and 78 MiB for the
+Collector. Use 2 GiB as the initial disk
 budget for Loki and compare against a representative day of traffic before
 increasing retention. The age-based compactor deletes asynchronously. The
 backup and restore procedures exclude `loki-data`.

@@ -40,7 +40,7 @@ processors:
     log_conditions:
       - 'not ContainsValue(["mw.api", "mw.analytics", "mw.nginx", "mw.postgres", "mw.clickhouse"], log.attributes["fluent.tag"])'
   transform/log_allowlist:
-    error_mode: propagate
+    error_mode: ignore
     log_statements:
       - 'keep_keys(resource.attributes, [])'
       - 'keep_keys(scope.attributes, [])'
@@ -49,7 +49,7 @@ processors:
       - 'replace_pattern(log.attributes["fluent.tag"], "^mw[.]", "")'
       - 'set(log.attributes["service.name"], log.attributes["fluent.tag"])'
       - 'delete_key(log.attributes, "fluent.tag")'
-      # Read structured fields in a scratch map. Export only bounded, typed or explicitly allowed values.
+      # Read structured fields in a scratch map to extract searchable metadata.
       - 'merge_maps(log.cache, ParseJSON(log.body), "upsert") where IsString(log.body) and IsMatch(log.body, "^[{]")'
       - >-
         merge_maps(log.cache, ExtractPatterns(log.body, "^[0-9/-]+ [0-9:.]+ [^ ]+ [[]\\d+[]] (?P<sqlstate>[0-9A-Z]{5}) (?P<level>[A-Z]+):"), "upsert")
@@ -91,45 +91,30 @@ processors:
         ContainsValue(["dev", "test", "staging", "prod"], log.cache["env"])
       - >-
         set(log.attributes["machine.id"], log.cache["machine_id"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed",
-        "machine baseline set"], log.cache["msg"]) and IsString(log.cache["machine_id"]) and
+        IsString(log.cache["machine_id"]) and
         IsMatch(log.cache["machine_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
       - >-
         set(log.attributes["device.id"], log.cache["device_id"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed"], log.cache["msg"]) and
         IsString(log.cache["device_id"]) and IsMatch(log.cache["device_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
       - >-
         set(log.attributes["rows"], Int(log.cache["rows"])) where log.attributes["service.name"] == "analytics" and
-        log.cache["msg"] == "analytics telemetry batch store failed" and IsDouble(log.cache["rows"]) and
+        IsDouble(log.cache["rows"]) and
         log.cache["rows"] >= 1.0 and log.cache["rows"] <= 1000.0
       - >-
         set(log.attributes["failure.category"], log.cache["failure_category"]) where log.attributes["service.name"] == "api" and
-        log.cache["msg"] == "telemetry ingest failed" and
         ContainsValue(["invalid_input", "machine_not_found", "event_conflict", "outside_window", "out_of_order", "internal_error"], log.cache["failure_category"])
       - >-
         set(log.attributes["db.response.status_code"], log.cache["sqlstate"]) where log.attributes["service.name"] == "postgres" and
         IsString(log.cache["sqlstate"]) and IsMatch(log.cache["sqlstate"], "^[0-9A-Z]{5}$") and log.cache["sqlstate"] != "00000"
       - >-
         set(log.attributes["failure.category"], log.cache["category"]) where log.attributes["service.name"] == "api" and
-        ContainsValue(["outbox batch delivery failed", "outbox operation failed"], log.cache["msg"]) and
+        log.attributes["failure.category"] == nil and
         ContainsValue(["analytics_http", "analytics_timeout", "analytics_request", "analytics_transport", "claim",
         "acknowledge", "reschedule", "prune"], log.cache["category"])
-      # All backend bodies are fixed text, including native error messages and API request paths.
-      - 'set(log.body, "Service log")'
-      - 'set(log.body, "HTTP request") where log.attributes["http.response.status_code"] != nil'
-      - 'set(log.body, "telemetry ingest failed") where log.cache["msg"] == "telemetry ingest failed" and log.attributes["failure.category"] != nil'
-      - >-
-        set(log.body, log.cache["msg"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
-        ContainsValue(["api stopped", "trace provider shutdown failed", "starting analytics servers", "analytics servers stopped",
-        "analytics server stopped", "outbox relay started", "outbox relay stopped", "outbox batch claimed",
-        "outbox batch acknowledged", "delivered outbox rows pruned", "outbox batch delivery failed", "outbox operation failed",
-        "device claimed", "machine baseline set", "telemetry alert opened", "telemetry alert recovered",
-        "analytics telemetry batch store failed"], log.cache["msg"])
   filter/log_noise:
     error_mode: propagate
     log_conditions:
-      - 'log.body == "HTTP request" and log.attributes["http.response.status_code"] < 400'
-      - 'log.severity_number == SEVERITY_NUMBER_DEBUG'
+      - 'log.severity_number == SEVERITY_NUMBER_DEBUG and log.attributes["http.response.status_code"] == nil'
   groupbyattrs/log_service:
     keys: [service.name]
   batch/logs:

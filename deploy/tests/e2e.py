@@ -526,40 +526,47 @@ class DeploymentEndToEndTest(unittest.TestCase):
         streams = eventually("the five monitored services in Loki", series, timeout=60)
         self.assertTrue(all(set(stream) == {"service_name"} for stream in streams), streams)
 
+        success_start = time.time_ns()
+        machine_path = f"/v1/machines/{self.machine_id}"
+        self.request("GET", machine_path, 200, token=self.owner_token)
+        api_success = eventually("the successful API response in Loki", lambda: self.loki_range(
+            '{service_name="api"} | http_response_status_code="200" | severity_text="INFO"'
+            + f' | json | url_path="{machine_path}"', success_start))
+        self.assertNotIn(self.owner_token, api_success[0]["values"][0][1])
+        success_trace_id = api_success[0]["stream"]["trace_id"]
+        eventually("the successful Nginx response in the same trace", lambda: self.loki_range(
+            '{service_name="nginx"} | http_response_status_code="200" | severity_text="INFO"'
+            + f' | trace_id="{success_trace_id}"', success_start))
+
         untraced = time.time_ns()
         self.request("GET", "/untraced-log-check", 404, decode=False)
         edge_without_trace = eventually("a failure log from an untraced Nginx route", lambda: self.loki_range(
             '{service_name="nginx"} | http_response_status_code="404"', untraced))
         self.assertTrue(all({"trace_id", "span_id"}.isdisjoint(row["stream"]) for row in edge_without_trace))
 
-        claim = eventually("the device claim with its machine and device IDs", lambda: self.loki_range(
-            '{service_name="api"} |= "device claimed"'
-            + f' | machine_id="{self.machine_id}" | device_id="{self.device_id}"', start))
-        self.assertEqual(claim[0]["values"][0][1], "device claimed")
-
         now = time.time_ns()
-        private = "private-canary-" + secrets.token_hex(10)
-        self.request("POST", INGEST + "?private=" + private, 400, {"unexpected": private}, self.device_key)
+        private_query = "private-query-" + secrets.token_hex(10)
+        private_body = "private-body-" + secrets.token_hex(10)
+        self.request("POST", INGEST + "?private=" + private_query, 400, {"unexpected": private_body}, self.device_key)
         query = self.dashboard_panel(INGEST_FAILURE_DASHBOARD, "Rejected telemetry observations")["targets"][0]
         self.assertEqual(query["datasource"], {"type": "loki", "uid": "mw-loki"})
         failure = eventually(
-            "a sanitized API failure through the saved Loki query",
+            "an API failure through the saved Loki query",
             lambda: self.loki_range(query["expr"] + ' | failure_category="invalid_input"'
                                     + ' | severity_text="WARN" | http_response_status_code="400"', now),
             timeout=40,
         )
-        self.assertEqual(failure[0]["values"][0][1], "telemetry ingest failed")
-        panel_data = self.request("POST", GRAFANA + "/api/ds/query", 200, {
-            "from": str(now // 1_000_000), "to": str(time.time_ns() // 1_000_000),
-            "queries": [{**query, "maxLines": 20, "intervalMs": 1000, "maxDataPoints": 100}],
-        }, headers={"Origin": self.base_url}, opener=self.grafana_viewer)
-        self.assertIn("telemetry ingest failed", json.dumps(panel_data["results"][query["refId"]]["frames"]))
         fields = failure[0]["stream"]
         self.assertEqual((fields["app"], fields["env"]), ("api", "test"))
         self.assertEqual((fields["machine_id"], fields["device_id"]), (self.machine_id, self.device_id))
         trace_id, span_id = fields["trace_id"], fields["span_id"]
         self.assertRegex(trace_id, r"^[0-9a-f]{32}$")
         self.assertRegex(span_id, r"^[0-9a-f]{16}$")
+        panel_data = self.request("POST", GRAFANA + "/api/ds/query", 200, {
+            "from": str(now // 1_000_000), "to": str(time.time_ns() // 1_000_000),
+            "queries": [{**query, "maxLines": 20, "intervalMs": 1000, "maxDataPoints": 100}],
+        }, headers={"Origin": self.base_url}, opener=self.grafana_viewer)
+        self.assertIn(trace_id, json.dumps(panel_data["results"][query["refId"]]["frames"]))
         self.logged_trace_id = trace_id
         self.logged_trace_start = now
         edge = eventually(
@@ -579,22 +586,25 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
         eventually("both logged span IDs in Jaeger", found_spans)
 
-        # A real SQL error reaches Loki as a SQLSTATE and a fixed body.
+        # A real SQL error reaches Loki with its original line and searchable SQLSTATE.
+        sql_value = "sql-canary-" + secrets.token_hex(10)
         self.stack.compose("exec", "-T", "postgres", "psql", "-Xq", "-U", "machine_whisperer",
-                           "-d", "machine_whisperer", "-c", f"SELECT '{private}'::integer", check=False)
+                           "-d", "machine_whisperer", "-c", f"SELECT '{sql_value}'::integer", check=False)
         database = self.stack.inspect("postgres")["Id"]
 
-        def postgres_logged_the_canary():
+        def postgres_error_line():
             local = run(["docker", "logs", database])
-            return any("22P02 ERROR:" in line and private in line
-                       for line in (local.stdout + local.stderr).splitlines())
+            return next((line for line in (local.stdout + local.stderr).splitlines()
+                         if "22P02 ERROR:" in line and sql_value in line), None)
 
-        eventually("the SQL canary in PostgreSQL's local error text", postgres_logged_the_canary)
-        postgres = eventually("a sanitized PostgreSQL error", lambda: self.loki_range(
-            '{service_name="postgres"} | db_response_status_code="22P02" | severity_text="ERROR"', now))
-        self.assertEqual(postgres[0]["values"][0][1], "Service log")
+        expected_line = eventually("the original PostgreSQL error in Docker logs", postgres_error_line)
+        postgres = eventually("the PostgreSQL error in Loki", lambda: self.loki_range(
+            '{service_name="postgres"} | db_response_status_code="22P02" | severity_text="ERROR"'
+            + f' |= "{sql_value}"', now))
+        self.assertIn(expected_line, [line for row in postgres for _, line, *_ in row["values"]])
         emitted = json.dumps(self.loki_range(selector, now))
-        self.assertNotIn(private, emitted)
+        self.assertNotIn(private_query, emitted)
+        self.assertNotIn(private_body, emitted)
         self.assertNotIn(self.device_key, emitted)
 
     def assert_tracing_during_loki_outage(self):
@@ -624,7 +634,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         }
         self.request("POST", INGEST, 409, expired, self.device_key)
         new_failure = eventually("a new API failure after Loki restarts", lambda: self.loki_range(
-            '{service_name="api"} |= "telemetry ingest failed" | failure_category="outside_window"'
+            '{service_name="api"} | failure_category="outside_window"'
             ' | http_response_status_code="409"', restarted), timeout=45, caught=NETWORK_ERRORS)
         self.assertNotEqual(new_failure[0]["stream"]["trace_id"], self.logged_trace_id)
 
@@ -1059,7 +1069,15 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
         def in_local_logs():
             result = run(["docker", "logs", container])
-            return "telemetry ingest failed" in result.stdout + result.stderr
+            for line in (result.stdout + result.stderr).splitlines():
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (isinstance(record, dict) and record.get("failure_category") == "invalid_input"
+                        and record.get("http.response.status_code") == 400):
+                    return True
+            return False
 
         eventually("the outage event to remain readable with docker logs", in_local_logs)
         observation = {
