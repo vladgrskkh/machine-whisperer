@@ -28,7 +28,6 @@ func NewSignup(repository SignupRepository, hasher PasswordHasher, tracer trace.
 	return &Signup{tracer: tracer, repository: repository, hasher: hasher}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (u *Signup) Signup(ctx context.Context, email, password string) (_ user.User, err error) {
 	ctx, span := u.tracer.Start(ctx, "auth.signup")
 	defer func() { spanutil.End(span, err, user.ErrInvalidCredentials, user.ErrEmailExists) }()

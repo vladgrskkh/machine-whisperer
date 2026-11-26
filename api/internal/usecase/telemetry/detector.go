@@ -68,7 +68,6 @@ func NewDetector(repository DetectionRepository, settings DetectorSettings, trac
 	return &Detector{tracer: tracer, repository: repository, settings: settings}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (d *Detector) Observe(ctx context.Context, event telemetry.Event) (_ Detection, err error) {
 	ctx, span := d.tracer.Start(ctx, "telemetry.detect")
 	defer func() { spanutil.End(span, err) }()

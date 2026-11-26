@@ -27,7 +27,6 @@ func NewAcknowledge(repository AcknowledgeRepository, recorder AcknowledgeRecord
 	return &Acknowledge{repository: repository, recorder: recorder, tracer: tracer}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (a *Acknowledge) Execute(ctx context.Context, ownerID, alertID string) (err error) {
 	ctx, span := a.tracer.Start(ctx, "alert.acknowledge")
 	defer func() { spanutil.End(span, err, alert.ErrNotFound) }()

@@ -33,7 +33,6 @@ func NewLogout(
 	return &Logout{tracer: tracer, repository: repository, transactions: transactions, now: now}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (u *Logout) Logout(ctx context.Context, raw string) (err error) {
 	ctx, span := u.tracer.Start(ctx, "auth.logout")
 	defer func() { spanutil.End(span, err, ErrMalformedRefreshToken) }()

@@ -9,7 +9,7 @@ Use Superpowers subagent driven development and independent task reviews.
 ## 1. Instrument Go HTTP and application operations
 
 - [ ] Construct an OpenTelemetry provider and W3C Trace Context propagator for each process. Pass them explicitly to HTTP instrumentation and inject scoped tracers into the structs that produce spans.
-- [ ] Use otelhttp for both chi routers and the API's Analytics HTTP clients. Verify template based server names, standard HTTP attributes, trusted context and outgoing propagation.
+- [ ] Use `otelchi` for both Chi routers and `otelhttp.NewTransport` for the API's Analytics HTTP clients. Verify template based server names, standard HTTP attributes, trusted context and outgoing propagation.
 - [ ] Create child spans in use case methods. Prefer injected PostgreSQL driver instrumentation and verify native ClickHouse tracing covers the full client operation. Add an adapter span where needed.
 - [ ] Exercise parentage, sanitized attributes and exporter outage behavior with in-memory SDK providers and real database integration tests.
 

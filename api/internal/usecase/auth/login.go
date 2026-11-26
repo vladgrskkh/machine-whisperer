@@ -86,7 +86,6 @@ func NewLogin(
 	}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (u *Login) Login(ctx context.Context, email, password string) (_ TokenPair, err error) {
 	ctx, span := u.tracer.Start(ctx, "auth.login")
 	defer func() { spanutil.End(span, err, user.ErrInvalidCredentials, ErrAuthenticationFailed) }()

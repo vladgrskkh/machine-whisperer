@@ -28,7 +28,6 @@ func NewIngestBatch(repository TelemetryRepository, recorder BatchRecorder, trac
 	return &IngestBatch{repository: repository, recorder: recorder, tracer: tracer}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (i *IngestBatch) Execute(ctx context.Context, events []domain.Event) (err error) {
 	ctx, span := i.tracer.Start(ctx, "telemetry.batch.ingest")
 	defer func() { spanutil.End(span, err) }()

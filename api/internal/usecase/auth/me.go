@@ -24,7 +24,6 @@ func NewMe(repository MeRepository, tracer trace.Tracer) *Me {
 	return &Me{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (u *Me) Me(ctx context.Context, userID string) (_ user.User, err error) {
 	ctx, span := u.tracer.Start(ctx, "auth.me")
 	defer func() { spanutil.End(span, err, ErrAuthenticationFailed) }()

@@ -22,7 +22,6 @@ func NewList(repository ListRepository, tracer trace.Tracer) *List {
 	return &List{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (l *List) List(ctx context.Context, ownerUserID string) (_ []machine.Machine, err error) {
 	ctx, span := l.tracer.Start(ctx, "machine.list")
 	defer func() { spanutil.End(span, err) }()

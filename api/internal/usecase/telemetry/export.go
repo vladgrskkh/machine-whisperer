@@ -86,7 +86,6 @@ func (e *Export) ClaimBatch(ctx context.Context) (string, []telemetry.OutboxEven
 	return token, events, nil
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (e *Export) DeliverBatch(ctx context.Context, token string, events []telemetry.OutboxEvent) (err error) {
 	ctx, span := e.tracer.Start(ctx, "outbox.batch.deliver")
 	failure := OutboxOperationAcknowledge

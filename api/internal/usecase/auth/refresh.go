@@ -59,7 +59,6 @@ func NewRefresh(
 	}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (u *Refresh) Refresh(ctx context.Context, raw string) (_ TokenPair, err error) {
 	ctx, span := u.tracer.Start(ctx, "auth.refresh")
 	defer func() { spanutil.End(span, err, ErrMalformedRefreshToken, ErrAuthenticationFailed) }()

@@ -54,7 +54,6 @@ func NewProvision(
 	}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (p *Provision) Provision(ctx context.Context, provisionerID string) (_ Provisioned, err error) {
 	ctx, span := p.tracer.Start(ctx, "device.provision")
 	defer func() { spanutil.End(span, err) }()

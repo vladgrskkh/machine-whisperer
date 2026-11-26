@@ -44,7 +44,6 @@ func NewRepository(conn ch.Conn, observer OperationObserver, tracer trace.Tracer
 	return &Repository{conn: conn, observer: observer, tracer: tracer}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) (err error) {
 	ctx, span := r.startSpan(ctx, "INSERT", "INSERT telemetry_events")
 	defer func() { spanutil.EndDatabase(span, err) }()
@@ -85,7 +84,6 @@ func (r *Repository) storeBatch(ctx context.Context, events []domain.Event) erro
 	return batch.Send()
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) (_ []domain.Event, err error) {
 	ctx, span := r.startSpan(ctx, "SELECT", "SELECT telemetry_events")
 	defer func() { spanutil.EndDatabase(span, err) }()

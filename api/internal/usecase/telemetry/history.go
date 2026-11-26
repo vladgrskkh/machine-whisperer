@@ -29,7 +29,6 @@ func NewListHistory(machines HistoryMachineRepository, client HistoryClient, tra
 	return &ListHistory{tracer: tracer, machines: machines, client: client}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (l *ListHistory) Execute(
 	ctx context.Context,
 	ownerID, machineID string,

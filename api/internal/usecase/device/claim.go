@@ -31,7 +31,6 @@ func NewClaim(repository ClaimRepository, transactions TransactionManager, trace
 	return &Claim{tracer: tracer, repository: repository, transactions: transactions}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, code device.Secret) (err error) {
 	ctx, span := c.tracer.Start(ctx, "device.claim")
 	defer func() { spanutil.End(span, err, device.ErrClaimUnavailable) }()

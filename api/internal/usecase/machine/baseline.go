@@ -27,7 +27,6 @@ func NewGetBaseline(repository BaselineRepository, tracer trace.Tracer) *GetBase
 	return &GetBaseline{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (g *GetBaseline) Execute(ctx context.Context, ownerID, machineID string) (_ machine.Baseline, err error) {
 	ctx, span := g.tracer.Start(ctx, "machine.baseline.get")
 	defer func() { spanutil.End(span, err, machine.ErrNotFound, machine.ErrBaselineNotFound) }()
@@ -44,7 +43,6 @@ func NewSetBaseline(repository BaselineRepository, transactions TransactionManag
 	return &SetBaseline{tracer: tracer, repository: repository, transactions: transactions}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (s *SetBaseline) Execute(
 	ctx context.Context, ownerID, machineID string, meanRMSG, stddevRMSG float64,
 ) (_ machine.Baseline, err error) {

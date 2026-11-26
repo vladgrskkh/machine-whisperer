@@ -24,7 +24,6 @@ func NewListHistory(repository TelemetryHistoryRepository, tracer trace.Tracer) 
 	return &ListHistory{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (h *ListHistory) Execute(ctx context.Context, query domain.HistoryQuery) (_ domain.HistoryPage, err error) {
 	ctx, span := h.tracer.Start(ctx, "telemetry.history.list")
 	defer func() { spanutil.End(span, err) }()

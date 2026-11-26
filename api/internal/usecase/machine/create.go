@@ -29,7 +29,6 @@ func NewCreate(repository CreateRepository, ids IDGenerator, tracer trace.Tracer
 	return &Create{tracer: tracer, repository: repository, ids: ids}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (c *Create) Create(ctx context.Context, ownerUserID, name string) (_ machine.Machine, err error) {
 	ctx, span := c.tracer.Start(ctx, "machine.create")
 	defer func() { spanutil.End(span, err, machine.ErrInvalidName, machine.ErrNotFound) }()

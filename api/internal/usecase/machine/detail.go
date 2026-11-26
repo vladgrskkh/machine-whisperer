@@ -22,7 +22,6 @@ func NewDetail(repository DetailRepository, tracer trace.Tracer) *Detail {
 	return &Detail{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (d *Detail) Detail(ctx context.Context, ownerUserID, machineID string) (_ machine.Machine, err error) {
 	ctx, span := d.tracer.Start(ctx, "machine.detail")
 	defer func() { spanutil.End(span, err, machine.ErrNotFound) }()

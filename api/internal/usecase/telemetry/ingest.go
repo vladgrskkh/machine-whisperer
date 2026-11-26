@@ -95,7 +95,6 @@ func NewIngest(
 	}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (i *Ingest) Ingest(
 	ctx context.Context,
 	deviceID, assignedMachineID, requestedMachineID string,

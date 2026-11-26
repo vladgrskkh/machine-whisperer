@@ -23,7 +23,6 @@ func NewAuthenticator(repository AuthenticationRepository, tracer trace.Tracer) 
 	return &Authenticator{tracer: tracer, repository: repository}
 }
 
-//nolint:nonamedreturns // Span completion observes the returned error.
 func (a *Authenticator) Authenticate(ctx context.Context, deviceID string, secret device.Secret) (_ string, err error) {
 	ctx, span := a.tracer.Start(ctx, "device.authenticate")
 	defer func() { spanutil.End(span, err, device.ErrInvalidCredentials, device.ErrUnavailable) }()
