@@ -89,10 +89,12 @@ printf '%s' machine-whisperer | gh secret set ANDROID_KEY_ALIAS --env android-ap
 gh secret set ANDROID_KEY_PASSWORD --env android-apk-release < "$signing_dir/keystore-password.txt"
 ```
 
-1. In GitHub, open **Actions → CI** and select the completed run for the release
-   tag.
-2. Under **Artifacts**, download **machine-whisperer-android-`<commit>`**.
-   Extract the ZIP and run `sha256sum -c *.apk.sha256` (or
-   `shasum -a 256 -c *.apk.sha256` on macOS).
+1. Open [GitHub Releases](https://github.com/vladgrskkh/machine-whisperer/releases)
+   and select the release tag. CI publishes the release after Android signing
+   and Docker image promotion pass.
+2. Under **Assets**, download `machine-whisperer.apk` and
+   `machine-whisperer.apk.sha256` into the same directory. Verify the download
+   with `sha256sum -c machine-whisperer.apk.sha256` (or
+   `shasum -a 256 -c machine-whisperer.apk.sha256` on macOS).
 3. Open the APK on the phone and allow installs from the app that opened it if
    Android prompts you. Launch Machine Whisperer and sign in to check the build.
