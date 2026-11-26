@@ -350,3 +350,36 @@ jobs:
           for source in "${release_sources[@]}"; do
             docker buildx imagetools create --prefer-index=false --tag "${source%@*}:latest" "$source"
           done
+
+  github-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-') && !github.event.deleted
+    needs: [check-release, android, promote]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: github-release-${{ github.ref }}
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-release.outputs.commit }}
+          persist-credentials: false
+      - name: Require the signed APK artifact ID
+        env:
+          SIGNED_ARTIFACT_ID: ${{ needs.android.outputs.signed-artifact-id }}
+        run: |
+          if [[ ! "$SIGNED_ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo 'The Android signing job did not return a signed artifact ID.' >&2
+            exit 1
+          fi
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.android.outputs.signed-artifact-id }}
+          path: ${{ runner.temp }}/release-apk
+      - name: Publish GitHub Release with verified APK
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_COMMIT: ${{ needs.check-release.outputs.commit }}
+        run: bash .github/scripts/publish-android-release.sh "$RUNNER_TEMP/release-apk"

@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -104,6 +105,179 @@ class PublicationTest(unittest.TestCase):
         self.assertNotIn("if", sign)
         unsigned = next(step for step in build["steps"] if step.get("id") == "unsigned")
         self.assertNotIn("if", unsigned)
+
+    def test_github_release_uses_the_signed_artifact_after_docker_promotion(self):
+        release = self.jobs.get("github-release")
+        self.assertIsNotNone(release, "Release CI must publish the signed APK on GitHub")
+        self.assertEqual(release["if"], self.jobs["publish"]["if"])
+        self.assertCountEqual(release["needs"], ["check-release", "android", "promote"])
+        self.assertEqual(release["permissions"], {"contents": "write"})
+
+        workflow = self.load_workflow("android-apk.yml")
+        call = workflow.get("on", workflow.get("true"))["workflow_call"]
+        sign = workflow["jobs"]["release"]
+        self.assertEqual(call["outputs"]["signed-artifact-id"]["value"],
+                         "${{ jobs.release.outputs.signed-artifact-id }}")
+        self.assertEqual(sign["outputs"]["signed-artifact-id"], "${{ steps.signed.outputs.artifact-id }}")
+        signed = next(step for step in sign["steps"] if step.get("id") == "signed")
+        self.assertTrue(signed["uses"].startswith("actions/upload-artifact@"))
+        download = next(step for step in release["steps"] if step.get("uses", "").startswith("actions/download-artifact@"))
+        self.assertEqual(download["with"]["artifact-ids"], "${{ needs.android.outputs.signed-artifact-id }}")
+        step = release["steps"][-1]
+        self.assertEqual(step["env"], {
+            "GH_TOKEN": "${{ github.token }}", "RELEASE_COMMIT": "${{ needs.check-release.outputs.commit }}",
+        })
+
+    def test_github_release_verifies_assets_and_resumes_publication(self):
+        script = REPO / ".github/scripts/publish-android-release.sh"
+        if not script.is_file():
+            self.fail("Release CI needs the verified APK publication script")
+        with tempfile.TemporaryDirectory() as scratch:
+            work = Path(scratch)
+            signed = work / "signed"
+            signed.mkdir()
+            commit = "a" * 40
+            apk = signed / f"machine-whisperer-{commit}.apk"
+            apk.write_bytes(b"signed APK fixture")
+            checksum = signed / f"{apk.name}.sha256"
+            apk_hash = hashlib.sha256(apk.read_bytes()).hexdigest()
+            reference_checksum = f"{apk_hash}  {apk.name}\n"
+            release_checksum = f"{apk_hash}  machine-whisperer.apk\n"
+            expected = {
+                "machine-whisperer.apk": {
+                    "id": 11, "state": "uploaded", "size": apk.stat().st_size, "digest": f"sha256:{apk_hash}",
+                },
+                "machine-whisperer.apk.sha256": {
+                    "id": 12, "state": "uploaded", "size": len(release_checksum),
+                    "digest": f"sha256:{hashlib.sha256(release_checksum.encode()).hexdigest()}",
+                },
+            }
+            fake_tool(work, "git", """#!/bin/bash
+[[ "$1" == -c && "$2" == credential.helper= && "$3" == -c && "$4" == 'credential.helper=!gh auth git-credential' ]] || exit 1
+if [[ "$TAKE_OVER_DRAFT" == 1 ]]; then
+    python3 - "$STATE" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+state = json.loads(path.read_text())
+if "machine-whisperer.apk.sha256" in state["assets"]:
+    state["body"] = "Operator took ownership."
+    path.write_text(json.dumps(state))
+PY
+fi
+printf 'tag-object\\t%s\\n%s\\t%s^{}\\n' "$GITHUB_REF" "$REMOTE_COMMIT" "$GITHUB_REF"
+""")
+            api_fixture = """#!/usr/bin/env python3
+from hashlib import sha256
+import json
+import os
+from pathlib import Path
+import sys
+
+args = sys.argv[1:]
+path = Path(os.environ["STATE"])
+state = json.loads(path.read_text())
+assets_api = "repos/org/mw/releases/assets/"
+upload_url = "https://uploads.github.com/repos/org/mw/releases/7/assets"
+release = {"id": 7, "tag_name": os.environ["GITHUB_REF_NAME"], "draft": state["draft"],
+           "body": state["body"], "upload_url": upload_url + "{?name,label}"}
+if Path(sys.argv[0]).name == "curl":
+    asset = Path(args[args.index("--data-binary") + 1].removeprefix("@"))
+    assert f"{upload_url}?name={asset.name}" in args
+    assert all(os.environ["GH_TOKEN"] not in argument for argument in args)
+    assert sys.stdin.read() == f'header = "Authorization: Bearer {os.environ["GH_TOKEN"]}"\\n'
+    assert asset.name not in state["assets"]
+    state["assets"][asset.name] = {
+        "id": 11 if asset.suffix == ".apk" else 12, "state": "uploaded", "size": asset.stat().st_size,
+        "digest": "sha256:" + sha256(asset.read_bytes()).hexdigest(),
+    }
+    state["writes"].append(asset.name)
+elif args[:2] == ["api", "--paginate"]:
+    if "/assets?" in args[2]:
+        print(json.dumps([{"name": name, **data} for name, data in state["assets"].items()]))
+    else:
+        print(json.dumps([] if state["draft"] is None else [release]))
+    sys.exit(0)
+elif args == ["api", "repos/org/mw/releases/7"]:
+    print(json.dumps(release))
+    sys.exit(0)
+elif args[0] == "api" and args[1].startswith(assets_api):
+    asset_id = int(args[1].removeprefix(assets_api))
+    name, data = next((name, data) for name, data in state["assets"].items() if data["id"] == asset_id)
+    print(json.dumps({"name": name, **data}))
+    sys.exit(0)
+elif args[:2] == ["release", "create"] and "--draft" in args and "--verify-tag" in args:
+    assert args[args.index("--notes") + 1] == os.environ["DRAFT_MARKER"]
+    state["draft"] = True
+    state["body"] = os.environ["DRAFT_MARKER"] + "\\n\\nGenerated notes"
+    state["writes"].append("create draft")
+elif args[:3] == ["api", "--method", "DELETE"]:
+    assert state["draft"] and state["body"].startswith(os.environ["DRAFT_MARKER"])
+    asset_id = int(args[3].removeprefix(assets_api))
+    name, data = next((name, data) for name, data in state["assets"].items() if data["id"] == asset_id)
+    assert data["state"] == "starter" and data["size"] == 0
+    del state["assets"][name]
+    state["writes"].append(f"remove empty {name}")
+elif args[:3] == ["api", "--method", "PATCH"] and "draft=false" in args:
+    assert args[3] == "repos/org/mw/releases/7" and "make_latest=legacy" in args
+    assert state["draft"] and len(state["assets"]) == 2
+    state["draft"] = False
+    state["writes"].append("publish")
+else:
+    sys.exit(f"Unexpected gh command {args}")
+path.write_text(json.dumps(state))
+"""
+            for tool in ("gh", "curl"):
+                fake_tool(work, tool, api_fixture)
+            state = work / "state.json"
+            marker = f"<!-- machine-whisperer-ci release-commit {commit} -->"
+            env = tool_env(work, GITHUB_REPOSITORY="org/mw", GITHUB_REF_NAME="release-0.1.1",
+                           GITHUB_REF="refs/tags/release-0.1.1", RELEASE_COMMIT=commit, STATE=str(state),
+                           DRAFT_MARKER=marker, GH_TOKEN="test-release-token")
+            managed = f"{marker}\n\nRelease notes"
+            manual = f"Author notes.\n\n{marker}"
+            apk_only = {"machine-whisperer.apk": expected["machine-whisperer.apk"]}
+            empty_upload = {"machine-whisperer.apk": {"id": 13, "state": "starter", "size": 0, "digest": None}}
+            nonempty_upload = {"machine-whisperer.apk": {**empty_upload["machine-whisperer.apk"], "size": 10}}
+            conflict = {"machine-whisperer.apk.sha256": {**expected["machine-whisperer.apk.sha256"], "digest": "different"}}
+            scenarios = (
+                ("new", None, None, {}, reference_checksum, commit, True, False, ["create draft", *expected, "publish"]),
+                ("resume", True, managed, apk_only, reference_checksum, commit, True, False,
+                 ["machine-whisperer.apk.sha256", "publish"]),
+                ("resume empty upload", True, managed, empty_upload, reference_checksum, commit, True, False,
+                 ["remove empty machine-whisperer.apk", *expected, "publish"]),
+                ("manual draft", True, manual, apk_only, reference_checksum, commit, True, True,
+                 ["machine-whisperer.apk.sha256"]),
+                ("draft taken over", True, managed, apk_only, reference_checksum, commit, True, True,
+                 ["machine-whisperer.apk.sha256"]),
+                ("published", False, manual, expected, reference_checksum, commit, True, False, []),
+                ("published missing asset", False, manual, apk_only, reference_checksum, commit, True, False,
+                 ["machine-whisperer.apk.sha256"]),
+                ("different asset", True, managed, {**empty_upload, **conflict}, reference_checksum, commit, False, True, []),
+                ("manual empty upload", True, manual, empty_upload, reference_checksum, commit, False, True, []),
+                ("nonempty upload", True, managed, nonempty_upload, reference_checksum, commit, False, True, []),
+                ("wrong checksum", None, None, {}, reference_checksum.replace(apk_hash, "0" * 64), commit, False, None, []),
+                ("wrong checksum filename", None, None, {}, f"{apk_hash}  unrelated.apk\n", commit, False, None, []),
+                ("moved tag", None, None, {}, reference_checksum, "b" * 40, False, None, []),
+            )
+            for name, draft, body, assets, checksum_text, remote_commit, success, final_draft, writes in scenarios:
+                with self.subTest(name=name):
+                    checksum.write_text(checksum_text)
+                    state.write_text(json.dumps({"draft": draft, "body": body, "assets": assets, "writes": []}))
+                    run_env = {
+                        **env, "REMOTE_COMMIT": remote_commit, "TAKE_OVER_DRAFT": str(int(name == "draft taken over")),
+                    }
+                    result = run(["bash", str(script), str(signed)], env=run_env,
+                                 check=False)
+                    self.assertEqual(result.returncode == 0, success, result.stderr)
+                    final = json.loads(state.read_text())
+                    self.assertEqual(final["writes"], writes)
+                    self.assertEqual(final["assets"], expected if success else assets)
+                    self.assertIs(final["draft"], final_draft)
+                    expected_body = {"new": f"{marker}\n\nGenerated notes", "draft taken over": "Operator took ownership."}
+                    self.assertEqual(final["body"], expected_body.get(name, body))
 
     def test_probe_distinguishes_missing_images_from_registry_failures(self):
         probe = next(step["run"] for step in self.jobs["publish"]["steps"] if step.get("id") == "release")
