@@ -6,6 +6,9 @@ on:
       commit:
         required: true
         type: string
+    outputs:
+      signed-artifact-id:
+        value: ${{ jobs.release.outputs.signed-artifact-id }}
     secrets:
       ANDROID_KEYSTORE_BASE64:
         required: true
@@ -84,6 +87,8 @@ jobs:
     environment: android-apk-release
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      signed-artifact-id: ${{ steps.signed.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -114,6 +119,7 @@ jobs:
             "$RUNNER_TEMP/unsigned/app-release-unsigned.apk" "$temp_dir/keystore" "$apk"
           sha256sum "$apk" > "$apk.sha256"
       - name: Upload verified APK and checksum
+        id: signed
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: machine-whisperer-android-${{ inputs.commit }}

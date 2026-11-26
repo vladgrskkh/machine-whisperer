@@ -46,13 +46,16 @@ and `promote` to pass. `publish` builds or reuses the `sha-<commit>` images for
 `release-0.1.0` tags to both images and updates `latest` for the highest
 release version. The VPS uses `sha-<commit>` to match its Git checkout for
 deployments and recovery. Once the images are published, [deploy that
-tag](#deploy-a-release). For the signed APK from the same run, see
-[Signed Android APK](../mobile/README.md#signed-android-apk).
+tag](#deploy-a-release). After Docker promotion and Android signing pass, the
+`github-release` job publishes the tag on GitHub with the signed APK and its
+checksum. See [Signed Android APK](../mobile/README.md#signed-android-apk).
 
 For a runner or registry failure, fix the cause and rerun the failed jobs.
-Use a new tag for code fixes. Docker Hub updates `latest` separately for each
-image. A rerun for an older release can finish its version tags while leaving
-`latest` unchanged.
+The `github-release` job can resume interrupted uploads to drafts it created.
+For a manual draft, it attaches missing assets and leaves publication to the
+draft's author. Use a new tag for code fixes. Docker Hub updates `latest`
+separately for each image. A rerun for an older release can finish its version
+tags while leaving `latest` unchanged.
 
 ### Set up the registry once
 
