@@ -18,6 +18,10 @@ import (
 const (
 	insertTimeout = 25 * time.Second
 	queryTimeout  = 10 * time.Second
+
+	insertTelemetrySQL = `INSERT INTO telemetry_events
+		(schema_version, event_id, device_id, machine_id, observed_at, received_at, operating_state,
+		 vibration_rms_g, dominant_frequency_hz, current_rms_a)`
 )
 
 const (
@@ -46,6 +50,7 @@ func NewRepository(conn ch.Conn, observer OperationObserver, tracer trace.Tracer
 
 func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) (err error) {
 	ctx, span := r.startSpan(ctx, "INSERT", "INSERT telemetry_events")
+	span.SetAttributes(semconv.DBQueryText(insertTelemetrySQL))
 	defer func() { spanutil.EndDatabase(span, err) }()
 	ctx, cancel := context.WithTimeout(ctx, insertTimeout)
 	defer cancel()
@@ -57,9 +62,7 @@ func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) (err
 
 func (r *Repository) storeBatch(ctx context.Context, events []domain.Event) error {
 	ctx = ch.Context(ctx, ch.WithSettings(ch.Settings{"async_insert": 0}))
-	batch, err := r.conn.PrepareBatch(ctx, `INSERT INTO telemetry_events
-		(schema_version, event_id, device_id, machine_id, observed_at, received_at, operating_state,
-		 vibration_rms_g, dominant_frequency_hz, current_rms_a)`)
+	batch, err := r.conn.PrepareBatch(ctx, insertTelemetrySQL)
 	if err != nil {
 		return err
 	}
@@ -109,6 +112,7 @@ func (r *Repository) list(ctx context.Context, query domain.HistoryQuery) ([]dom
 	}
 	sql += ` ORDER BY observed_at DESC, device_id DESC, event_id DESC LIMIT {limit:UInt64}`
 
+	trace.SpanFromContext(ctx).SetAttributes(semconv.DBQueryText(sql))
 	rows, err := r.conn.Query(ch.Context(ctx, ch.WithParameters(params)), sql)
 	if err != nil {
 		return nil, err

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -237,13 +238,14 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 		assert.Equal(c, rows, delivered)
 		assert.Equal(c, rows, total)
 	}, 3*time.Second, 20*time.Millisecond)
-	require.Eventually(t, func() bool { return len(recorder.Ended()) == 4 }, time.Second, time.Millisecond)
-	spans := recorder.Ended()
-	update, delivery, outboxSpan := spans[1], spans[2], spans[3]
-	assert.Equal(t, "UPDATE", update.Name())
+	var update, delivery, outboxSpan sdktrace.ReadOnlySpan
+	require.Eventually(t, func() bool {
+		update, delivery, outboxSpan = outboxRelaySpans(recorder.Ended(), rows)
+		return update != nil && delivery != nil && outboxSpan != nil
+	}, time.Second, time.Millisecond)
 	assert.Equal(t, trace.SpanKindClient, update.SpanKind())
 	assert.Equal(t, delivery.SpanContext(), update.Parent())
-	assert.Equal(t, "outbox.deliver", outboxSpan.Name())
+	assert.Equal(t, outboxSpan.SpanContext(), delivery.Parent())
 	assert.False(t, outboxSpan.Parent().IsValid())
 	assert.NotEqual(t, caller.SpanContext().TraceID(), outboxSpan.SpanContext().TraceID())
 	assert.Contains(t, outboxSpan.Attributes(), attribute.Int("outbox.links.dropped", 1))
@@ -259,6 +261,39 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 	body := testfixture.WaitForAPIMetrics(t, metricsServer, fmt.Sprintf("mw_outbox_delivered_events_total %d\n", rows))
 	assert.Contains(t, body, fmt.Sprintf("mw_outbox_claimed_events_total %d\n", rows))
 	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
+}
+
+func outboxRelaySpans(spans []sdktrace.ReadOnlySpan, rows int) (update, delivery, outbox sdktrace.ReadOnlySpan) {
+	for _, span := range spans {
+		switch span.Name() {
+		case "outbox.deliver":
+			outbox = span
+		case "outbox.batch.deliver":
+			delivery = span
+		}
+	}
+	if delivery == nil || outbox == nil {
+		return nil, delivery, outbox
+	}
+	for _, span := range spans {
+		if span.SpanKind() != trace.SpanKindClient || !span.Parent().Equal(delivery.SpanContext()) {
+			continue
+		}
+		attrs := span.Attributes()
+		if !slices.Contains(attrs, attribute.String("db.system.name", "postgresql")) ||
+			!slices.Contains(attrs, attribute.String("db.operation.name", "UPDATE")) ||
+			!slices.Contains(attrs, attribute.Int("pgx.rows_affected", rows)) {
+			continue
+		}
+		if slices.ContainsFunc(attrs, func(attr attribute.KeyValue) bool {
+			return attr.Key == "db.query.text" &&
+				strings.HasPrefix(attr.Value.AsString(), "UPDATE telemetry_outbox") &&
+				strings.Contains(attr.Value.AsString(), "SET delivered_at=statement_timestamp()")
+		}) {
+			return span, delivery, outbox
+		}
+	}
+	return nil, delivery, outbox
 }
 
 func seedMixedTraceparents(t *testing.T, pool *pgxpool.Pool) ([]trace.SpanContext, int) {

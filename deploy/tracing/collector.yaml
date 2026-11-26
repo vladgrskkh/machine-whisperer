@@ -33,7 +33,17 @@ processors:
         not ContainsValue(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE"], span.attributes["http.request.method"])
       - >-
         keep_keys(span.attributes, ["http.route", "http.request.method", "http.response.status_code",
-        "db.system.name", "db.operation.name", "db.query.summary", "error.type", "outcome", "outbox.links.dropped"])
+        "db.system.name", "db.operation.name", "db.query.summary", "db.query.text", "error.type", "outcome", "outbox.links.dropped",
+        "server.address", "server.port", "db.namespace", "user.name", "pgx.rows_affected", "pgx.sql_state", "pgx.prepare_stmt.name"])
+      - >-
+        delete_key(span.attributes, "db.query.text") where span.kind != SPAN_KIND_CLIENT or
+        not ((resource.attributes["service.name"] == "api" and span.attributes["db.system.name"] == "postgresql") or
+        (resource.attributes["service.name"] == "analytics" and span.attributes["db.system.name"] == "clickhouse"))
+      - >-
+        delete_matching_keys(span.attributes,
+        "^(server[.](address|port)|db[.]namespace|user[.]name|pgx[.](rows_affected|sql_state|prepare_stmt[.]name))$")
+        where span.kind != SPAN_KIND_CLIENT or resource.attributes["service.name"] != "api" or
+        span.attributes["db.system.name"] != "postgresql"
       - 'set(span.status.message, "")'
       - 'set(span.trace_state, "")'
       # Pdata event and link slices use nil to clear their typed contents.
