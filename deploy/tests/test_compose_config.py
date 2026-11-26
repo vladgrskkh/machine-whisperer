@@ -18,7 +18,7 @@ class ComposeConfigTest(unittest.TestCase):
         cls.services = cls.config["services"]
 
     @staticmethod
-    def compose_config(provisioning_cidr="", nginx_sampling="", app_sampling=""):
+    def compose_config(provisioning_cidr="", nginx_sampling="", app_sampling="", fluent_port=""):
         env = {
             **os.environ, "DOCKERHUB_NAMESPACE": "mw-fixture", "IMAGE_TAG": "sha-123abc",
             "DOMAIN": "fixture.test", "ACME_EMAIL": "fixture@example.invalid",
@@ -26,6 +26,7 @@ class ComposeConfigTest(unittest.TestCase):
             "MW_SECRETS_DIR": "./secrets", "MW_EDGE_SUBNET": "", "MW_PROXY_IP": "", "MW_API_IP": "",
             "MW_PROVISIONING_CIDR": provisioning_cidr,
             "MW_NGINX_TRACE_SAMPLE_PERCENT": nginx_sampling, "OTEL_TRACES_SAMPLER_ARG": app_sampling,
+            "MW_FLUENT_FORWARD_PORT": fluent_port,
         }
         result = run([
             "docker", "compose", "--env-file", ".env.server.example", "--profile", "certbot",
@@ -35,7 +36,8 @@ class ComposeConfigTest(unittest.TestCase):
 
     def test_only_ingress_and_loopback_queries_publish_ports_and_private_networks_are_internal(self):
         networks = {
-            "certbot": {"acme"}, "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "trace-edge"},
+            "certbot": {"acme"},
+            "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "loki-proxy", "trace-edge"},
             "nginx-exporter": {"nginx-status", "infra-scrape"},
             "api": {"edge", "data", "scrape", "trace-apps"}, "api-migrate": {"data"},
             "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
@@ -43,11 +45,12 @@ class ComposeConfigTest(unittest.TestCase):
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
             "grafana": {"grafana-proxy", "monitoring"},
-            "otel-collector": {"trace-edge", "trace-apps", "monitoring"}, "jaeger": {"monitoring", "jaeger-proxy"},
+            "otel-collector": {"trace-edge", "trace-apps", "monitoring", "log-store"}, "jaeger": {"monitoring", "jaeger-proxy"},
+            "loki": {"log-store"}, "loki-query-proxy": {"monitoring", "loki-proxy", "log-store"},
         }
         self.assertEqual(set(self.services), set(networks))
         for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy", "jaeger-proxy",
-                        "trace-edge", "trace-apps"):
+                        "loki-proxy", "trace-edge", "trace-apps", "log-store"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -62,7 +65,57 @@ class ComposeConfigTest(unittest.TestCase):
             ("nginx", "0.0.0.0", "80", 80), ("nginx", "0.0.0.0", "443", 443),
             ("prometheus", "127.0.0.1", "9090", 9090),
             ("jaeger", "127.0.0.1", "16686", 16686),
+            ("otel-collector", "127.0.0.1", "24224", 24224),
         })
+
+    def test_only_selected_services_forward_logs_and_keep_a_bounded_local_cache(self):
+        selected = {"api", "analytics", "nginx", "postgres", "clickhouse"}
+        self.assertEqual({name for name, service in self.services.items()
+                          if service.get("logging", {}).get("driver") == "fluentd"}, selected)
+        for name in selected:
+            with self.subTest(service=name):
+                service = self.services[name]
+                options = service["logging"]["options"]
+                self.assertEqual(options["tag"], f"mw.{name}")
+                self.assertEqual(options["fluentd-address"], "127.0.0.1:24224")
+                self.assertEqual(options["fluentd-async"], "true")
+                self.assertEqual(options["mode"], "non-blocking")
+                self.assertEqual(options["cache-disabled"], "false")
+                self.assertEqual(options["fluentd-buffer-limit"], "1024")
+                self.assertEqual(options["max-buffer-size"], "256k")
+                self.assertEqual((options["cache-max-size"], options["cache-max-file"]), ("5m", "2"))
+                self.assertNotIn("otel-collector", service.get("depends_on", {}))
+                self.assertNotIn("loki", service.get("depends_on", {}))
+        receiver = self.services["otel-collector"]
+        self.assertTrue(all(volume["read_only"] and Path(volume["source"]).is_relative_to(DEPLOY)
+                            for volume in receiver["volumes"]))
+        self.assertFalse(receiver.get("privileged"))
+        self.assertFalse(receiver.get("pid"))
+        self.assertEqual([network for network, config in receiver["networks"].items()
+                          if "collector-fluent" in (config or {}).get("aliases", [])], ["monitoring"])
+
+    def test_overriding_the_fluent_port_changes_the_driver_and_receiver_together(self):
+        services = self.compose_config(fluent_port="24500")["services"]
+        self.assertEqual(services["api"]["logging"]["options"]["fluentd-address"], "127.0.0.1:24500")
+        port, = services["otel-collector"]["ports"]
+        self.assertEqual((port["host_ip"], str(port["published"]), port["target"]), ("127.0.0.1", "24500", 24224))
+
+    def test_loki_mounts_its_configuration_read_only(self):
+        mount, = (volume for volume in self.services["loki"]["volumes"] if volume["type"] == "bind")
+        self.assertEqual(Path(mount["source"]), DEPLOY / "loki/loki.yaml")
+        self.assertTrue(mount["read_only"])
+
+    def test_grafana_reaches_loki_through_a_proxy_on_a_separate_network(self):
+        proxy = self.services["loki-query-proxy"]
+        self.assertFalse(proxy.get("ports"))
+        mounts = proxy["volumes"]
+        mount, = mounts
+        self.assertTrue(mount["read_only"])
+        self.assertEqual(Path(mount["source"]), DEPLOY / "nginx/loki-query.conf")
+        self.assertTrue(Path(mount["source"]).is_file())
+        self.assertEqual(set(self.services["loki"]["networks"]), {"log-store"})
+        self.assertNotIn("log-store", self.services["grafana"]["networks"])
+        self.assertNotIn("loki-query-proxy", self.services["grafana"].get("depends_on", {}))
 
     def test_application_metrics_use_aliases_scoped_to_the_scrape_bridge(self):
         for name in ("api", "analytics"):
@@ -99,6 +152,8 @@ class ComposeConfigTest(unittest.TestCase):
             "grafana": "grafana/grafana:13.3.2",
             "otel-collector": "otel/opentelemetry-collector-contrib:0.166.0",
             "jaeger": "cr.jaegertracing.io/jaegertracing/jaeger:2.23.0",
+            "loki": "grafana/loki:3.7.10",
+            "loki-query-proxy": "nginx:1.31.10-alpine3.24-slim",
         }.items():
             with self.subTest(service=name):
                 self.assertEqual(self.services[name]["image"], image)
@@ -147,7 +202,7 @@ class ComposeConfigTest(unittest.TestCase):
             ("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
             ("prometheus", "/prometheus"),
             ("grafana", "/var/lib/grafana"),
-            ("jaeger", "/tmp"),
+            ("jaeger", "/tmp"), ("loki", "/loki"),
         ):
             with self.subTest(volume_service=name):
                 self.assertTrue(any(
@@ -166,14 +221,14 @@ class ComposeConfigTest(unittest.TestCase):
             "postgres": {"postgres_password"},
             "postgres-exporter-setup": {"postgres_password", "postgres_exporter_password"},
             "postgres-exporter": {"postgres_exporter_password"},
-            "nginx": {"internal_ca", "jaeger_htpasswd"},
+            "nginx": {"internal_ca", "jaeger_htpasswd", "loki_htpasswd"},
             "nginx-exporter": set(),
             "database-metrics-proxy": set(),
             "certbot": set(),
             "prometheus": set(),
             "grafana": {"grafana_admin_password"},
             "otel-collector": set(),
-            "jaeger": set(),
+            "jaeger": set(), "loki": set(), "loki-query-proxy": set(),
         }
         secret_files = {
             "api": {
@@ -215,6 +270,7 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertIn("--datasource.pass-file=/run/secrets/postgres_exporter_password", command)
         self.assertIn("--no-collector.stat_statements", command)
         self.assertEqual(Path(self.config["secrets"]["jaeger_htpasswd"]["file"]), DEPLOY / "secrets/jaeger-htpasswd")
+        self.assertEqual(Path(self.config["secrets"]["loki_htpasswd"]["file"]), DEPLOY / "secrets/loki-htpasswd")
         for secret in self.config["secrets"].values():
             self.assertIn("file", secret)
             self.assertFalse(secret.get("external"))
@@ -296,19 +352,19 @@ class ComposeConfigTest(unittest.TestCase):
 
 
 class CredentialsTest(unittest.TestCase):
-    def assert_jaeger_credentials(self, directory):
-        password = directory / "jaeger-password"
-        self.assertTrue(password.is_file(), "Missing Jaeger operator credential")
+    def assert_proxy_credentials(self, directory, service):
+        password = directory / f"{service}-password"
+        self.assertTrue(password.is_file(), f"Missing {service} operator credential")
         self.assertEqual(stat.S_IMODE(password.stat().st_mode), 0o600)
-        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}\n", password.read_text()), "Invalid Jaeger operator credential")
-        htpasswd = directory / "jaeger-htpasswd"
+        self.assertTrue(re.fullmatch(r"[0-9a-f]{64}\n", password.read_text()), f"Invalid {service} operator credential")
+        htpasswd = directory / f"{service}-htpasswd"
         self.assertEqual(stat.S_IMODE(htpasswd.stat().st_mode), 0o444)
         username, _, hashed = htpasswd.read_text().strip().partition(":")
-        self.assertEqual(username, "jaeger")
+        self.assertEqual(username, service)
         algorithm, salt, _ = hashed.removeprefix("$").split("$")
         self.assertEqual(algorithm, "6")  # SHA-512 crypt
         verified = run(["openssl", "passwd", "-6", "-salt", salt, "-in", password]).stdout.strip()
-        self.assertTrue(verified == hashed, "Nginx secret does not match the Jaeger operator credential")
+        self.assertTrue(verified == hashed, f"Nginx secret does not match the {service} operator credential")
 
     def test_bootstrap_generates_verifiable_read_only_credentials_once(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -327,7 +383,7 @@ class CredentialsTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(secrets.stat().st_mode), 0o700)
             self.assertEqual(stat.S_IMODE((secrets / "internal-ca.key").stat().st_mode), 0o600)
             for path in secrets.iterdir():
-                if path.name not in {"internal-ca.key", "jaeger-password"}:
+                if path.name not in {"internal-ca.key", "jaeger-password", "loki-password"}:
                     with self.subTest(secret=path.name):
                         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o444)
             password = (secrets / "postgres-password").read_text().strip()
@@ -340,9 +396,12 @@ class CredentialsTest(unittest.TestCase):
             grafana_password = grafana.read_text().strip()
             self.assertRegex(grafana_password, r"^[0-9a-f]{64}$")
             self.assertTrue(grafana_password not in (password, exporter), "Grafana must use its own password")
-            self.assert_jaeger_credentials(secrets)
-            self.assertTrue((secrets / "jaeger-password").read_text().strip() != grafana_password,
-                            "Jaeger must use its own password")
+            proxy_passwords = []
+            for service in ("jaeger", "loki"):
+                self.assert_proxy_credentials(secrets, service)
+                proxy_passwords.append((secrets / f"{service}-password").read_text().strip())
+            self.assertTrue(len({grafana_password, *proxy_passwords}) == 3,
+                            "Grafana, Jaeger and Loki must use separate passwords")
             url = (secrets / "database-url").read_text().strip()
             expected_url = f"postgres://machine_whisperer:{password}@postgres:5432/machine_whisperer?sslmode=disable"
             self.assertTrue(url == expected_url, "Generated database URL does not match the PostgreSQL credential")
@@ -382,23 +441,28 @@ class CredentialsTest(unittest.TestCase):
                     for path in secrets.iterdir():
                         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o444)
 
-    def test_jaeger_upgrade_preserves_existing_credentials_and_recovers_a_missing_hash(self):
+    def test_proxy_upgrade_preserves_existing_credentials_and_recovers_a_missing_hash(self):
         with tempfile.TemporaryDirectory() as scratch:
             directory = Path(scratch)
             existing = directory / "postgres-password"
             existing.write_bytes(b"existing-postgres-password\n")
-            command = ["scripts/prepare-secrets.sh", "--output-dir", directory, "--jaeger-only"]
+            for service in ("jaeger", "loki"):
+                with self.subTest(service=service):
+                    command = ["scripts/prepare-secrets.sh", "--output-dir", directory, f"--{service}-only"]
+                    existing_files = {path.name: path.read_bytes() for path in directory.iterdir()}
+                    run(command)
+                    self.assert_proxy_credentials(directory, service)
+                    self.assertTrue(all((directory / name).read_bytes() == value
+                                        for name, value in existing_files.items()),
+                                    "The upgrade changed existing credentials")
+                    original_files = {path.name: path.read_bytes() for path in directory.iterdir()}
+                    run(command)
+                    self.assertTrue(original_files == {path.name: path.read_bytes() for path in directory.iterdir()},
+                                    "The repeated upgrade changed existing credentials")
 
-            run(command)
-            self.assert_jaeger_credentials(directory)
-            original_files = {path.name: path.read_bytes() for path in directory.iterdir()}
-            self.assertEqual(original_files[existing.name], b"existing-postgres-password\n")
-            run(command)
-            self.assertTrue(original_files == {path.name: path.read_bytes() for path in directory.iterdir()},
-                            "The Jaeger upgrade changed existing credentials")
-
-            (directory / "jaeger-htpasswd").unlink()
-            run(command)
-            self.assert_jaeger_credentials(directory)
-            self.assertTrue((directory / "jaeger-password").read_bytes() == original_files["jaeger-password"],
-                            "Repairing the Jaeger hash changed the operator credential")
+                    (directory / f"{service}-htpasswd").unlink()
+                    run(command)
+                    self.assert_proxy_credentials(directory, service)
+                    self.assertTrue((directory / f"{service}-password").read_bytes()
+                                    == original_files[f"{service}-password"],
+                                    "Repairing the hash changed the operator credential")

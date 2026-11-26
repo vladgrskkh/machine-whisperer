@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -82,7 +83,7 @@ func TestClickHouseClientSpansCoverBatchSendAndRowConsumption(t *testing.T) {
 			registry := metrics.New()
 			repo := clickhouse.NewRepository(conn, registry, adapterTracer)
 			if operation == "INSERT" {
-				err := telemetry.NewIngestBatch(repo, registry, useCaseTracer).
+				err := telemetry.NewIngestBatch(repo, registry, slog.New(slog.DiscardHandler), useCaseTracer).
 					Execute(ctx, []domain.Event{{EventID: "secret-event"}})
 				require.ErrorIs(t, err, conn.err)
 			} else {

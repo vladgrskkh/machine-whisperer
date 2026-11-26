@@ -2,11 +2,17 @@
 
 ## Prerequisites
 
-Use an x86-64 Linux host with Docker Engine 28 or newer, the Docker Compose v2 plugin,
-Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands from the
-monorepo root on the Docker host. The operator account needs Docker access and
-access to the secret files. Docker Engine 28 or newer keeps localhost-published
-ports off the local network. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+Use an x86-64 Linux host with Docker Engine 28.2 or newer, the Docker Compose v2
+plugin, Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands
+from the monorepo root on the Docker host. The operator account needs Docker
+access and access to the secret files. The supported Engine versions keep
+localhost-published ports off the local network.
+[Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+
+The stack uses `fluentd-write-timeout` to bound writes from Docker's log driver
+to the Collector. Docker added this option in Engine 28.2. Upgrade hosts running
+an earlier Engine version before rolling out this stack.
+[Docker Engine 28.2 release notes](https://docs.docker.com/engine/release-notes/28/#2820)
 
 Publish a public DNS A record pointing to the host's public IPv4 address and
 allow inbound TCP 80 and 443 for Nginx. Do not publish an AAAA record until
@@ -83,8 +89,8 @@ the generated files across upgrades and restores. If you generate a replacement
 `clickhouse-password` file, use `openssl rand -hex 32`. Analytics and ClickHouse
 require exactly 64 lowercase hexadecimal characters and allow trailing CR/LF.
 The directory is mode `0700` and mounted files are mode `0444` so non-root
-container users can read them. The internal CA private key and the Jaeger
-sign-in password stay on the host at mode `0600`. Nginx uses the CA certificate
+container users can read them. The internal CA private key and the Jaeger and
+Loki sign-in passwords stay on the host at mode `0600`. Nginx uses the CA certificate
 to verify the API's internal TLS certificate for hostname `api`. The generated
 API certificate is valid for 365 days. Track its expiration and [renew it
 using the existing CA](#renew-the-internal-api-certificate) before expiry.
@@ -362,14 +368,87 @@ with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
+## Centralized service logs
+
+Sign in to Grafana and open **Explore** with the **Loki** data source. Select
+an incident time range and filter by `service_name` and `severity_text`.
+The **API ingest failures** dashboard in **Machine Whisperer** opens the
+saved query for rejected telemetry from requests that reach the ingest handler.
+
+```logql
+{service_name="api"} | severity_text="ERROR"
+{service_name="postgres"} | db_response_status_code="42P01"
+{service_name="nginx"} | request_id="<request ID from the log details>"
+```
+
+Expand a sample to find fields such as `http_response_status_code`,
+`failure_category`, `trace_id` and `span_id`. To follow a sampled event, copy its
+`trace_id` to `https://<DOMAIN>/jaeger/trace/<trace_id>` and sign in to
+Jaeger when prompted. Use `span_id` to identify the span that logged the event.
+Jaeger retains traces for 24 hours. Nginx generates request IDs locally.
+API and Analytics logs carry `app` and `env`. Set `APP_ENV` in the Compose env
+file to `dev`, `test`, `staging` or `prod` (the default). Device claims, baseline
+writes, alert transitions and rejected telemetry include the machine or device
+IDs available at that point. IDs are searchable metadata. `service_name` is the
+only stream label.
+
+Docker forwards logs for API, Analytics, Nginx, PostgreSQL and ClickHouse to
+the Collector at `127.0.0.1:24224`. Set `MW_FLUENT_FORWARD_PORT` in the Compose
+env file if the host port is in use. The Collector processes the ordinary
+Docker log records locally and sends allowlisted fields and fixed message text
+to Loki using native OTLP/HTTP. Native error text, request paths and bodies,
+credentials, and SQL query text and values are excluded from the centralized
+store. Loki listens on an internal storage network shared with the Collector
+and the query proxy. Grafana and the public Nginx route both reach the
+read-only query proxy.
+
+For direct queries, use HTTPS under `https://<DOMAIN>/loki/api/v1/`. Sign in
+as `loki` with the password in `deploy/secrets/loki-password` (or the equivalent
+file in `MW_SECRETS_DIR`). Nginx checks the hashed `loki-htpasswd` file. Use
+Grafana Explore for the browser interface and the Loki API for CLI queries.
+The proxy permits GET requests to the allowlisted query and label endpoints.
+
+```bash
+curl --fail --silent --show-error --user loki --get \
+  --data-urlencode 'query={service_name="api"}' \
+  --data-urlencode 'limit=10' \
+  'https://<DOMAIN>/loki/api/v1/query_range'
+```
+
+[Loki HTTP API](https://grafana.com/docs/loki/latest/reference/loki-http-api/)
+
+Delivery is asynchronous. Each forwarding container uses a 256 KiB Docker
+ring buffer, a 1,024-record Fluentd buffer and a rotated local cache with two
+5 MB files before compression. Use `mw logs --since=30m api nginx` to read
+its local cache. Delivery can drop logs when buffers fill or retry limits are
+reached. The Collector, Loki and Grafana use the default Docker log driver,
+which keeps their own output out of the forwarding path.
+[Docker Fluentd driver](https://docs.docker.com/engine/logging/drivers/fluentd/) ·
+[Docker dual logging](https://docs.docker.com/engine/logging/dual-logging/)
+
+Loki keeps seven days in `loki-data`, with a 256 MiB container memory ceiling
+and a 160 MiB Go runtime target. WAL replay has a 64 MB memory ceiling. On a 3.8 GiB disposable Docker host, 40,000
+synthetic records across the five services increased the volume from 140 KiB
+to 5.4 MiB including the WAL and a forced flush. Sampled memory peaked near
+100 MiB for Loki and 78 MiB for the Collector. Use 2 GiB as the initial disk
+budget for Loki and compare against a representative day of traffic before
+increasing retention. The age-based compactor deletes asynchronously. The
+backup and restore procedures exclude `loki-data`.
+
+```bash
+mw stats --no-stream loki otel-collector
+volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/loki"}}{{.Name}}{{end}}{{end}}' "$(mw ps -q loki)")
+docker run --rm --network none -v "$volume:/data:ro" --entrypoint du nginx:1.31.10-alpine3.24-slim -sh /data
+```
+
 ## Upgrade and public TLS renewal
 
 Take a backup before changing releases. Check out the intended release commit
 or tag. If upgrading a checkout that used local builds, add
 `DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
 [First startup](#first-startup). The commands below pin both images to the
-checked-out commit and add any missing PostgreSQL exporter, Grafana, and
-Jaeger credentials. Set `secrets_dir` to the existing host directory
+checked-out commit and add any missing PostgreSQL exporter, Grafana, Jaeger,
+and Loki credentials. Set `secrets_dir` to the existing host directory
 configured by `MW_SECRETS_DIR`.
 
 ```bash
@@ -380,6 +459,7 @@ secrets_dir=deploy/secrets
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
+deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --loki-only
 mw config --quiet
 mw pull
 mw up -d --no-build
@@ -395,7 +475,8 @@ the Prometheus container](#logs-and-prometheus). This loads the updated file
 and keeps the existing metrics volume.
 
 Verify both migration exit codes and the exporter setup exit code. Check the
-public HTTPS API request, Grafana sign-in, and Jaeger sign-in after upgrading.
+public HTTPS API request, Grafana and Jaeger sign-in, and an authenticated
+Loki query after upgrading.
 Install the example systemd units after successful issuance. Set both paths
 in the service to the absolute location of a root-controlled deployment
 checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`

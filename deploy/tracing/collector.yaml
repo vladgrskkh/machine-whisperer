@@ -5,6 +5,9 @@ receivers:
         endpoint: 0.0.0.0:4317
         max_recv_msg_size_mib: 4
 
+  fluent_forward:
+    endpoint: collector-fluent:24224
+
 processors:
   memory_limiter:
     check_interval: 1s
@@ -32,6 +35,107 @@ processors:
       # API's outbox worker sets only ID and flag fields, with no attributes or
       # tracestate. Remove whole links from every other kind of span.
       - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
+  filter/log_sources:
+    error_mode: propagate
+    log_conditions:
+      - 'not ContainsValue(["mw.api", "mw.analytics", "mw.nginx", "mw.postgres", "mw.clickhouse"], log.attributes["fluent.tag"])'
+  transform/log_allowlist:
+    error_mode: propagate
+    log_statements:
+      - 'keep_keys(resource.attributes, [])'
+      - 'keep_keys(scope.attributes, [])'
+      # Fluent Forward batches can contain multiple tags. Group by service after transforming each log.
+      - 'keep_keys(log.attributes, ["fluent.tag"])'
+      - 'replace_pattern(log.attributes["fluent.tag"], "^mw[.]", "")'
+      - 'set(log.attributes["service.name"], log.attributes["fluent.tag"])'
+      - 'delete_key(log.attributes, "fluent.tag")'
+      # Read structured fields in a scratch map. Export only bounded, typed or explicitly allowed values.
+      - 'merge_maps(log.cache, ParseJSON(log.body), "upsert") where IsString(log.body) and IsMatch(log.body, "^[{]")'
+      - >-
+        merge_maps(log.cache, ExtractPatterns(log.body, "^[0-9/-]+ [0-9:.]+ [^ ]+ [[]\\d+[]] (?P<sqlstate>[0-9A-Z]{5}) (?P<level>[A-Z]+):"), "upsert")
+        where log.attributes["service.name"] == "postgres" and IsString(log.body)
+      - >-
+        merge_maps(log.cache, ExtractPatterns(log.body, "^[0-9/-]+ [0-9:.]+ [[](?P<level>[a-z]+)[]]"), "upsert")
+        where log.attributes["service.name"] == "nginx" and IsString(log.body) and log.cache["level"] == nil
+      - 'set(log.severity_text, "INFO")'
+      - 'set(log.severity_number, SEVERITY_NUMBER_INFO)'
+      - >-
+        set(log.severity_text, "WARN") where IsString(log.cache["level"]) and
+        IsMatch(log.cache["level"], "(?i)^(warn|warning)$")
+      - 'set(log.severity_number, SEVERITY_NUMBER_WARN) where log.severity_text == "WARN"'
+      - >-
+        set(log.severity_text, "ERROR") where IsString(log.cache["level"]) and
+        IsMatch(log.cache["level"], "(?i)^(error|err|crit|critical|alert|emerg|fatal|panic)$")
+      - 'set(log.severity_number, SEVERITY_NUMBER_ERROR) where log.severity_text == "ERROR"'
+      - 'set(log.severity_text, "DEBUG") where IsString(log.cache["level"]) and IsMatch(log.cache["level"], "(?i)^debug[1-5]?$")'
+      - 'set(log.severity_number, SEVERITY_NUMBER_DEBUG) where log.severity_text == "DEBUG"'
+      - >-
+        set(log.attributes["http.response.status_code"], Int(log.cache["http.response.status_code"]))
+        where ContainsValue(["api", "nginx"], log.attributes["service.name"]) and IsDouble(log.cache["http.response.status_code"]) and
+        log.cache["http.response.status_code"] >= 100.0 and log.cache["http.response.status_code"] <= 599.0
+      - >-
+        set(log.attributes["request.id"], log.cache["request_id"]) where log.attributes["service.name"] == "nginx" and
+        IsString(log.cache["request_id"]) and IsMatch(log.cache["request_id"], "^[0-9a-f]{32}$")
+      - >-
+        set(log.trace_id.string, log.cache["trace_id"]) where ContainsValue(["api", "analytics", "nginx"], log.attributes["service.name"]) and
+        IsString(log.cache["trace_id"]) and IsMatch(log.cache["trace_id"], "^[0-9a-f]{32}$")
+      - >-
+        set(log.span_id.string, log.cache["span_id"]) where ContainsValue(["api", "analytics", "nginx"], log.attributes["service.name"]) and
+        IsString(log.cache["trace_id"]) and IsMatch(log.cache["trace_id"], "^[0-9a-f]{32}$") and
+        IsString(log.cache["span_id"]) and IsMatch(log.cache["span_id"], "^[0-9a-f]{16}$")
+      - >-
+        set(log.attributes["app"], log.cache["app"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
+        log.cache["app"] == log.attributes["service.name"]
+      - >-
+        set(log.attributes["env"], log.cache["env"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
+        ContainsValue(["dev", "test", "staging", "prod"], log.cache["env"])
+      - >-
+        set(log.attributes["machine.id"], log.cache["machine_id"]) where log.attributes["service.name"] == "api" and
+        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed",
+        "machine baseline set"], log.cache["msg"]) and IsString(log.cache["machine_id"]) and
+        IsMatch(log.cache["machine_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      - >-
+        set(log.attributes["device.id"], log.cache["device_id"]) where log.attributes["service.name"] == "api" and
+        ContainsValue(["telemetry ingest failed", "telemetry alert opened", "telemetry alert recovered", "device claimed"], log.cache["msg"]) and
+        IsString(log.cache["device_id"]) and IsMatch(log.cache["device_id"], "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+      - >-
+        set(log.attributes["rows"], Int(log.cache["rows"])) where log.attributes["service.name"] == "analytics" and
+        log.cache["msg"] == "analytics telemetry batch store failed" and IsDouble(log.cache["rows"]) and
+        log.cache["rows"] >= 1.0 and log.cache["rows"] <= 1000.0
+      - >-
+        set(log.attributes["failure.category"], log.cache["failure_category"]) where log.attributes["service.name"] == "api" and
+        log.cache["msg"] == "telemetry ingest failed" and
+        ContainsValue(["invalid_input", "machine_not_found", "event_conflict", "outside_window", "out_of_order", "internal_error"], log.cache["failure_category"])
+      - >-
+        set(log.attributes["db.response.status_code"], log.cache["sqlstate"]) where log.attributes["service.name"] == "postgres" and
+        IsString(log.cache["sqlstate"]) and IsMatch(log.cache["sqlstate"], "^[0-9A-Z]{5}$") and log.cache["sqlstate"] != "00000"
+      - >-
+        set(log.attributes["failure.category"], log.cache["category"]) where log.attributes["service.name"] == "api" and
+        ContainsValue(["outbox batch delivery failed", "outbox operation failed"], log.cache["msg"]) and
+        ContainsValue(["analytics_http", "analytics_timeout", "analytics_request", "analytics_transport", "claim",
+        "acknowledge", "reschedule", "prune"], log.cache["category"])
+      # All backend bodies are fixed text, including native error messages and API request paths.
+      - 'set(log.body, "Service log")'
+      - 'set(log.body, "HTTP request") where log.attributes["http.response.status_code"] != nil'
+      - 'set(log.body, "telemetry ingest failed") where log.cache["msg"] == "telemetry ingest failed" and log.attributes["failure.category"] != nil'
+      - >-
+        set(log.body, log.cache["msg"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
+        ContainsValue(["api stopped", "trace provider shutdown failed", "starting analytics servers", "analytics servers stopped",
+        "analytics server stopped", "outbox relay started", "outbox relay stopped", "outbox batch claimed",
+        "outbox batch acknowledged", "delivered outbox rows pruned", "outbox batch delivery failed", "outbox operation failed",
+        "device claimed", "machine baseline set", "telemetry alert opened", "telemetry alert recovered",
+        "analytics telemetry batch store failed"], log.cache["msg"])
+  filter/log_noise:
+    error_mode: propagate
+    log_conditions:
+      - 'log.body == "HTTP request" and log.attributes["http.response.status_code"] < 400'
+      - 'log.severity_number == SEVERITY_NUMBER_DEBUG'
+  groupbyattrs/log_service:
+    keys: [service.name]
+  batch/logs:
+    timeout: 1s
+    send_batch_size: 128
+    send_batch_max_size: 256
   batch:
     timeout: 1s
     send_batch_size: 256
@@ -52,6 +156,18 @@ exporters:
       max_interval: 5s
       max_elapsed_time: 15s
 
+  otlp_http/loki:
+    endpoint: http://loki:3100/otlp
+    timeout: 3s
+    sending_queue:
+      num_consumers: 1
+      queue_size: 32
+      block_on_overflow: false
+    retry_on_failure:
+      initial_interval: 1s
+      max_interval: 4s
+      max_elapsed_time: 20s
+
 service:
   telemetry:
     metrics:
@@ -61,3 +177,7 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, transform/allowlist, batch]
       exporters: [otlp_grpc/jaeger]
+    logs:
+      receivers: [fluent_forward]
+      processors: [memory_limiter, filter/log_sources, transform/log_allowlist, filter/log_noise, groupbyattrs/log_service, batch/logs]
+      exporters: [otlp_http/loki]

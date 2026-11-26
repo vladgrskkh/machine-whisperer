@@ -48,14 +48,19 @@ class ComposeStack:
         self.ca = self.fixture_cert / "fullchain.pem"
         self.webroot = work / "acme"
         self.secrets = work / "secrets"
+        # The Docker daemon connects to the published loopback port, so give
+        # each disposable project its own Fluent Forward address.
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            fluent_port = str(listener.getsockname()[1])
         self.env = {
             **os.environ, "DOCKERHUB_NAMESPACE": self.namespace, "IMAGE_TAG": self.project,
             "DOMAIN": self.domain, "MW_EDGE_SUBNET": f"{edge}.0/28",
             "MW_PROXY_IP": f"{edge}.2", "MW_API_IP": f"{edge}.3",
             "MW_PROVISIONING_CIDR": "192.0.2.0/24", "MW_SECRETS_DIR": str(self.secrets),
             "MW_CERT_DIR": str(self.certificates), "MW_ACME_WEBROOT": str(self.webroot),
-            "COMPOSE_PROFILES": "", "MW_NGINX_TRACE_SAMPLE_PERCENT": "100",
-            "OTEL_TRACES_SAMPLER_ARG": "1",
+            "COMPOSE_PROFILES": "", "APP_ENV": "test", "MW_NGINX_TRACE_SAMPLE_PERCENT": "100",
+            "OTEL_TRACES_SAMPLER_ARG": "1", "MW_FLUENT_FORWARD_PORT": fluent_port,
         }
         self.override = work / "e2e.yaml"
         self.override.write_text(f"""services:
@@ -107,6 +112,8 @@ class ComposeStack:
             ("otel-collector", "/etc/otelcol-contrib/config.yaml"), ("jaeger", "/etc/jaeger/config.yaml"),
         ):
             self.compose("run", "--rm", "--no-deps", "-T", service, "validate", f"--config={config}", timeout=180)
+        self.compose("run", "--rm", "--no-deps", "-T", "loki", "-config.file=/etc/loki/config.yaml",
+                     "-verify-config=true", timeout=120)
         self.compose("build", "api", "analytics", timeout=600)
         self.compose("up", "-d", "--no-build", "--wait", "--wait-timeout", "240", timeout=300)
 

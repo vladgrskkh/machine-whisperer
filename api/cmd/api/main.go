@@ -145,12 +145,11 @@ func resolveMetricsAddress(address string) (string, error) {
 	return resolved.String(), nil
 }
 
-func serve(ctx context.Context, address string) error {
+func serve(ctx context.Context, address string, logger *slog.Logger) error {
 	config, err := application.LoadConfig()
 	if err != nil {
 		return err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	traces, err := tracing.New(ctx, "api")
 	if err != nil {
 		return err
@@ -200,10 +199,11 @@ func main() {
 	if address == "" {
 		address = ":8080"
 	}
-	err := serve(ctx, address)
+	logger := application.NewLogger(os.Stderr, os.Getenv("APP_ENV"), slog.LevelDebug)
+	err := serve(ctx, address, logger)
 	stop()
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("api stopped", "error", err)
+		logger.Error("api stopped", "error", err)
 		os.Exit(1)
 	}
 }

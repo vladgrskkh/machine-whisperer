@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"time"
 
@@ -73,6 +74,7 @@ type ingestResult struct {
 
 type Ingest struct {
 	tracer       trace.Tracer
+	logger       *slog.Logger
 	repository   Repository
 	transactions TransactionManager
 	detector     ObservationDetector
@@ -84,10 +86,12 @@ func NewIngest(
 	transactions TransactionManager,
 	detector ObservationDetector,
 	recorder IngestRecorder,
+	logger *slog.Logger,
 	tracer trace.Tracer,
 ) *Ingest {
 	return &Ingest{
 		tracer:       tracer,
+		logger:       logger,
 		repository:   repository,
 		transactions: transactions,
 		detector:     detector,
@@ -137,6 +141,15 @@ func (i *Ingest) Ingest(
 	i.recorder.RecordDetection(result.detection.Outcome)
 	if result.detection.Transition != "" {
 		i.recorder.RecordAlertTransition(result.detection.Transition)
+	}
+	switch result.detection.Transition {
+	case AlertOpened:
+		i.logger.WarnContext(ctx, "telemetry alert opened", "machine_id", event.MachineID, "device_id", event.DeviceID)
+	case AlertRecovered:
+		i.logger.InfoContext(ctx, "telemetry alert recovered",
+			"machine_id", event.MachineID,
+			"device_id", event.DeviceID,
+		)
 	}
 	return nil
 }

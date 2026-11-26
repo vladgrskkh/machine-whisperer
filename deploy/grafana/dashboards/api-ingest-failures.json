@@ -1,0 +1,33 @@
+{
+  "uid": "mw-api-ingest-failures",
+  "title": "API ingest failures",
+  "description": "Device telemetry rejected by the API. Expand a row for the failure category, status, and sampled trace ID.",
+  "tags": ["telemetry", "logs"],
+  "editable": false,
+  "schemaVersion": 40,
+  "version": 1,
+  "time": {"from": "now-1h", "to": "now"},
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "Rejected telemetry observations",
+      "datasource": {"type": "loki", "uid": "mw-loki"},
+      "gridPos": {"w": 24, "h": 18, "x": 0, "y": 0},
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {"type": "loki", "uid": "mw-loki"},
+          "editorMode": "code",
+          "expr": "{service_name=\"api\"} |= \"telemetry ingest failed\"",
+          "queryType": "range"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLogDetails": true,
+        "sortOrder": "Descending"
+      }
+    }
+  ]
+}

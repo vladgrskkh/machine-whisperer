@@ -20,6 +20,15 @@ map $mw_trace_sampled $mw_trace_flags {
     default 00;
 }
 
+map $mw_trace_sampled $mw_sampled_trace_id {
+    on $otel_trace_id;
+    default "";
+}
+map $mw_log_trace_location $mw_log_trace_id {
+    on $mw_sampled_trace_id;
+    default "";
+}
+
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -39,10 +48,11 @@ server {
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    access_log off;
+    access_log /var/log/nginx/access.log mw_failure if=$mw_log_failure;
 
     resolver 127.0.0.11 valid=10s ipv6=off;
     set $api_endpoint api:8443;
+    set $mw_log_trace_location off;
     proxy_ssl_server_name on;
     proxy_ssl_name api;
     proxy_ssl_trusted_certificate /run/secrets/internal_ca;
@@ -61,6 +71,7 @@ server {
     proxy_set_header baggage "";
 
     location /v1/ {
+        set $mw_log_trace_location on;
         otel_trace $mw_trace_sampled;
         otel_trace_context inject;
         otel_span_name "proxy /v1/";
@@ -69,6 +80,7 @@ server {
     location = /internal/v1/device-provisioning {
         allow ${MW_PROVISIONING_CIDR};
         deny all;
+        set $mw_log_trace_location on;
         otel_trace $mw_trace_sampled;
         otel_trace_context inject;
         otel_span_name "proxy /internal/v1/device-provisioning";
@@ -101,6 +113,14 @@ server {
         # Jaeger detects the browser prefix and serves the upstream at its root.
         rewrite ^/jaeger(/.*)$ $1 break;
         proxy_pass http://$jaeger_endpoint;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+    }
+    location ^~ /loki/api/v1/ {
+        auth_basic "Loki";
+        auth_basic_user_file /run/secrets/loki_htpasswd;
+        set $loki_query_endpoint loki-query-proxy:3100;
+        proxy_pass http://$loki_query_endpoint;
         proxy_set_header Authorization "";
         proxy_set_header Cookie "";
     }

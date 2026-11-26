@@ -3,10 +3,13 @@
 package detector_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -456,7 +459,9 @@ func TestRecoveredAlertCanBeAcknowledgedIdempotently(t *testing.T) {
 
 func TestTelemetryDetectorTransactionRollback(t *testing.T) {
 	t.Parallel()
-	f := setupDetector(t)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	f := detectorFixture{testfixture.SetupDeviceTelemetry(t, application.WithLogger(logger))}
 	f.baseline(t, 2)
 	f.readings(t, 0, 18, 18)
 	_, err := f.Pool.Exec(t.Context(), `CREATE FUNCTION reject_detector_alert() RETURNS trigger
@@ -496,4 +501,10 @@ func TestTelemetryDetectorTransactionRollback(t *testing.T) {
 	assert.Contains(t, succeeded, "mw_telemetry_ingest_requests_total{outcome=\"accepted_new\"} 3\n")
 	assert.Contains(t, succeeded, "mw_detector_observations_total{outcome=\"evaluated\"} 3\n")
 	assert.Contains(t, succeeded, "mw_alert_transitions_total{transition=\"opened\"} 1\n")
+	f.readings(t, 3, 10, 10, 10)
+	f.Server.Close()
+	entries := logs.String()
+	assert.Equal(t, 1, strings.Count(entries, `"msg":"telemetry alert opened"`))
+	assert.Equal(t, 1, strings.Count(entries, `"msg":"telemetry alert recovered"`))
+	assert.NotContains(t, entries, "forced test rollback")
 }
