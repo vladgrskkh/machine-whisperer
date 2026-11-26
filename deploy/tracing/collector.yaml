@@ -52,12 +52,6 @@ processors:
       # API's outbox worker sets only ID and flag fields, with no attributes or
       # tracestate. Remove whole links from every other kind of span.
       - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
-  filter/trace_ingress:
-    error_mode: propagate
-    trace_conditions:
-      - >-
-        not ((span.name == "machine.history.load" and span.kind == SPAN_KIND_INTERNAL) or
-        (span.name == "GET /v1/machines/{machine_id}/telemetry" and span.kind == SPAN_KIND_CLIENT))
   transform/trace_ingress:
     error_mode: propagate
     trace_statements:
@@ -71,18 +65,23 @@ processors:
       - 'keep_keys(scope.attributes, [])'
       - 'set(scope.name, "machine-whisperer.tracing")'
       - 'set(scope.version, "")'
-      - 'keep_keys(span.attributes, ["http.response.status_code", "error.type"])'
+      - 'keep_keys(span.attributes, ["http.request.method", "http.route", "http.response.status_code", "error.type"])'
+      - 'delete_key(span.attributes, "http.request.method") where not IsString(span.attributes["http.request.method"])'
       - >-
-        delete_key(span.attributes, "http.response.status_code") where
-        span.kind != SPAN_KIND_CLIENT or not IsInt(span.attributes["http.response.status_code"])
+        delete_key(span.attributes, "http.request.method") where IsString(span.attributes["http.request.method"]) and
+        not ContainsValue(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE", "_OTHER"],
+        span.attributes["http.request.method"])
+      - 'delete_key(span.attributes, "http.route") where not IsString(span.attributes["http.route"])'
+      - >-
+        delete_key(span.attributes, "http.route") where IsString(span.attributes["http.route"]) and
+        not IsMatch(span.attributes["http.route"], "^/([^/?#[:space:]\\p{Z}\\p{Cc}][^?#[:space:]\\p{Z}\\p{Cc}]{0,254})?$")
+      - 'delete_key(span.attributes, "http.response.status_code") where not IsInt(span.attributes["http.response.status_code"])'
       - >-
         delete_key(span.attributes, "http.response.status_code") where IsInt(span.attributes["http.response.status_code"]) and
         (span.attributes["http.response.status_code"] < 100 or span.attributes["http.response.status_code"] > 599)
       - >-
         delete_key(span.attributes, "error.type") where not ContainsValue(
         ["network_error", "timeout", "cancelled", "http_error", "invalid_response"], span.attributes["error.type"])
-      - 'set(span.attributes["http.request.method"], "GET") where span.kind == SPAN_KIND_CLIENT'
-      - 'set(span.attributes["http.route"], "/v1/machines/{machine_id}/telemetry") where span.kind == SPAN_KIND_CLIENT'
       - 'set(span.status.message, "")'
       - 'set(span.trace_state, "")'
       - 'set(span.events, nil)'
@@ -216,7 +215,7 @@ service:
       exporters: [otlp_grpc/jaeger]
     traces/ingress:
       receivers: [otlp/ingress]
-      processors: [memory_limiter, filter/trace_ingress, transform/trace_ingress, batch]
+      processors: [memory_limiter, transform/trace_ingress, batch]
       exporters: [otlp_grpc/jaeger]
     logs:
       receivers: [fluent_forward]

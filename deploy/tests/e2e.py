@@ -1102,7 +1102,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
 
     def assert_ingress_history_trace(self):
         trace_id = secrets.token_hex(16)
-        root_id, request_id = (secrets.token_hex(8) for _ in range(2))
+        root_id, request_id, extra_id = (secrets.token_hex(8) for _ in range(3))
         started = time.time_ns()
         status, headers, _ = self.response("GET", self.history_path, token=self.owner_token, headers={
             # The edge still samples this request under the fixture's edge-owned 100% policy.
@@ -1112,7 +1112,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertEqual(headers["X-Mw-Sampled-Trace"], trace_id)
 
         canary = f"trace-private-{secrets.token_hex(8)}"
-        payload = ingress_history_trace(trace_id, root_id, request_id, started, canary)
+        payload = ingress_history_trace(trace_id, root_id, request_id, extra_id, started, canary)
         otlp = {"Content-Type": "application/x-protobuf"}
         self.request("POST", "/otlp/v1/traces", 401, payload, headers=otlp, decode=False)
         self.request("POST", "/otlp/v1/traces", 200, payload, token=self.owner_token, headers=otlp, decode=False)
@@ -1120,18 +1120,34 @@ class DeploymentEndToEndTest(unittest.TestCase):
         chain = [
             ("machine-whisperer", "machine.history.load"), ("machine-whisperer", HISTORY), ("nginx", "proxy /v1/"), ("api", HISTORY),
         ]
+        extra_key = ("machine-whisperer", "POST /v1/machines")
 
         def complete():
             spans = {(service_name(span), span["name"]): span for span in query.get(trace_id)}
-            return spans if all(key in spans for key in (*chain, ("analytics", ANALYTICS_HISTORY))) else None
+            required = (*chain, extra_key, ("analytics", ANALYTICS_HISTORY))
+            return spans if all(key in spans for key in required) else None
 
         spans = eventually("one app-rooted history trace", complete, timeout=45, caught=NETWORK_ERRORS)
-        self.assertEqual(spans[chain[0]]["spanId"], root_id)
-        self.assertFalse(spans[chain[0]].get("parentSpanId"))
+        root = spans[chain[0]]
+        self.assertEqual(root["spanId"], root_id)
+        self.assertFalse(root.get("parentSpanId"))
+        root_attrs = string_attributes(root)
+        self.assertNotIn("http.request.method", root_attrs)
+        self.assertNotIn("http.route", root_attrs)
         self.assertEqual(spans[chain[1]]["spanId"], request_id)
         for parent, child in zip(chain, chain[1:]):
             self.assertEqual(spans[child]["parentSpanId"], spans[parent]["spanId"], child)
-        self.assertNotIn(canary, json.dumps(spans[chain[1]]))
+        extra = spans[extra_key]
+        self.assertEqual(extra["spanId"], extra_id)
+        self.assertEqual(extra["parentSpanId"], root_id)
+        self.assertIn(extra.get("kind"), (2, "SPAN_KIND_SERVER"))
+        extra_attrs = string_attributes(extra)
+        self.assertEqual(extra_attrs["http.request.method"], "POST")
+        self.assertEqual(extra_attrs["http.route"], "/v1/machines")
+        status_code, = (item["value"]["intValue"] for item in extra["attributes"]
+                        if item["key"] == "http.response.status_code")
+        self.assertEqual(int(status_code), 201)
+        self.assertNotIn(canary, json.dumps([root, spans[chain[1]], extra]))
 
     def assert_unsampled_request_keeps_the_edge_decision(self):
         def restart_edge(percent):

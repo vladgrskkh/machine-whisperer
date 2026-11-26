@@ -17,14 +17,14 @@ def _bytes_field(number, value):
 
 
 def _attribute(key, value):
-    any_value = _bytes_field(1, value.encode())
+    any_value = _bytes_field(1, value.encode()) if isinstance(value, str) else _varint(3 << 3) + _varint(value)
     return _bytes_field(1, key.encode()) + _bytes_field(2, any_value)
 
 
-def ingress_history_trace(trace_id, root_id, request_id, start_ns, private_canary):
+def ingress_history_trace(trace_id, root_id, request_id, extra_id, start_ns, private_canary):
     end_ns = time_ns()
 
-    def span(span_id, name, kind, parent=None):
+    def span(span_id, name, kind, parent=None, *, method, route, status=None):
         data = (
             _bytes_field(1, bytes.fromhex(trace_id))
             + _bytes_field(2, bytes.fromhex(span_id))
@@ -33,12 +33,19 @@ def ingress_history_trace(trace_id, root_id, request_id, start_ns, private_canar
             + _varint((7 << 3) | 1) + pack("<Q", start_ns)
             + _varint((8 << 3) | 1) + pack("<Q", end_ns)
             + _bytes_field(9, _attribute("url.full", private_canary))
+            + _bytes_field(9, _attribute("http.request.method", method))
+            + _bytes_field(9, _attribute("http.route", route))
         )
+        if status is not None:
+            data += _bytes_field(9, _attribute("http.response.status_code", status))
         return data + (_bytes_field(4, bytes.fromhex(parent)) if parent else b"")
 
     # The ingress must assign the resource identity and strip all unapproved metadata.
     resource = _bytes_field(1, _attribute("service.name", "synthetic-client"))
-    root = span(root_id, "machine.history.load", 1)
-    request = span(request_id, "GET /v1/machines/{machine_id}/telemetry", 3, root_id)
-    scope_spans = _bytes_field(2, root) + _bytes_field(2, request)
+    root = span(root_id, "machine.history.load", 1,
+                method=private_canary, route=f"/v1/machines?fixture={private_canary}")
+    request = span(request_id, "GET /v1/machines/{machine_id}/telemetry", 3, root_id,
+                   method="GET", route="/v1/machines/{machine_id}/telemetry")
+    extra = span(extra_id, "POST /v1/machines", 2, root_id, method="POST", route="/v1/machines", status=201)
+    scope_spans = _bytes_field(2, root) + _bytes_field(2, request) + _bytes_field(2, extra)
     return _bytes_field(1, _bytes_field(1, resource) + _bytes_field(2, scope_spans))

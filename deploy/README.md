@@ -420,9 +420,9 @@ The app uploads OTLP/HTTP protobuf to `POST /otlp/v1/traces`. Nginx checks the
 user's access token through the existing API profile route and enforces a
 32 KiB body limit and upload rate limits. Nginx strips client headers before
 forwarding to the Collector's private HTTP receiver on the `trace-ingress`
-network. The Collector sets the app service name and limits the names and
-metadata before export. For a configuration upgrade, follow the [Nginx and
-Collector reload steps](#centralized-service-logs).
+network. The Collector sets the app service name, preserves span names and
+parentage, and strips unapproved metadata before export. For a configuration
+upgrade, follow the [Nginx and Collector reload steps](#centralized-service-logs).
 
 ## Centralized service logs
 
