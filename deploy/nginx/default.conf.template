@@ -91,6 +91,19 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $grafana_connection_upgrade;
     }
+    location = /jaeger {
+        return 308 https://${DOMAIN}/jaeger/$is_args$args;
+    }
+    location ^~ /jaeger/ {
+        auth_basic "Jaeger";
+        auth_basic_user_file /run/secrets/jaeger_htpasswd;
+        set $jaeger_endpoint jaeger:16686;
+        # Jaeger detects the browser prefix and serves the upstream at its root.
+        rewrite ^/jaeger(/.*)$ $1 break;
+        proxy_pass http://$jaeger_endpoint;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+    }
     location / {
         return 404;
     }

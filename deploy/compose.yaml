@@ -31,6 +31,7 @@ services:
       nginx-status:
         aliases: [nginx-status]
       grafana-proxy: {}
+      jaeger-proxy: {}
       trace-edge: {}
     volumes:
       - ./nginx:/opt/mw/nginx:ro
@@ -39,7 +40,7 @@ services:
       - ./nginx/status.conf:/etc/nginx/conf.d/status.conf:ro
       - ${MW_CERT_DIR:-./letsencrypt}:/etc/letsencrypt:ro
       - ${MW_ACME_WEBROOT:-./acme-webroot}:/var/www/acme:ro
-    secrets: [internal_ca]
+    secrets: [internal_ca, jaeger_htpasswd]
     depends_on:
       api: {condition: service_healthy}
 
@@ -269,7 +270,10 @@ services:
     restart: unless-stopped
     command: [--config=/etc/jaeger/config.yaml]
     ports: ["127.0.0.1:16686:16686"]
-    networks: [monitoring]
+    networks:
+      monitoring:
+        aliases: [jaeger-otlp]
+      jaeger-proxy: {}
     volumes:
       - ./tracing/jaeger.yaml:/etc/jaeger/config.yaml:ro
       - jaeger-data:/tmp
@@ -288,6 +292,8 @@ networks:
   nginx-status:
     internal: true
   grafana-proxy:
+    internal: true
+  jaeger-proxy:
     internal: true
   trace-edge:
     internal: true
@@ -326,3 +332,5 @@ secrets:
     file: ${MW_SECRETS_DIR:-./secrets}/api.key
   grafana_admin_password:
     file: ${MW_SECRETS_DIR:-./secrets}/grafana-admin-password
+  jaeger_htpasswd:
+    file: ${MW_SECRETS_DIR:-./secrets}/jaeger-htpasswd
