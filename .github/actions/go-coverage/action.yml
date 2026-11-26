@@ -35,7 +35,7 @@ runs:
         report="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.html"
         inputs=("$profile")
         if [[ -n "$PROFILES" ]]; then
-          mapfile -t inputs <<< "$PROFILES"
+          mapfile -t inputs < <(printf '%s' "$PROFILES")
         fi
         module=$(go list -m)
         go run "$GITHUB_ACTION_PATH/profile.go" -module "$module" "${inputs[@]}" > "$profile.filtered"
