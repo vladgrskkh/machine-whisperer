@@ -194,7 +194,7 @@ export class ApiClient {
     const timer = setTimeout(abort, 15_000);
     const context = request.traceContext;
     const attempt = context ? bestEffort(() => this.tracing?.attempt(context, token)) : undefined;
-    if (attempt) headers['X-MW-Trace'] = '1';
+    if (attempt) headers.traceparent = attempt.traceparent;
     try {
       const response = await this.fetch(`${this.baseUrl}${path}`, {
         method: request.method ?? 'GET',

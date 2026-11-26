@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 usage() {
-    echo "Usage: $0 --output-dir DIR [--postgres-exporter-only | --grafana-only | --jaeger-only | --loki-only | --mobile-trace-only]" >&2
+    echo "Usage: $0 --output-dir DIR [--postgres-exporter-only | --grafana-only | --jaeger-only | --loki-only]" >&2
     exit 2
 }
 
@@ -48,7 +48,6 @@ grafana_secret=grafana-admin-password
 case "${3:-}" in
     --postgres-exporter-only) secret=$exporter_secret ;;
     --grafana-only) secret=$grafana_secret ;;
-    --mobile-trace-only) secret=mobile-trace-key ;;
     --jaeger-only | --loki-only)
         name=${3#--}
         name=${name%-only}
@@ -97,7 +96,6 @@ trap 'rm -rf -- .generating' EXIT
         "$(cat postgres-password)" >database-url
     openssl rand -hex 32 >clickhouse-password
     openssl rand -hex 32 >analytics-token
-    openssl rand -hex 32 >mobile-trace-key
     openssl rand -hex 32 >"$grafana_secret"
     prepare_proxy_credentials jaeger
     prepare_proxy_credentials loki
@@ -124,7 +122,7 @@ EXT
     # Compose file secrets are bind mounts; non-root container UIDs must read
     # the files. The CA key and operator passwords stay on the host at 0600.
     ln jaeger-password loki-password ..
-    for file in postgres-password "$exporter_secret" database-url clickhouse-password analytics-token mobile-trace-key \
+    for file in postgres-password "$exporter_secret" database-url clickhouse-password analytics-token \
                 "$grafana_secret" jaeger-htpasswd loki-htpasswd auth-signing.pem auth-public-keys.json \
                 internal-ca.crt api.crt api.key; do
         chmod 0444 "$file"

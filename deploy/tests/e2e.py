@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 
 from deploy.tests.compose_stack import ComposeStack, LoopbackHTTPSConnection, eventually
 from deploy.tests.jaeger_query import JaegerQuery, service_name, string_attributes
+from deploy.tests.otlp import mobile_history_trace
 from deploy.tests.support import DEPLOY, run
 
 
@@ -798,7 +799,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
     def response(self, method, path, body=None, token=None, headers=None, *, opener=None):
         headers = dict(headers or {})
         data = None
-        if body is not None:
+        if isinstance(body, bytes):
+            data = body
+        elif body is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(body).encode()
         if token is not None:
@@ -915,15 +918,18 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_path = history_path
         self.observation = observation
         self.assert_recorded_traces(ingest_start, ingest_end, (machine, device_id, observation["event_id"]))
+        self.assert_mobile_history_trace()
 
     def assert_recorded_traces(self, ingest_start, ingest_end, private_ids):
         query = JaegerQuery(self.stack)
         spoof_id = secrets.token_hex(16)
         canary = f"trace-fixture-{secrets.token_hex(8)}"
+        # Routes outside the history URL still replace external trace context.
+        self.request("GET", "/v1/users/me", 200, token=self.owner_token, headers={
+            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-00",
+        })
         history_start = datetime.now(timezone.utc)
         self.request("GET", self.history_path + f"?fixture={canary}", 200, token=self.owner_token, headers={
-            # An external unsampled decision must not suppress a sampled edge root.
-            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-00",
             "tracestate": f"fixture={canary}", "baggage": f"fixture={canary}", "User-Agent": canary,
         })
         history_end = datetime.now(timezone.utc)
@@ -1032,6 +1038,39 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_trace_id = edge["traceId"]
         self.history_edge_span_id = edge["spanId"]
 
+    def assert_mobile_history_trace(self):
+        trace_id = secrets.token_hex(16)
+        root_id, request_id = (secrets.token_hex(8) for _ in range(2))
+        started = time.time_ns()
+        status, headers, _ = self.response("GET", self.history_path, token=self.owner_token, headers={
+            # The edge still samples this request under the fixture's edge-owned 100% policy.
+            "traceparent": f"00-{trace_id}-{request_id}-00",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["X-Mw-Sampled-Trace"], trace_id)
+
+        canary = f"mobile-private-{secrets.token_hex(8)}"
+        payload = mobile_history_trace(trace_id, root_id, request_id, started, canary)
+        otlp = {"Content-Type": "application/x-protobuf"}
+        self.request("POST", "/otlp/v1/traces", 401, payload, headers=otlp, decode=False)
+        self.request("POST", "/otlp/v1/traces", 200, payload, token=self.owner_token, headers=otlp, decode=False)
+        query = JaegerQuery(self.stack)
+        chain = [
+            ("mobile", "machine.history.load"), ("mobile", HISTORY), ("nginx", "proxy /v1/"), ("api", HISTORY),
+        ]
+
+        def complete():
+            spans = {(service_name(span), span["name"]): span for span in query.get(trace_id)}
+            return spans if all(key in spans for key in (*chain, ("analytics", ANALYTICS_HISTORY))) else None
+
+        spans = eventually("one mobile-rooted history trace", complete, timeout=45, caught=NETWORK_ERRORS)
+        self.assertEqual(spans[chain[0]]["spanId"], root_id)
+        self.assertFalse(spans[chain[0]].get("parentSpanId"))
+        self.assertEqual(spans[chain[1]]["spanId"], request_id)
+        for parent, child in zip(chain, chain[1:]):
+            self.assertEqual(spans[child]["parentSpanId"], spans[parent]["spanId"], child)
+        self.assertNotIn(canary, json.dumps(spans[chain[1]]))
+
     def assert_unsampled_request_keeps_the_edge_decision(self):
         def restart_edge(percent):
             self.stack.env["MW_NGINX_TRACE_SAMPLE_PERCENT"] = percent
@@ -1043,9 +1082,11 @@ class DeploymentEndToEndTest(unittest.TestCase):
         restart_edge("0")
         spoof_id = secrets.token_hex(16)
         start = datetime.now(timezone.utc)
-        self.request("GET", self.history_path, 200, token=self.owner_token, headers={
+        status, headers, _ = self.response("GET", self.history_path, token=self.owner_token, headers={
             "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-01",
         })
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("X-Mw-Sampled-Trace"))
         end = datetime.now(timezone.utc)
         restart_edge("100")
         control_start = datetime.now(timezone.utc)

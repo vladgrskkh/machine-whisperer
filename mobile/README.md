@@ -42,9 +42,9 @@ phone before distributing a native build.
 
 The app records the initial machine history load and its HTTP attempts. The
 protected trace endpoint receives a bounded batch on the API's HTTPS origin.
-Successful requests appear in Jaeger when Nginx samples the backend trace.
-The mobile trace links to the authenticated API span. A fetch failure can
-produce a mobile trace on its own.
+Nginx continues the app's W3C trace context and controls sampling. A sampled
+history load appears in Jaeger as one trace rooted at the mobile action. A
+fetch failure can produce a mobile trace on its own.
 
 When Expo Web is enabled, tracing requires the app and API to share an HTTPS origin.
 Set `EXPO_PUBLIC_MOBILE_TRACING=0` in the build environment to opt out. The

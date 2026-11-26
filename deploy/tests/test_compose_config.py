@@ -37,7 +37,7 @@ class ComposeConfigTest(unittest.TestCase):
     def test_only_ingress_and_loopback_queries_publish_ports_and_private_networks_are_internal(self):
         networks = {
             "certbot": {"acme"},
-            "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "loki-proxy", "trace-edge"},
+            "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "loki-proxy", "trace-edge", "trace-mobile"},
             "nginx-exporter": {"nginx-status", "infra-scrape"},
             "api": {"edge", "data", "scrape", "trace-apps"}, "api-migrate": {"data"},
             "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
@@ -45,12 +45,13 @@ class ComposeConfigTest(unittest.TestCase):
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
             "grafana": {"grafana-proxy", "monitoring"},
-            "otel-collector": {"trace-edge", "trace-apps", "monitoring", "log-store"}, "jaeger": {"monitoring", "jaeger-proxy"},
+            "otel-collector": {"trace-edge", "trace-apps", "trace-mobile", "monitoring", "log-store"},
+            "jaeger": {"monitoring", "jaeger-proxy"},
             "loki": {"log-store"}, "loki-query-proxy": {"monitoring", "loki-proxy", "log-store"},
         }
         self.assertEqual(set(self.services), set(networks))
         for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy", "jaeger-proxy",
-                        "loki-proxy", "trace-edge", "trace-apps", "log-store"):
+                        "loki-proxy", "trace-edge", "trace-apps", "trace-mobile", "log-store"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -93,6 +94,8 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertFalse(receiver.get("pid"))
         self.assertEqual([network for network, config in receiver["networks"].items()
                           if "collector-fluent" in (config or {}).get("aliases", [])], ["monitoring"])
+        self.assertEqual([network for network, config in receiver["networks"].items()
+                          if "otel-mobile-ingress" in (config or {}).get("aliases", [])], ["trace-mobile"])
 
     def test_overriding_the_fluent_port_changes_the_driver_and_receiver_together(self):
         services = self.compose_config(fluent_port="24500")["services"]
@@ -213,8 +216,7 @@ class ComposeConfigTest(unittest.TestCase):
 
     def test_only_required_file_backed_secrets_are_granted(self):
         grants = {
-            "api": {"database_url", "analytics_token", "signing_key", "verify_keys", "api_cert", "api_key", "internal_ca",
-                    "mobile_trace_key"},
+            "api": {"database_url", "analytics_token", "signing_key", "verify_keys", "api_cert", "api_key", "internal_ca"},
             "api-migrate": {"database_url"},
             "analytics": {"analytics_token", "clickhouse_password"},
             "analytics-migrate": {"clickhouse_password"},
@@ -236,7 +238,6 @@ class ComposeConfigTest(unittest.TestCase):
                 "API_TLS_CERT_FILE": "api_cert", "API_TLS_KEY_FILE": "api_key",
                 "DATABASE_URL_FILE": "database_url", "AUTH_SIGNING_KEY_FILE": "signing_key",
                 "AUTH_VERIFY_KEYS_FILE": "verify_keys", "ANALYTICS_INGEST_API_KEY_FILE": "analytics_token",
-                "MOBILE_TRACE_SECRET_FILE": "mobile_trace_key",
             },
             "api-migrate": {"DATABASE_URL_FILE": "database_url"},
             "analytics": {"ANALYTICS_INGEST_API_KEY_FILE": "analytics_token", "CLICKHOUSE_PASSWORD_FILE": "clickhouse_password"},

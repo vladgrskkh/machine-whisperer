@@ -398,6 +398,22 @@ with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
+Search `mobile` for `machine.history.load` to open the app's history trace.
+Nginx continues W3C trace context on the exact machine telemetry URL, which
+also serves legacy device POST requests. Requests without valid context start
+at Nginx. The edge samples using its own request ID and forwards its own
+sampling flag. The other public API paths replace client trace context.
+Trace IDs carry diagnostic context. The API enforces its existing access and
+machine ownership checks independently.
+
+The app uploads OTLP/HTTP protobuf to `POST /otlp/v1/traces`. Nginx checks the
+user's access token through the existing API profile route and enforces a
+32 KiB body limit and upload rate limits. Nginx strips client headers before
+forwarding to the Collector's private HTTP receiver on the `trace-mobile`
+network. The Collector sets the mobile identity and limits the names and
+metadata before export. For a configuration upgrade, follow the [Nginx and
+Collector reload steps](#centralized-service-logs).
+
 ## Centralized service logs
 
 Sign in to Grafana and open **Explore** with the **Loki** data source. Select
@@ -510,7 +526,6 @@ pins both images to that commit, and creates any missing credentials.
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --loki-only
-    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --mobile-trace-only
     mw config --quiet
     mw pull
     mw up -d --no-build
@@ -525,13 +540,6 @@ that adds Grafana, follow the [named Viewer setup](#grafana-sign-in-and-accounts
 When a release changes the Prometheus configuration, [validate it and recreate
 the Prometheus container](#logs-and-prometheus). This loads the updated file
 and keeps the existing metrics volume.
-
-When trace ingress or the Collector pipeline changes, recreate Nginx and the
-Collector so they reload their bind-mounted configuration.
-
-```bash
-mw up -d --no-deps --force-recreate nginx otel-collector
-```
 
 Verify both migration exit codes and the exporter setup exit code. Check the
 public HTTPS API request, Grafana and Jaeger sign-in, and an authenticated

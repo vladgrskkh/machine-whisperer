@@ -1,3 +1,5 @@
+import { ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
+
 import { ApiClient } from '../client';
 import { MobileTracing, tracingOrigin } from '../../tracing/mobile-tracing';
 
@@ -8,41 +10,60 @@ jest.mock('expo-crypto', () => {
 
 const host = 'https://example.test';
 const id = '0bb58342-734e-4587-a1bd-95f9c1e7a302';
-const traceparent = '00-12345678123456781234567812345678-1234567812345678-01';
-const receipt = 'A'.repeat(86);
 const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-it('exports linked history attempts without putting credentials and request data in spans', async () => {
+function sampledHistory(init?: RequestInit) {
+  const traceId = new Headers(init?.headers).get('traceparent')?.split('-')[1] ?? '';
+  return new Response('{"items":[]}', { headers: { 'X-Mw-Sampled-Trace': traceId } });
+}
+
+it('exports mobile root and HTTP children on the edge-sampled W3C trace', async () => {
   const upload = jest.fn<Promise<Response>, [string, RequestInit?]>()
     .mockRejectedValue(new Error('collector unavailable'));
   const request = jest.fn<Promise<Response>, [string, RequestInit?]>()
     .mockResolvedValueOnce(new Response(null, { status: 401 }))
-    .mockResolvedValueOnce(new Response('{"items":[]}', {
-      headers: { 'X-MW-Traceparent': traceparent, 'X-MW-Trace-Receipt': receipt },
-    }));
+    .mockImplementationOnce(async (_url, init) => sampledHistory(init));
   const getAccess = () => ({ token: 'secret-access', generation: 1 });
   const tracing = new MobileTracing({ origin: host, getAccess, fetch: upload, version: '1.0.0' });
   const api = new ApiClient({
     baseUrl: host, fetch: request, tracing, session: { getAccess, refreshAccess: async () => getAccess() },
   });
-  await expect(api.getTelemetry(id, { cursor: 'private-cursor', traceHistory: true })).resolves.toEqual({ items: [] });
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[0][1]?.headers).toMatchObject({ 'X-MW-Trace': '1' });
-  expect(upload).not.toHaveBeenCalled();
-  await nextTask();
-  expect(upload).toHaveBeenCalledTimes(1);
-  const [url, init] = upload.mock.calls[0];
-  expect(url).toBe(host + '/v1/mobile/traces');
-  expect(init?.headers).toMatchObject({
-    Authorization: 'Bearer secret-access',
-    'X-MW-Trace-Receipts': receipt,
-    'Content-Type': 'application/x-protobuf',
-  });
-  const wire = new TextDecoder().decode(init?.body as ArrayBuffer);
-  expect(wire).toContain('machine.history.load');
-  expect(wire).toContain('GET /v1/machines/{machine_id}/telemetry');
-  for (const privateData of ['secret-access', 'private-cursor', id, receipt]) {
-    expect(wire).not.toContain(privateData);
+  const serialize = jest.spyOn(ProtobufTraceSerializer, 'serializeRequest');
+  try {
+    await expect(api.getTelemetry(id, { cursor: 'private-cursor', traceHistory: true })).resolves.toEqual({ items: [] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(new Headers(request.mock.calls[0][1]?.headers).get('traceparent'))
+      .toMatch(/^00-[a-f0-9]{32}-[a-f0-9]{16}-01$/);
+    expect(serialize).not.toHaveBeenCalled();
+    expect(upload).not.toHaveBeenCalled();
+    await nextTask();
+    expect(upload).toHaveBeenCalledTimes(1);
+    const [spans] = serialize.mock.calls[0];
+    const root = spans.find((span) => span.name === 'machine.history.load');
+    expect(root).toBeDefined();
+    if (!root) throw new Error('Missing history root');
+    expect(root.parentSpanContext).toBeUndefined();
+    const children = spans.filter((span) => span.name === 'GET /v1/machines/{machine_id}/telemetry');
+    expect(children).toHaveLength(2);
+    for (const [index, child] of children.entries()) {
+      const { traceId, spanId } = child.spanContext();
+      expect(traceId).toBe(root.spanContext().traceId);
+      expect(child.parentSpanContext?.spanId).toBe(root.spanContext().spanId);
+      expect(new Headers(request.mock.calls[index][1]?.headers).get('traceparent'))
+        .toBe('00-' + traceId + '-' + spanId + '-01');
+    }
+    const [url, init] = upload.mock.calls[0];
+    expect(url).toBe(host + '/otlp/v1/traces');
+    expect(init?.headers).toMatchObject({
+      Authorization: 'Bearer secret-access',
+      'Content-Type': 'application/x-protobuf',
+    });
+    const wire = new TextDecoder().decode(init?.body as ArrayBuffer);
+    for (const privateData of ['secret-access', 'private-cursor', id]) {
+      expect(wire).not.toContain(privateData);
+    }
+  } finally {
+    serialize.mockRestore();
   }
 });
 
@@ -51,11 +72,16 @@ it('skips unsampled successful history calls and exports a bounded network error
     .mockResolvedValue(new Response(null));
   const request = jest.fn<Promise<Response>, [string, RequestInit?]>()
     .mockResolvedValueOnce(new Response('{"items":[]}'))
+    .mockResolvedValueOnce(new Response('{"items":[]}', {
+      headers: { 'X-Mw-Sampled-Trace': 'f'.repeat(32) },
+    }))
     .mockRejectedValueOnce(new Error('private backend error'));
   const getAccess = () => ({ token: 'access', generation: 1 });
   const tracing = new MobileTracing({ origin: host, getAccess, fetch: upload });
   const api = new ApiClient({ baseUrl: host, fetch: request, tracing, session: { getAccess, refreshAccess: jest.fn() } });
   await api.getTelemetry(id, { traceHistory: true });
+  await api.getTelemetry(id, { traceHistory: true });
+  await nextTask();
   expect(upload).not.toHaveBeenCalled();
   await expect(api.getTelemetry(id, { traceHistory: true })).rejects.toMatchObject({ code: 'network_error' });
   expect(upload).not.toHaveBeenCalled();
@@ -75,11 +101,9 @@ it('does not send an earlier account’s trace with the current session', async 
     baseUrl: host,
     session: { getAccess, refreshAccess: jest.fn() },
     tracing,
-    fetch: async () => {
+    fetch: async (_url, init) => {
       generation += 1;
-      return new Response('{"items":[]}', {
-        headers: { 'X-MW-Traceparent': traceparent, 'X-MW-Trace-Receipt': receipt },
-      });
+      return sampledHistory(init);
     },
   });
   await expect(api.getTelemetry(id, { traceHistory: true })).rejects.toMatchObject({ code: 'session_required' });
@@ -100,6 +124,7 @@ it('isolates failing request tracing and still cleans up the request', async () 
     const tracing = new MobileTracing({ origin: host, getAccess });
     const broken = () => { throw new Error('trace callback error'); };
     jest.spyOn(tracing, 'attempt').mockImplementationOnce(broken).mockReturnValue({
+      traceparent: '00-' + '1'.repeat(32) + '-' + '2'.repeat(16) + '-01',
       response: broken, fail: broken, end: broken,
     });
     const request = jest.fn<Promise<Response>, [string, RequestInit?]>()

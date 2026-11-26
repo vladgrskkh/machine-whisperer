@@ -53,6 +53,7 @@ services:
       jaeger-proxy: {}
       loki-proxy: {}
       trace-edge: {}
+      trace-mobile: {}
     volumes:
       - ./nginx:/opt/mw/nginx:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -127,8 +128,7 @@ services:
       ANALYTICS_URL: http://analytics:8081
       ANALYTICS_INGEST_API_KEY_FILE: /run/secrets/analytics_token
       TRUSTED_PROXY_CIDRS: ${MW_PROXY_IP:-172.30.48.2}/32
-      MOBILE_TRACE_SECRET_FILE: /run/secrets/mobile_trace_key
-    secrets: [api_cert, api_key, internal_ca, database_url, signing_key, verify_keys, analytics_token, mobile_trace_key]
+    secrets: [api_cert, api_key, internal_ca, database_url, signing_key, verify_keys, analytics_token]
     depends_on:
       api-migrate: {condition: service_completed_successfully}
       postgres: {condition: service_healthy}
@@ -313,6 +313,8 @@ services:
     networks:
       trace-edge: {}
       trace-apps: {}
+      trace-mobile:
+        aliases: [otel-mobile-ingress]
       monitoring:
         aliases: [collector-fluent]
       log-store: {}
@@ -374,6 +376,8 @@ networks:
     internal: true
   trace-apps:
     internal: true
+  trace-mobile:
+    internal: true
   monitoring: {}
   log-store:
     internal: true
@@ -398,8 +402,6 @@ secrets:
     file: ${MW_SECRETS_DIR:-./secrets}/clickhouse-password
   analytics_token:
     file: ${MW_SECRETS_DIR:-./secrets}/analytics-token
-  mobile_trace_key:
-    file: ${MW_SECRETS_DIR:-./secrets}/mobile-trace-key
   signing_key:
     file: ${MW_SECRETS_DIR:-./secrets}/auth-signing.pem
   verify_keys:

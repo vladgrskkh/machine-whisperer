@@ -12,7 +12,8 @@ otel_exporter {
 otel_service_name nginx;
 otel_resource_attr service.namespace machine-whisperer;
 
-split_clients "$otel_trace_id" $mw_trace_sampled {
+# Use an edge-generated key even when the public history URL continues a client trace.
+split_clients "$request_id" $mw_trace_sampled {
     ${MW_TRACE_SAMPLE_RULES}
 }
 map $mw_trace_sampled $mw_trace_flags {
@@ -28,6 +29,8 @@ map $mw_log_trace_location $mw_log_trace_id {
     on $mw_sampled_trace_id;
     default "";
 }
+limit_req_zone $binary_remote_addr zone=mobile_trace_rate:1m rate=2r/s;
+limit_conn_zone $server_name zone=mobile_trace_connections:1m;
 
 server {
     listen 80;
@@ -65,21 +68,47 @@ server {
     proxy_set_header X-Forwarded-Proto https;
     proxy_set_header X-Forwarded-Host ${DOMAIN};
     proxy_set_header X-Forwarded-Port 443;
-    # Replace every incoming value, including duplicates and unsampled context.
+    # Forward only the edge's canonical context and sampling decision.
     proxy_set_header traceparent "00-$otel_trace_id-$otel_span_id-$mw_trace_flags";
     proxy_set_header tracestate "";
     proxy_set_header baggage "";
 
-    location = /v1/mobile/traces {
+    location = /otlp/v1/traces {
+        if ($request_method != POST) { return 405; }
+        if ($http_content_type != "application/x-protobuf") { return 415; }
+        if ($http_content_encoding != "") { return 415; }
         client_max_body_size 32k;
-        error_page 413 = @mobile_trace_batch_too_large;
-        proxy_read_timeout 3s;
+        client_body_timeout 3s;
+        limit_req zone=mobile_trace_rate burst=4 nodelay;
+        limit_req_status 429;
+        limit_conn mobile_trace_connections 8;
+        limit_conn_status 429;
+        auth_request /_internal/mobile-trace-auth;
         otel_trace off;
-        proxy_pass https://$api_endpoint;
+        proxy_connect_timeout 2s;
+        proxy_read_timeout 3s;
+        proxy_pass_request_headers off;
+        proxy_set_header Content-Type application/x-protobuf;
+        set $mobile_collector otel-mobile-ingress:4318;
+        proxy_pass http://$mobile_collector/v1/traces;
     }
-    location @mobile_trace_batch_too_large {
-        default_type application/json;
-        return 413 '{"error":{"code":"trace_batch_too_large","message":"Trace batch too large"}}';
+    location = /_internal/mobile-trace-auth {
+        internal;
+        proxy_method GET;
+        proxy_pass_request_body off;
+        proxy_pass_request_headers off;
+        proxy_set_header Content-Length "";
+        proxy_set_header Authorization $http_authorization;
+        proxy_pass https://$api_endpoint/v1/users/me;
+    }
+    location ~ "^/v1/machines/[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}/telemetry$" {
+        set $mw_log_trace_location on;
+        otel_trace $mw_trace_sampled;
+        otel_trace_context propagate;
+        otel_span_name "proxy /v1/";
+        proxy_hide_header X-Mw-Sampled-Trace;
+        add_header X-Mw-Sampled-Trace $mw_sampled_trace_id always;
+        proxy_pass https://$api_endpoint;
     }
     location /v1/ {
         set $mw_log_trace_location on;
