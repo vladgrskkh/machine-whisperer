@@ -99,7 +99,7 @@ class CertificateHelperTest(unittest.TestCase):
             domain = "fixture.test"
             cert_dir = certs / "live" / domain
             cert_dir.mkdir(parents=True)
-            env = {**os.environ, "DOMAIN": domain}
+            env = {**os.environ, "DOMAIN": domain, "MW_NGINX_TRACE_SAMPLE_PERCENT": ""}
             render = ["sh", "nginx/entrypoint.sh", certs, "nginx", output]
             run(render, env=env)
             bootstrap = output.read_text()
@@ -121,6 +121,22 @@ class CertificateHelperTest(unittest.TestCase):
             self.assertIn("proxy_pass http://$grafana_endpoint;", tls)
             self.assertIn("proxy_set_header Upgrade $http_upgrade;", tls)
             self.assertIn("proxy_set_header Connection $grafana_connection_upgrade;", tls)
+            self.assertIn("1% on; * off;", tls)
+            self.assertEqual(tls.count("otel_trace_context inject;"), 2)
+            self.assertIn('proxy_set_header traceparent "00-$otel_trace_id-$otel_span_id-$mw_trace_flags";', tls)
+            self.assertIn('proxy_set_header tracestate "";', tls)
+            self.assertIn('proxy_set_header baggage "";', tls)
+
+            for percent, rules in (("0", "* off;"), ("7", "7% on; * off;"), ("100", "* on;")):
+                with self.subTest(percent=percent):
+                    run(render, env={**env, "MW_NGINX_TRACE_SAMPLE_PERCENT": percent})
+                    self.assertIn(f"{rules}\n}}", output.read_text())
+
+            for percent in ("00", "101", "-1", "on;", "42%"):
+                with self.subTest(percent=percent):
+                    result = run(render, env={**env, "MW_NGINX_TRACE_SAMPLE_PERCENT": percent}, check=False)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Invalid MW_NGINX_TRACE_SAMPLE_PERCENT", result.stderr)
 
     def test_bootstrap_and_renewal_call_compose_in_order(self):
         with tempfile.TemporaryDirectory() as scratch:

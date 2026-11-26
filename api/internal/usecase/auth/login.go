@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 const (
@@ -53,6 +56,7 @@ type IDGenerator interface {
 }
 
 type Login struct {
+	tracer       trace.Tracer
 	repository   LoginRepository
 	verifier     PasswordVerifier
 	sessions     SessionRepository
@@ -74,14 +78,17 @@ func NewLogin(
 	ids IDGenerator,
 	now func() time.Time,
 	dummyHash string,
+	tracer trace.Tracer,
 ) *Login {
 	return &Login{
-		repository: repository, verifier: verifier, sessions: sessions, transactions: transactions,
+		tracer: tracer, repository: repository, verifier: verifier, sessions: sessions, transactions: transactions,
 		signer: signer, refresh: refresh, ids: ids, now: now, dummyHash: dummyHash,
 	}
 }
 
-func (u *Login) Login(ctx context.Context, email, password string) (TokenPair, error) {
+func (u *Login) Login(ctx context.Context, email, password string) (_ TokenPair, err error) {
+	ctx, span := u.tracer.Start(ctx, "auth.login")
+	defer func() { spanutil.End(span, err, user.ErrInvalidCredentials, ErrAuthenticationFailed) }()
 	canonical, err := user.ValidateCredentials(email, password)
 	if err != nil {
 		return TokenPair{}, err

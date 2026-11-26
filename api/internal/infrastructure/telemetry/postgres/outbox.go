@@ -59,9 +59,9 @@ func (r *Outbox) ClaimBatch(
 		SET lease_token=$2,lease_until=statement_timestamp()+$3::interval,
 		    available_at=statement_timestamp()+$3::interval,attempt_count=attempt_count+1
 		WHERE o.ctid = ANY(ARRAY(SELECT ctid FROM due))
-		RETURNING o.device_id,o.event_id,o.machine_id,o.created_at,o.payload,o.attempt_count
+		RETURNING o.device_id,o.event_id,o.machine_id,o.created_at,o.payload,o.attempt_count,o.traceparent
 	)
-	SELECT device_id::text,event_id::text,machine_id::text,created_at,payload,attempt_count
+	SELECT device_id::text,event_id::text,machine_id::text,created_at,payload,attempt_count,coalesce(traceparent,'')
 	FROM claimed JOIN due USING (device_id,event_id)
 	ORDER BY due.available_at,claimed.created_at,claimed.device_id,claimed.event_id`, batchSize, token.String(), outboxInterval(lease))
 	if err != nil {
@@ -70,7 +70,7 @@ func (r *Outbox) ClaimBatch(
 	events, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (telemetry.OutboxEvent, error) {
 		var event telemetry.OutboxEvent
 		scanErr := row.Scan(&event.DeviceID, &event.EventID, &event.MachineID,
-			&event.ReceivedAt, &event.Payload, &event.AttemptCount)
+			&event.ReceivedAt, &event.Payload, &event.AttemptCount, &event.Traceparent)
 		event.ReceivedAt = event.ReceivedAt.UTC()
 		return event, scanErr
 	})

@@ -5,17 +5,26 @@ package outbox_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
@@ -177,24 +186,36 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 	pool := testutil.Postgres(t)
 	old := time.Now().AddDate(0, 0, -40)
 	insertOutboxRow(t, pool, &old)
-	insertOutboxRow(t, pool, nil)
+	wantLinks, rows := seedMixedTraceparents(t, pool)
 	analytics := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
+		var body struct {
+			Events []json.RawMessage `json:"events"`
+		}
+		assert.NoError(t, json.NewDecoder(r.Body).Decode(&body))
+		assert.Len(t, body.Events, rows)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	t.Cleanup(analytics.Close)
 
 	config := testfixture.AuthConfig(t)
+	config.Database.URL = pool.Config().ConnString()
 	config.Relay = application.RelayConfig{
 		AnalyticsURL: analytics.URL, AnalyticsAPIKey: "test-key",
 		HTTPTimeout: time.Second, BatchSize: 1000, PollInterval: time.Hour,
 		Lease: outboxTestLease, RetryBase: time.Second, RetryMax: time.Minute, Retention: 30 * 24 * time.Hour,
 	}
-	app, err := application.New(t.Context(), config, application.WithPool(pool))
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+	app, err := application.New(t.Context(), config, application.WithDatabase(config.Database),
+		application.WithTracing(provider, propagation.TraceContext{}))
 	require.NoError(t, err)
 	t.Cleanup(app.Close)
 
-	ctx, cancel := context.WithCancel(t.Context())
+	parentCtx, caller := provider.Tracer("test").Start(t.Context(), "caller")
+	defer caller.End()
+	ctx, cancel := context.WithCancel(parentCtx)
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -213,14 +234,59 @@ func TestApplicationRunsOutboxRelay(t *testing.T) {
 		var delivered, total int
 		err := pool.QueryRow(ctx, "SELECT count(delivered_at), count(*) FROM telemetry_outbox").Scan(&delivered, &total)
 		require.NoError(c, err)
-		assert.Equal(c, 1, delivered)
-		assert.Equal(c, 1, total)
+		assert.Equal(c, rows, delivered)
+		assert.Equal(c, rows, total)
 	}, 3*time.Second, 20*time.Millisecond)
+	require.Eventually(t, func() bool { return len(recorder.Ended()) == 4 }, time.Second, time.Millisecond)
+	spans := recorder.Ended()
+	update, delivery, outboxSpan := spans[1], spans[2], spans[3]
+	assert.Equal(t, "UPDATE", update.Name())
+	assert.Equal(t, trace.SpanKindClient, update.SpanKind())
+	assert.Equal(t, delivery.SpanContext(), update.Parent())
+	assert.Equal(t, "outbox.deliver", outboxSpan.Name())
+	assert.False(t, outboxSpan.Parent().IsValid())
+	assert.NotEqual(t, caller.SpanContext().TraceID(), outboxSpan.SpanContext().TraceID())
+	assert.Contains(t, outboxSpan.Attributes(), attribute.Int("outbox.links.dropped", 1))
+	require.Len(t, outboxSpan.Links(), len(wantLinks))
+	gotLinks := make([]trace.SpanContext, 0, len(outboxSpan.Links()))
+	for _, link := range outboxSpan.Links() {
+		assert.Empty(t, link.Attributes)
+		gotLinks = append(gotLinks, link.SpanContext)
+	}
+	assert.Equal(t, wantLinks, gotLinks)
 
 	metricsServer := testfixture.NewAPIMetricsServer(t, app)
-	body := testfixture.WaitForAPIMetrics(t, metricsServer, "mw_outbox_delivered_events_total 1\n")
-	assert.Contains(t, body, "mw_outbox_claimed_events_total 1\n")
+	body := testfixture.WaitForAPIMetrics(t, metricsServer, fmt.Sprintf("mw_outbox_delivered_events_total %d\n", rows))
+	assert.Contains(t, body, fmt.Sprintf("mw_outbox_claimed_events_total %d\n", rows))
 	assert.Contains(t, body, "mw_outbox_send_attempts_total{outcome=\"success\"} 1\n")
+}
+
+func seedMixedTraceparents(t *testing.T, pool *pgxpool.Pool) ([]trace.SpanContext, int) {
+	t.Helper()
+	const traceID = "12345678901234567890123456789012"
+	values := make([]string, 0, 39)
+	want := make([]trace.SpanContext, 0, 32)
+	propagator := propagation.TraceContext{}
+	for index := range 33 {
+		value := fmt.Sprintf("00-%s-%016x-01", traceID, index+1)
+		values = append(values, value)
+		if index < 32 {
+			ctx := propagator.Extract(t.Context(), propagation.MapCarrier{"traceparent": value})
+			want = append(want, trace.SpanContextFromContext(ctx))
+		}
+	}
+	values = append(values, values[0], values[32], "invalid", "ff-"+traceID+"-1234567890123456-01",
+		"00-"+traceID+"-1234567890123456-00", "")
+	for index, value := range values {
+		event := insertOutboxRow(t, pool, nil)
+		_, err := pool.Exec(t.Context(), `UPDATE telemetry_outbox SET
+			traceparent=NULLIF($1,''),available_at=$2 WHERE event_id=$3`,
+			value, time.Unix(int64(index), 0), event.EventID)
+		require.NoError(t, err)
+	}
+	_, err := pool.Exec(t.Context(), "UPDATE telemetry_outbox SET traceparent=$1", strings.Repeat("a", 56))
+	testfixture.RequirePGCode(t, err, pgerrcode.StringDataRightTruncationDataException)
+	return want, len(values)
 }
 
 func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
@@ -261,7 +327,7 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 	t.Cleanup(server.Close)
 	outbox := telemetrypostgres.NewOutbox(pool)
 	observations := metrics.New(telemetryusecase.NewMeasureOutbox(outbox))
-	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations)
+	sender := analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations, http.DefaultTransport)
 	metricsServer := httptest.NewServer(observations.Handler())
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
@@ -272,20 +338,23 @@ func TestOutboxRelayRetriesAnalyticsFailure(t *testing.T) {
 		},
 		slog.New(slog.DiscardHandler),
 		observations,
+		noop.NewTracerProvider().Tracer("test"),
 	)
 	for _, backoff := range []time.Duration{time.Minute, 2 * time.Minute, 2 * time.Minute} {
-		claimed, err := export.ProcessOnce(t.Context())
-		require.Error(t, err)
-		assert.Equal(t, 1, claimed)
-		assertOutboxRetry(t, pool, event.EventID, backoff)
-		claimed, err = export.ProcessOnce(t.Context())
+		token, events, err := export.ClaimBatch(t.Context())
 		require.NoError(t, err)
-		assert.Zero(t, claimed)
+		require.Len(t, events, 1)
+		require.ErrorIs(t, export.DeliverBatch(t.Context(), token, events), telemetry.ErrAnalyticsHTTP)
+		assertOutboxRetry(t, pool, event.EventID, backoff)
+		_, events, err = export.ClaimBatch(t.Context())
+		require.NoError(t, err)
+		assert.Empty(t, events)
 		makeOutboxDue(t, pool, event.EventID)
 	}
-	claimed, err := export.ProcessOnce(t.Context())
+	token, events, err := export.ClaimBatch(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, 1, claimed)
+	require.Len(t, events, 1)
+	require.NoError(t, export.DeliverBatch(t.Context(), token, events))
 	assert.EqualValues(t, 4, requests.Load())
 	var delivered, cleared bool
 	require.NoError(t, pool.QueryRow(t.Context(), `SELECT delivered_at IS NOT NULL,
@@ -340,19 +409,22 @@ func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
 	t.Cleanup(metricsServer.Close)
 	export := telemetryusecase.NewExport(
 		outbox,
-		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations),
+		analyticshttp.NewHTTPClient(server.URL, "test-key", time.Second, observations, http.DefaultTransport),
 		telemetryusecase.ExportSettings{
 			BatchSize: 1, Lease: outboxTestLease, RetryBase: time.Minute, RetryMax: time.Minute,
 		},
 		slog.New(slog.DiscardHandler),
 		observations,
+		noop.NewTracerProvider().Tracer("test"),
 	)
-	claimed, err := export.ProcessOnce(t.Context())
-	require.ErrorIs(t, err, telemetry.ErrAnalyticsHTTP)
-	require.Equal(t, 1, claimed)
-	claimed, err = export.ProcessOnce(t.Context())
+	token, events, err := export.ClaimBatch(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, 1, claimed)
+	require.Len(t, events, 1)
+	require.ErrorIs(t, export.DeliverBatch(t.Context(), token, events), telemetry.ErrAnalyticsHTTP)
+	token, events, err = export.ClaimBatch(t.Context())
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.NoError(t, export.DeliverBatch(t.Context(), token, events))
 	stale := testfixture.APIMetrics(t, metricsServer)
 	assert.Contains(t, stale, "mw_outbox_claimed_events_total 2\n")
 	assert.Contains(t, stale, "mw_outbox_send_attempts_total{outcome=\"analytics_http\"} 1\n")
@@ -360,9 +432,10 @@ func TestOutboxMetricsCountOnlyRowsChangedUnderCurrentLease(t *testing.T) {
 	assert.Contains(t, stale, "mw_outbox_retried_events_total{reason=\"analytics_http\"} 0\n")
 	assert.Contains(t, stale, "mw_outbox_delivered_events_total 0\n")
 
-	claimed, err = export.ProcessOnce(t.Context())
+	token, events, err = export.ClaimBatch(t.Context())
 	require.NoError(t, err)
-	require.Equal(t, 1, claimed)
+	require.Len(t, events, 1)
+	require.NoError(t, export.DeliverBatch(t.Context(), token, events))
 	acknowledged := testfixture.APIMetrics(t, metricsServer)
 	assert.Contains(t, acknowledged, "mw_outbox_claimed_events_total 3\n")
 	assert.Contains(t, acknowledged, "mw_outbox_send_attempts_total{outcome=\"success\"} 2\n")

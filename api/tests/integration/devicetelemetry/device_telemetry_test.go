@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/application"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
@@ -211,7 +212,9 @@ func TestDeviceKeyCannotAuthenticateUserRoutes(t *testing.T) {
 func TestDeviceKeyRoleAuthorization(t *testing.T) {
 	t.Parallel()
 	f := testfixture.SetupDeviceTelemetry(t)
-	authenticate := middleware.DeviceToken(device.NewAuthenticator(devicepostgres.New(f.Pool)))
+	authenticate := middleware.DeviceToken(
+		device.NewAuthenticator(devicepostgres.New(f.Pool), noop.NewTracerProvider().Tracer("test")),
+	)
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})

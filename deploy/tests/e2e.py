@@ -1,6 +1,6 @@
 import base64
 from contextlib import ExitStack, contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.cookiejar import CookieJar
 import http.client
 import importlib.util
@@ -23,6 +23,7 @@ from urllib.request import HTTPCookieProcessor, Request
 from uuid import UUID, uuid4
 
 from deploy.tests.compose_stack import ComposeStack, LoopbackHTTPSConnection, eventually
+from deploy.tests.jaeger_query import JaegerQuery, service_name, string_attributes
 from deploy.tests.support import DEPLOY, run
 
 
@@ -49,6 +50,10 @@ SPARSE_CLICKHOUSE_EVENTS = {
     ("mw-clickhouse", 7, "A"): "Merge",
 }
 POSTGRES_CACHE_RATIO = ("mw-postgres", 7, "A")
+
+HISTORY = "GET /v1/machines/{machine_id}/telemetry"
+ANALYTICS_HISTORY = "GET /internal/v1/machines/{machine_id}/telemetry"
+ANALYTICS_INGEST = "POST /internal/v1/telemetry-batches"
 
 
 SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
@@ -102,7 +107,10 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.run_k6_scenarios()
             self.assert_dashboard_queries()
             self.assert_scrape_failure_and_recovery()
+            # Recreating Nginx changes the loopback port used by the Grafana client.
+            self.assert_unsampled_request_keeps_the_edge_decision()
             self.assert_persistence_across_container_recreation()
+            self.assert_telemetry_during_collector_outage()
             self.assert_proxy_rejects_untrusted_upstream()
 
     def assert_migrations_and_health(self):
@@ -638,7 +646,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assert_auth_failed("GET", "/v1/users/me", token=api_key)
 
         self.request("POST", INGEST, 400, {**observation, "machine_id": other}, api_key)
+        ingest_start = datetime.now(timezone.utc)
         self.request("POST", INGEST, 202, observation, api_key)
+        ingest_end = datetime.now(timezone.utc)
         self.request("POST", INGEST, 202, observation, api_key)
 
         history_path = f"/v1/machines/{machine}/telemetry"
@@ -658,6 +668,171 @@ class DeploymentEndToEndTest(unittest.TestCase):
         for other_id, token in ((other, owner_token), (separate, stranger_token)):
             history = self.request("GET", f"/v1/machines/{other_id}/telemetry", 200, token=token)
             self.assertEqual(history["items"], [])
+
+        self.owner_token = owner_token
+        self.device_key = api_key
+        self.history_path = history_path
+        self.observation = observation
+        self.assert_recorded_traces(ingest_start, ingest_end, (machine, device_id, observation["event_id"]))
+
+    def assert_recorded_traces(self, ingest_start, ingest_end, private_ids):
+        query = JaegerQuery(self.stack)
+        spoof_id = secrets.token_hex(16)
+        canary = f"trace-fixture-{secrets.token_hex(8)}"
+        history_start = datetime.now(timezone.utc)
+        self.request("GET", self.history_path + f"?fixture={canary}", 200, token=self.owner_token, headers={
+            # An external unsampled decision must not suppress a sampled edge root.
+            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-00",
+            "tracestate": f"fixture={canary}", "baggage": f"fixture={canary}", "User-Agent": canary,
+        })
+        history_end = datetime.now(timezone.utc)
+
+        def trace_with(service, name, start, end, required):
+            def complete_trace():
+                traces = {}
+                for span in query.find(service, name, start, end):
+                    traces.setdefault(span["traceId"], []).append(span)
+                return next((spans for spans in traces.values()
+                             if required <= {(service_name(span), span["name"]) for span in spans}), None)
+
+            try:
+                return eventually(name + " and its downstream spans in Jaeger", complete_trace, timeout=45,
+                                  caught=NETWORK_ERRORS)
+            except AssertionError as error:
+                interval = timedelta(seconds=2)
+                summary = []
+                for emitter in ("nginx", "api", "analytics"):
+                    try:
+                        nearby = query.find(emitter, None, start - interval, end + interval)
+                    except (*NETWORK_ERRORS, AssertionError):
+                        summary.append(f"{emitter} query unavailable")
+                        continue
+                    names = {span["name"] for span in nearby if service_name(span) == emitter}
+                    expected = {label for svc, label in required if svc == emitter}
+                    summary.append(f"{emitter} matched {sorted(names & expected)}, other names {len(names - expected)}")
+                raise AssertionError(f"{error}\nNearby spans by service: {'; '.join(summary)}") from None
+
+        history = trace_with("api", HISTORY, history_start, history_end, {
+            ("nginx", "proxy /v1/"), ("api", HISTORY), ("api", "GET"), ("api", "telemetry.history.list"),
+            ("api", "SELECT"), ("analytics", ANALYTICS_HISTORY), ("analytics", "SELECT telemetry_events"),
+        })
+        acceptance = trace_with("api", "telemetry.ingest", ingest_start, ingest_end, {
+            ("nginx", "proxy /v1/"), ("api", f"POST {INGEST}"), ("api", "telemetry.ingest"), ("api", "INSERT"),
+        })
+        delivery = trace_with("api", "outbox.deliver", ingest_start, datetime.now(timezone.utc), {
+            ("api", "outbox.deliver"), ("api", "outbox.batch.deliver"), ("api", "POST"),
+            ("api", "UPDATE"), ("analytics", ANALYTICS_INGEST), ("analytics", "INSERT telemetry_events"),
+        })
+
+        def span_named(spans, service, name):
+            span, = (item for item in spans if service_name(item) == service and item["name"] == name)
+            return span
+
+        def assert_chain(*spans):
+            for parent, child in zip(spans, spans[1:]):
+                self.assertEqual(child.get("parentSpanId"), parent["spanId"], child["name"])
+
+        def assert_db_span(spans, system, ancestor, operation):
+            indexed = {span["spanId"]: span for span in spans}
+            for span in spans:
+                attrs = string_attributes(span)
+                if attrs.get("db.system.name") != system or attrs.get("db.operation.name") != operation:
+                    continue
+                parent = indexed.get(span.get("parentSpanId"))
+                visited = set()
+                while parent is not None and parent["spanId"] not in visited:
+                    if parent["spanId"] == ancestor["spanId"]:
+                        self.assertIn(span.get("kind"), (3, "SPAN_KIND_CLIENT"))
+                        return
+                    visited.add(parent["spanId"])
+                    parent = indexed.get(parent.get("parentSpanId"))
+            self.fail(f"No {system} {operation} client span under {ancestor['name']}")
+
+        edge = span_named(history, "nginx", "proxy /v1/")
+        app = span_named(history, "api", HISTORY)
+        history_use_case = span_named(history, "api", "telemetry.history.list")
+        analytics = span_named(history, "analytics", ANALYTICS_HISTORY)
+        self.assertFalse(edge.get("parentSpanId"))
+        self.assertEqual(string_attributes(edge)["http.request.method"], "GET")
+        self.assertNotEqual(edge["traceId"], spoof_id)
+        self.assertEqual(query.get(spoof_id), [])
+        assert_chain(edge, app, history_use_case, span_named(history, "api", "GET"), analytics)
+        assert_db_span(history, "postgresql", history_use_case, "SELECT")
+        assert_db_span(history, "clickhouse", analytics, "SELECT")
+
+        producer = span_named(acceptance, "api", "telemetry.ingest")
+        assert_chain(span_named(acceptance, "nginx", "proxy /v1/"), span_named(acceptance, "api", f"POST {INGEST}"), producer)
+        assert_db_span(acceptance, "postgresql", producer, "INSERT")
+        worker = span_named(delivery, "api", "outbox.deliver")
+        self.assertFalse(worker.get("parentSpanId"))
+        self.assertNotEqual(worker["traceId"], producer["traceId"])
+        link, = worker["links"]
+        self.assertEqual((link["traceId"], link["spanId"]), (producer["traceId"], producer["spanId"]))
+        # The Badger storage adapter can restore links as legacy Jaeger references.
+        jaeger_link_marker = [{"key": "opentracing.ref_type", "value": {"stringValue": "follows_from"}}]
+        self.assertIn(link.get("attributes", []), ([], jaeger_link_marker))
+        self.assertFalse(link.get("traceState"))
+        batch = span_named(delivery, "api", "outbox.batch.deliver")
+        receiver = span_named(delivery, "analytics", ANALYTICS_INGEST)
+        assert_chain(worker, batch, span_named(delivery, "api", "POST"), receiver)
+        assert_db_span(delivery, "clickhouse", receiver, "INSERT")
+        assert_db_span(delivery, "postgresql", batch, "UPDATE")
+
+        stored = json.dumps(history + acceptance + delivery)
+        for value in (canary, *private_ids, self.owner_token, self.device_key, "http.target", "http.user_agent",
+                      "url.full", "url.query", "db.query.text", "db.statement", "exception.message"):
+            self.assertTrue(value not in stored, "Unexpected private value or field in recorded spans")
+        for span in history + acceptance + delivery:
+            self.assertEqual(string_attributes(span["resource"])["service.namespace"], "machine-whisperer")
+            self.assertFalse(span.get("traceState"))
+            self.assertFalse(span.get("events"))
+            self.assertFalse(span.get("status", {}).get("message"))
+
+        self.history_trace_id = edge["traceId"]
+        self.history_edge_span_id = edge["spanId"]
+
+    def assert_unsampled_request_keeps_the_edge_decision(self):
+        def restart_edge(percent):
+            self.stack.env["MW_NGINX_TRACE_SAMPLE_PERCENT"] = percent
+            self.stack.compose("up", "-d", "--no-deps", "--force-recreate", "nginx")
+            self.configure_tls_client()
+            eventually("recreated TLS edge", lambda: self.response("GET", "/v1/users/me")[0] == 401,
+                       caught=NETWORK_ERRORS)
+
+        restart_edge("0")
+        spoof_id = secrets.token_hex(16)
+        start = datetime.now(timezone.utc)
+        self.request("GET", self.history_path, 200, token=self.owner_token, headers={
+            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-01",
+        })
+        end = datetime.now(timezone.utc)
+        restart_edge("100")
+        control_start = datetime.now(timezone.utc)
+        self.request("GET", self.history_path, 200, token=self.owner_token)
+        control_end = datetime.now(timezone.utc)
+        query = JaegerQuery(self.stack)
+        # The later positive control passes through the same Go SDK's batch queue.
+        eventually("sampled control after the unsampled request",
+                   lambda: query.find("api", HISTORY, control_start, control_end), timeout=45, caught=NETWORK_ERRORS)
+        self.assertEqual(query.find("api", HISTORY, start, end), [])
+        self.assertEqual(query.get(spoof_id), [])
+
+    def assert_telemetry_during_collector_outage(self):
+        self.stack.compose("stop", "otel-collector")
+        self.assertFalse(self.stack.inspect("otel-collector")["State"]["Running"])
+        observation = {
+            **self.observation, "event_id": str(uuid4()),
+            "observed_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        }
+        self.request("POST", INGEST, 202, observation, self.device_key)
+
+        def observation_exported():
+            page = self.request("GET", self.history_path, 200, token=self.owner_token)
+            return any(item["event_id"] == observation["event_id"] for item in page["items"])
+
+        eventually("telemetry history with the Collector stopped", observation_exported)
+        for service in ("api", "analytics"):
+            self.assertEqual(self.stack.inspect(service)["State"]["Health"]["Status"], "healthy", service)
 
     def run_k6_scenarios(self):
         fixtures = self.stack.work / "fixtures" / "demo-fixtures.json"
@@ -710,7 +885,7 @@ exec clickhouse-client --user "$CLICKHOUSE_USER" --database "$CLICKHOUSE_DB" --q
             "a persisted Prometheus self-scrape", lambda: prometheus_sample(prom_port),
             timeout=60, caught=NETWORK_ERRORS,
         )
-        services = ("postgres", "clickhouse", "prometheus")
+        services = ("postgres", "clickhouse", "prometheus", "jaeger")
         container_ids = {service: self.stack.inspect(service)["Id"] for service in services}
         recreation_started = time.time()
         self.stack.compose(
@@ -741,6 +916,11 @@ FROM pg_roles WHERE rolname = 'mw_postgres_exporter'
         eventually("PostgreSQL statistics after rerunning exporter setup", lambda: (
             self.prometheus_value('timestamp(pg_up{job="postgres"} == 1)') or 0
         ) >= setup_completed, timeout=45)
+
+        query = JaegerQuery(self.stack)
+        spans = eventually("the original Jaeger trace after recreation", lambda: query.get(self.history_trace_id),
+                           caught=NETWORK_ERRORS)
+        self.assertIn(self.history_edge_span_id, {span["spanId"] for span in spans})
 
     def assert_proxy_rejects_untrusted_upstream(self):
         # Replace only the Nginx container's trust root while the API keeps its own.

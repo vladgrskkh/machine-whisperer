@@ -11,7 +11,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/otel/trace/noop"
+
 	handler "github.com/vladgrskkh/machine-whisperer/api/internal/handler/auth"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/user/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/testutil"
@@ -22,7 +25,9 @@ func TestSignupStoresExactEscapedUnicodePassword(t *testing.T) {
 	t.Parallel()
 	pool := testutil.Postgres(t)
 	hasher := password.Argon2id{}
-	server := httptest.NewServer(handler.New(auth.NewSignup(postgres.New(pool), hasher)))
+	server := httptest.NewServer(
+		handler.New(auth.NewSignup(postgres.New(pool), hasher, noop.NewTracerProvider().Tracer("test"))),
+	)
 	t.Cleanup(server.Close)
 	response, err := server.Client().Post(server.URL, "application/json", strings.NewReader(
 		`{"email":"unicode@example.com","password":"  exact\ud83d\ude00 \ufffd \\ud800 password  "}`,

@@ -17,6 +17,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
 )
 
 // Routes builds the API router and attaches endpoint middleware.
@@ -29,6 +30,9 @@ import (
 // @Router /healthz [get]
 func (a *Application) Routes() http.Handler {
 	router := chi.NewRouter()
+	router.Use(tracing.HTTPServer(a.tracerProvider, a.propagator, func(r *http.Request) bool {
+		return middleware.IsTrustedProxy(r, a.rateLimitConfig.TrustedProxies)
+	}))
 	router.Use(middleware.HTTP(router, a.metrics))
 	schema := *httplog.SchemaECS
 	schema.RequestURL = ""

@@ -8,7 +8,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	domain "github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/worker/telemetry"
 )
 
@@ -17,7 +20,10 @@ func TestWorkerProcessesAtStartupAndStopsOnCancellation(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		export := &idleExport{}
-		worker := telemetry.New(export, 1000, time.Hour, slog.New(slog.DiscardHandler))
+		recorder := tracetest.NewSpanRecorder()
+		provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+		t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+		worker := telemetry.New(export, 1000, time.Hour, slog.New(slog.DiscardHandler), provider.Tracer("test"))
 		stopped := make(chan struct{})
 		go func() {
 			defer close(stopped)
@@ -27,6 +33,7 @@ func TestWorkerProcessesAtStartupAndStopsOnCancellation(t *testing.T) {
 		synctest.Wait()
 		assert.Equal(t, 1, export.prunes)
 		assert.Equal(t, 1, export.batches)
+		assert.Empty(t, recorder.Started())
 
 		cancel()
 		synctest.Wait()
@@ -44,9 +51,13 @@ type idleExport struct {
 	prunes  int
 }
 
-func (e *idleExport) ProcessOnce(context.Context) (int, error) {
+func (e *idleExport) ClaimBatch(context.Context) (string, []domain.OutboxEvent, error) {
 	e.batches++
-	return 0, nil
+	return "", nil, nil
+}
+
+func (*idleExport) DeliverBatch(context.Context, string, []domain.OutboxEvent) error {
+	panic("worker delivered an empty batch")
 }
 
 func (e *idleExport) PruneDelivered(context.Context) (int64, error) {

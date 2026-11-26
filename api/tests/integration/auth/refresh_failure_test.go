@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
 	sessionpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/session/postgres"
@@ -45,6 +46,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			token.Refresh{},
 			token.IDs{},
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
@@ -62,6 +64,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			entropy,
 			token.IDs{},
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
@@ -79,6 +82,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			token.Refresh{},
 			ids,
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		assert.ErrorIs(t, err, expected)
@@ -97,6 +101,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			entropy,
 			token.IDs{},
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		pair, err := refresh.Refresh(t.Context(), original.RefreshToken)
 		testfixture.RequirePGCode(t, err, pgerrcode.UniqueViolation)
@@ -123,6 +128,7 @@ func TestRefreshFailuresRollBack(t *testing.T) {
 			token.Refresh{},
 			token.IDs{},
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		pair, err := refresh.Refresh(ctx, original.RefreshToken)
 		assert.ErrorIs(t, err, context.Canceled)

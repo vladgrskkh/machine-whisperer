@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
@@ -104,7 +105,12 @@ func TestRefreshConcurrentLogoutAndReuse(t *testing.T) {
 			t.Parallel()
 			original := first
 			competing := func(ctx context.Context, transactions auth.TransactionManager) (auth.TokenPair, error) {
-				logout := auth.NewLogout(sessionpostgres.New(fixture.pool), transactions, at)
+				logout := auth.NewLogout(
+					sessionpostgres.New(fixture.pool),
+					transactions,
+					at,
+					noop.NewTracerProvider().Tracer("test"),
+				)
 				return auth.TokenPair{}, logout.Logout(ctx, original.RefreshToken)
 			}
 			current := original
@@ -169,6 +175,7 @@ func refreshOperation(
 			token.Refresh{},
 			token.IDs{},
 			now,
+			noop.NewTracerProvider().Tracer("test"),
 		)
 		return refresh.Refresh(ctx, raw)
 	}

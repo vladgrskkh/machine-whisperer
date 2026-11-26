@@ -5,7 +5,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/spanutil"
 )
 
 type TelemetryHistoryRepository interface {
@@ -13,14 +16,17 @@ type TelemetryHistoryRepository interface {
 }
 
 type ListHistory struct {
+	tracer     trace.Tracer
 	repository TelemetryHistoryRepository
 }
 
-func NewListHistory(repository TelemetryHistoryRepository) *ListHistory {
-	return &ListHistory{repository: repository}
+func NewListHistory(repository TelemetryHistoryRepository, tracer trace.Tracer) *ListHistory {
+	return &ListHistory{tracer: tracer, repository: repository}
 }
 
-func (h *ListHistory) Execute(ctx context.Context, query domain.HistoryQuery) (domain.HistoryPage, error) {
+func (h *ListHistory) Execute(ctx context.Context, query domain.HistoryQuery) (_ domain.HistoryPage, err error) {
+	ctx, span := h.tracer.Start(ctx, "telemetry.history.list")
+	defer func() { spanutil.End(span, err) }()
 	limit := query.Limit
 	query.Limit++
 	events, err := h.repository.List(ctx, query)

@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/infrastructure/metrics"
@@ -18,12 +19,13 @@ import (
 func TestIngestBatchRecordsAcknowledgedRowsAndStorageErrors(t *testing.T) {
 	t.Parallel()
 	registry := metrics.New()
+	tracer := noop.NewTracerProvider().Tracer("test")
 	storageErr := errors.New("insert failed")
 	events := []domain.Event{{}, {}}
-	failing := telemetry.NewIngestBatch(storageResult{err: storageErr}, registry)
+	failing := telemetry.NewIngestBatch(storageResult{err: storageErr}, registry, tracer)
 	require.ErrorIs(t, failing.Execute(t.Context(), events), storageErr)
 
-	storing := telemetry.NewIngestBatch(storageResult{}, registry)
+	storing := telemetry.NewIngestBatch(storageResult{}, registry, tracer)
 	for range 2 {
 		require.NoError(t, storing.Execute(t.Context(), events))
 	}

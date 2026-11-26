@@ -6,7 +6,10 @@ import (
 	"log/slog"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type BatchSender interface {
@@ -49,6 +52,7 @@ type ExportSettings struct {
 }
 
 type Export struct {
+	tracer     trace.Tracer
 	repository OutboxRepository
 	sender     BatchSender
 	settings   ExportSettings
@@ -62,26 +66,35 @@ func NewExport(
 	settings ExportSettings,
 	logger *slog.Logger,
 	metrics ExportMetrics,
+	tracer trace.Tracer,
 ) *Export {
-	return &Export{repository: repository, sender: sender, settings: settings, logger: logger, metrics: metrics}
+	return &Export{
+		tracer: tracer, repository: repository, sender: sender, settings: settings, logger: logger, metrics: metrics,
+	}
 }
 
-func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
+func (e *Export) ClaimBatch(ctx context.Context) (string, []telemetry.OutboxEvent, error) {
 	token, events, err := e.repository.ClaimBatch(ctx, e.settings.BatchSize, e.settings.Lease)
 	if err != nil {
 		e.operationFailed(ctx, OutboxOperationClaim, 0)
-		return 0, err
+		return "", nil, err
+	}
+	if claimed := len(events); claimed > 0 {
+		e.metrics.RecordClaimed(claimed)
+		e.logger.DebugContext(ctx, "outbox batch claimed", "rows", claimed)
+	}
+	return token, events, nil
+}
+
+func (e *Export) DeliverBatch(ctx context.Context, token string, events []telemetry.OutboxEvent) (err error) {
+	ctx, span := e.tracer.Start(ctx, "outbox.batch.deliver")
+	failure := OutboxOperationAcknowledge
+	defer func() { spanutil.EndWithErrorType(span, err, failure) }()
+	if err = e.sender.Send(ctx, events); err != nil {
+		failure = telemetry.AnalyticsFailureCategory(err)
+		return e.retry(ctx, token, events, err, failure)
 	}
 	claimed := len(events)
-	if claimed == 0 {
-		return 0, nil
-	}
-	e.metrics.RecordClaimed(claimed)
-	e.logger.DebugContext(ctx, "outbox batch claimed", "rows", claimed)
-	err = e.sender.Send(ctx, events)
-	if err != nil {
-		return claimed, e.retry(ctx, token, events, err)
-	}
 	keys := make([]telemetry.EventKey, 0, claimed)
 	for _, event := range events {
 		keys = append(keys, telemetry.EventKey{DeviceID: event.DeviceID, EventID: event.EventID})
@@ -89,11 +102,11 @@ func (e *Export) ProcessOnce(ctx context.Context) (int, error) {
 	delivered, err := e.repository.MarkDelivered(ctx, token, keys)
 	if err != nil {
 		e.operationFailed(ctx, OutboxOperationAcknowledge, claimed)
-		return claimed, err
+		return err
 	}
 	e.metrics.RecordDelivered(delivered)
 	e.logger.InfoContext(ctx, "outbox batch acknowledged", "rows", delivered, "claimed", claimed)
-	return claimed, nil
+	return nil
 }
 
 func (e *Export) PruneDelivered(ctx context.Context) (int64, error) {
@@ -106,8 +119,13 @@ func (e *Export) PruneDelivered(ctx context.Context) (int64, error) {
 	return deleted, err
 }
 
-func (e *Export) retry(ctx context.Context, token string, events []telemetry.OutboxEvent, sendErr error) error {
-	category := telemetry.AnalyticsFailureCategory(sendErr)
+func (e *Export) retry(
+	ctx context.Context,
+	token string,
+	events []telemetry.OutboxEvent,
+	sendErr error,
+	category string,
+) error {
 	e.logger.WarnContext(ctx, "outbox batch delivery failed", "category", category, "rows", len(events))
 	if ctx.Err() != nil {
 		// A canceled worker leaves the rows available for recovery after lease expiry.

@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
@@ -204,11 +205,17 @@ func newRefresh(fixture loginFixtures, now func() time.Time) *auth.Refresh {
 	return auth.NewRefresh(
 		sessionpostgres.New(fixture.pool), userpostgres.New(fixture.pool), transactionpostgres.New(fixture.pool),
 		fixture.signer, token.Refresh{}, token.IDs{}, now,
+		noop.NewTracerProvider().Tracer("test"),
 	)
 }
 
 func newLogout(fixture loginFixtures, now func() time.Time) *auth.Logout {
-	return auth.NewLogout(sessionpostgres.New(fixture.pool), transactionpostgres.New(fixture.pool), now)
+	return auth.NewLogout(
+		sessionpostgres.New(fixture.pool),
+		transactionpostgres.New(fixture.pool),
+		now,
+		noop.NewTracerProvider().Tracer("test"),
+	)
 }
 
 func verifyRefreshAccess(t *testing.T, fixture loginFixtures, pair auth.TokenPair) session.AccessClaims {

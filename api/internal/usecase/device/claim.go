@@ -5,7 +5,10 @@ import (
 	"crypto/subtle"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/device"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type ClaimRepository interface {
@@ -19,15 +22,18 @@ type TransactionManager interface {
 }
 
 type Claim struct {
+	tracer       trace.Tracer
 	repository   ClaimRepository
 	transactions TransactionManager
 }
 
-func NewClaim(repository ClaimRepository, transactions TransactionManager) *Claim {
-	return &Claim{repository: repository, transactions: transactions}
+func NewClaim(repository ClaimRepository, transactions TransactionManager, tracer trace.Tracer) *Claim {
+	return &Claim{tracer: tracer, repository: repository, transactions: transactions}
 }
 
-func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, code device.Secret) error {
+func (c *Claim) Claim(ctx context.Context, deviceID, machineID, ownerUserID string, code device.Secret) (err error) {
+	ctx, span := c.tracer.Start(ctx, "device.claim")
+	defer func() { spanutil.End(span, err, device.ErrClaimUnavailable) }()
 	verifier := code.Verifier()
 	return c.transactions.WithinTransaction(ctx, func(txCtx context.Context) error {
 		value, err := c.repository.FindForClaim(txCtx, deviceID)

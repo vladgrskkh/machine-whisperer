@@ -8,8 +8,11 @@ import (
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vladgrskkh/machine-whisperer/analytics/internal/domain"
+	"github.com/vladgrskkh/machine-whisperer/analytics/internal/spanutil"
 )
 
 const (
@@ -34,17 +37,20 @@ type OperationObserver interface {
 type Repository struct {
 	conn     ch.Conn
 	observer OperationObserver
+	tracer   trace.Tracer
 }
 
-func NewRepository(conn ch.Conn, observer OperationObserver) *Repository {
-	return &Repository{conn: conn, observer: observer}
+func NewRepository(conn ch.Conn, observer OperationObserver, tracer trace.Tracer) *Repository {
+	return &Repository{conn: conn, observer: observer, tracer: tracer}
 }
 
-func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) error {
+func (r *Repository) StoreBatch(ctx context.Context, events []domain.Event) (err error) {
+	ctx, span := r.startSpan(ctx, "INSERT", "INSERT telemetry_events")
+	defer func() { spanutil.EndDatabase(span, err) }()
 	ctx, cancel := context.WithTimeout(ctx, insertTimeout)
 	defer cancel()
 	start := time.Now()
-	err := r.storeBatch(ctx, events)
+	err = r.storeBatch(ctx, events)
 	r.observer.RecordOperation(OperationInsertBatch, operationOutcome(ctx, err), time.Since(start))
 	return err
 }
@@ -78,7 +84,9 @@ func (r *Repository) storeBatch(ctx context.Context, events []domain.Event) erro
 	return batch.Send()
 }
 
-func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) ([]domain.Event, error) {
+func (r *Repository) List(ctx context.Context, query domain.HistoryQuery) (_ []domain.Event, err error) {
+	ctx, span := r.startSpan(ctx, "SELECT", "SELECT telemetry_events")
+	defer func() { spanutil.EndDatabase(span, err) }()
 	ctx, cancel := context.WithTimeout(ctx, queryTimeout)
 	defer cancel()
 	start := time.Now()
@@ -142,4 +150,10 @@ func operationOutcome(ctx context.Context, err error) string {
 		return OutcomeTimeout
 	}
 	return OutcomeError
+}
+
+func (r *Repository) startSpan(ctx context.Context, operation, summary string) (context.Context, trace.Span) {
+	return r.tracer.Start(ctx, summary, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(
+		semconv.DBSystemNameClickHouse, semconv.DBOperationName(operation), semconv.DBQuerySummary(summary),
+	))
 }

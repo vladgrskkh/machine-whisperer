@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/session"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
@@ -63,12 +64,13 @@ func loginFixture(t *testing.T) loginFixtures {
 	require.NoError(t, err)
 	repository := userpostgres.New(pool)
 	return loginFixtures{
-		signup: auth.NewSignup(repository, hasher),
+		signup: auth.NewSignup(repository, hasher, noop.NewTracerProvider().Tracer("test")),
 		login: auth.NewLogin(
 			repository, hasher, sessionpostgres.New(pool), transactionpostgres.New(pool),
 			signer, token.Refresh{}, token.IDs{}, func() time.Time { return now }, dummy,
+			noop.NewTracerProvider().Tracer("test"),
 		),
-		me:        auth.NewMe(repository),
+		me:        auth.NewMe(repository, noop.NewTracerProvider().Tracer("test")),
 		pool:      pool,
 		signer:    signer,
 		now:       now,
@@ -236,6 +238,7 @@ func TestLoginCancellationRollsBack(t *testing.T) {
 	login := auth.NewLogin(
 		userpostgres.New(pool), password.Argon2id{}, repository, transactionpostgres.New(pool),
 		fixture.signer, token.Refresh{}, token.IDs{}, func() time.Time { return fixture.now }, fixture.dummyHash,
+		noop.NewTracerProvider().Tracer("test"),
 	)
 	pair, err := login.Login(ctx, "cancel@example.com", exactLoginPassword)
 	assert.ErrorIs(t, err, context.Canceled)

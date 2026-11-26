@@ -17,13 +17,14 @@ class ComposeConfigTest(unittest.TestCase):
         cls.services = cls.config["services"]
 
     @staticmethod
-    def compose_config(provisioning_cidr=""):
+    def compose_config(provisioning_cidr="", nginx_sampling="", app_sampling=""):
         env = {
             **os.environ, "DOCKERHUB_NAMESPACE": "mw-fixture", "IMAGE_TAG": "sha-123abc",
             "DOMAIN": "fixture.test", "ACME_EMAIL": "fixture@example.invalid",
             "MW_CERT_DIR": "./letsencrypt", "MW_ACME_WEBROOT": "./acme-webroot",
             "MW_SECRETS_DIR": "./secrets", "MW_EDGE_SUBNET": "", "MW_PROXY_IP": "", "MW_API_IP": "",
             "MW_PROVISIONING_CIDR": provisioning_cidr,
+            "MW_NGINX_TRACE_SAMPLE_PERCENT": nginx_sampling, "OTEL_TRACES_SAMPLER_ARG": app_sampling,
         }
         result = run([
             "docker", "compose", "--env-file", ".env.server.example", "--profile", "certbot",
@@ -31,19 +32,20 @@ class ComposeConfigTest(unittest.TestCase):
         ], env=env)
         return json.loads(result.stdout)
 
-    def test_only_ingress_and_prometheus_publish_ports_and_scrapers_use_private_bridges(self):
+    def test_only_ingress_and_loopback_queries_publish_ports_and_private_networks_are_internal(self):
         networks = {
-            "certbot": {"acme"}, "nginx": {"edge", "nginx-status", "grafana-proxy"},
+            "certbot": {"acme"}, "nginx": {"edge", "nginx-status", "grafana-proxy", "trace-edge"},
             "nginx-exporter": {"nginx-status", "infra-scrape"},
-            "api": {"edge", "data", "scrape"}, "api-migrate": {"data"},
+            "api": {"edge", "data", "scrape", "trace-apps"}, "api-migrate": {"data"},
             "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
-            "analytics": {"data", "scrape"}, "analytics-migrate": {"data"}, "clickhouse": {"data"},
+            "analytics": {"data", "scrape", "trace-apps"}, "analytics-migrate": {"data"}, "clickhouse": {"data"},
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
             "grafana": {"grafana-proxy", "monitoring"},
+            "otel-collector": {"trace-edge", "trace-apps", "monitoring"}, "jaeger": {"monitoring"},
         }
         self.assertEqual(set(self.services), set(networks))
-        for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy"):
+        for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy", "trace-edge", "trace-apps"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -57,6 +59,7 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertEqual(ports, {
             ("nginx", "0.0.0.0", "80", 80), ("nginx", "0.0.0.0", "443", 443),
             ("prometheus", "127.0.0.1", "9090", 9090),
+            ("jaeger", "127.0.0.1", "16686", 16686),
         })
 
     def test_application_metrics_use_aliases_scoped_to_the_scrape_bridge(self):
@@ -86,11 +89,14 @@ class ComposeConfigTest(unittest.TestCase):
             "certbot": "certbot/certbot:v5.10.0",
             "postgres": "postgres:18.7-alpine3.23",
             "clickhouse": "clickhouse/clickhouse-server:26.9.36.3",
-            "nginx": "nginx:1.31.10-alpine3.24-slim",
+            "nginx": "nginx:1.31.10-alpine3.24-otel",
+            "database-metrics-proxy": "nginx:1.31.10-alpine3.24-slim",
             "nginx-exporter": "nginx/nginx-prometheus-exporter:1.5.3",
             "postgres-exporter": "quay.io/prometheuscommunity/postgres-exporter:v0.21.1",
             "prometheus": "prom/prometheus:v3.16.0",
             "grafana": "grafana/grafana:13.3.2",
+            "otel-collector": "otel/opentelemetry-collector-contrib:0.166.0",
+            "jaeger": "cr.jaegertracing.io/jaegertracing/jaeger:2.23.0",
         }.items():
             with self.subTest(service=name):
                 self.assertEqual(self.services[name]["image"], image)
@@ -139,6 +145,7 @@ class ComposeConfigTest(unittest.TestCase):
             ("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
             ("prometheus", "/prometheus"),
             ("grafana", "/var/lib/grafana"),
+            ("jaeger", "/tmp"),
         ):
             with self.subTest(volume_service=name):
                 self.assertTrue(any(
@@ -163,6 +170,8 @@ class ComposeConfigTest(unittest.TestCase):
             "certbot": set(),
             "prometheus": set(),
             "grafana": {"grafana_admin_password"},
+            "otel-collector": set(),
+            "jaeger": set(),
         }
         secret_files = {
             "api": {
@@ -248,6 +257,32 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertEqual(nginx["environment"]["MW_PROVISIONING_CIDR"], "127.0.0.1/32")
         config = self.compose_config("192.0.2.0/24")
         self.assertEqual(config["services"]["nginx"]["environment"]["MW_PROVISIONING_CIDR"], "192.0.2.0/24")
+
+    def test_only_tracing_processes_get_export_settings_and_start_without_backend_gates(self):
+        for name in ("api", "analytics"):
+            self.assertEqual(self.services[name]["environment"]["OTEL_EXPORTER_OTLP_ENDPOINT"],
+                             "http://otel-collector:4317")
+            self.assertEqual(self.services[name]["environment"]["OTEL_TRACES_SAMPLER_ARG"], "0.01")
+        self.assertEqual(self.services["nginx"]["environment"]["MW_NGINX_TRACE_SAMPLE_PERCENT"], "1")
+        for name, service in self.services.items():
+            self.assertTrue({"otel-collector", "jaeger"}.isdisjoint(service.get("depends_on", {})), name)
+            if name not in ("api", "analytics"):
+                self.assertFalse(any(key.startswith("OTEL_") for key in service.get("environment", {})), name)
+        overridden = self.compose_config(nginx_sampling="100", app_sampling="1")["services"]
+        self.assertEqual(overridden["nginx"]["environment"]["MW_NGINX_TRACE_SAMPLE_PERCENT"], "100")
+        for name in ("api", "analytics"):
+            self.assertEqual(overridden[name]["environment"]["OTEL_TRACES_SAMPLER_ARG"], "1")
+
+    def test_trace_configuration_is_mounted_read_only(self):
+        for service, path in (
+            ("nginx", "/etc/nginx/nginx.conf"),
+            ("otel-collector", "/etc/otelcol-contrib/config.yaml"),
+            ("jaeger", "/etc/jaeger/config.yaml"),
+        ):
+            volume, = (v for v in self.services[service]["volumes"] if v["target"] == path)
+            self.assertEqual(volume["type"], "bind")
+            self.assertTrue(volume["read_only"])
+            self.assertTrue(Path(volume["source"]).is_file())
 
 
 class CredentialsTest(unittest.TestCase):

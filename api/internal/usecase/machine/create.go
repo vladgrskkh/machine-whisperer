@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type CreateRepository interface {
@@ -17,15 +20,18 @@ type IDGenerator interface {
 }
 
 type Create struct {
+	tracer     trace.Tracer
 	repository CreateRepository
 	ids        IDGenerator
 }
 
-func NewCreate(repository CreateRepository, ids IDGenerator) *Create {
-	return &Create{repository: repository, ids: ids}
+func NewCreate(repository CreateRepository, ids IDGenerator, tracer trace.Tracer) *Create {
+	return &Create{tracer: tracer, repository: repository, ids: ids}
 }
 
-func (c *Create) Create(ctx context.Context, ownerUserID, name string) (machine.Machine, error) {
+func (c *Create) Create(ctx context.Context, ownerUserID, name string) (_ machine.Machine, err error) {
+	ctx, span := c.tracer.Start(ctx, "machine.create")
+	defer func() { spanutil.End(span, err, machine.ErrInvalidName, machine.ErrNotFound) }()
 	validName, err := machine.ValidateName(name)
 	if err != nil {
 		return machine.Machine{}, err

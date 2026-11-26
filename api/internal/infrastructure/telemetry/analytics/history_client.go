@@ -27,12 +27,13 @@ type HistoryClient struct {
 	client  *http.Client
 }
 
-func NewHistoryClient(baseURL, apiKey string) *HistoryClient {
+func NewHistoryClient(baseURL, apiKey string, transport http.RoundTripper) *HistoryClient {
 	return &HistoryClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		apiKey:  apiKey,
 		client: &http.Client{
-			Timeout: historyTimeout,
+			Timeout:   historyTimeout,
+			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/user"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/spanutil"
 )
 
 type MeRepository interface {
@@ -13,14 +16,17 @@ type MeRepository interface {
 }
 
 type Me struct {
+	tracer     trace.Tracer
 	repository MeRepository
 }
 
-func NewMe(repository MeRepository) *Me {
-	return &Me{repository: repository}
+func NewMe(repository MeRepository, tracer trace.Tracer) *Me {
+	return &Me{tracer: tracer, repository: repository}
 }
 
-func (u *Me) Me(ctx context.Context, userID string) (user.User, error) {
+func (u *Me) Me(ctx context.Context, userID string) (_ user.User, err error) {
+	ctx, span := u.tracer.Start(ctx, "auth.me")
+	defer func() { spanutil.End(span, err, ErrAuthenticationFailed) }()
 	account, err := u.repository.FindByID(ctx, userID)
 	if errors.Is(err, user.ErrNotFound) {
 		return user.User{}, ErrAuthenticationFailed
