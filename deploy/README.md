@@ -475,10 +475,11 @@ docker run --rm --network none -v "$volume:/data:ro" --entrypoint du nginx:1.31.
 
 ### Deploy a release
 
-After `publish` and `promote` pass for the release tag, [back up the running
-stack](#back-up-the-volumes). On the VPS, use the existing Compose project and
-the `mw` function from [First startup](#first-startup). Make sure the existing
-`deploy/.env.server` defines `DOCKERHUB_NAMESPACE` and `IMAGE_TAG`.
+Wait for `publish` and `promote` to pass for the release tag. On the VPS, use
+the existing Compose project and the `mw` function from
+[First startup](#first-startup). Make sure `deploy/.env.server` sets
+`DOCKERHUB_NAMESPACE` and has one `IMAGE_TAG=...` line with no spaces around
+`=`. Then [back up the running stack](#back-up-the-volumes).
 
 Set `release_tag` to the tag that passed CI and `secrets_dir` to the existing
 directory configured by `MW_SECRETS_DIR`. This checks out the tagged source,
@@ -490,10 +491,15 @@ pins both images to that commit, and creates any missing credentials.
     unset DOCKERHUB_NAMESPACE IMAGE_TAG
     release_tag=release-0.1.0
     secrets_dir=deploy/secrets
+    tag_assignment='^[[:space:]]*(export[[:space:]]+)?IMAGE_TAG[[:space:]]*[=:]'
+    if [[ $(grep -Ec "$tag_assignment" deploy/.env.server) != 1 ]] ||
+        ! grep -q '^IMAGE_TAG=' deploy/.env.server; then
+        printf '%s\n' 'Set IMAGE_TAG=... on one line in deploy/.env.server.' >&2
+        exit 1
+    fi
     git fetch origin tag "$release_tag"
     git switch --detach "refs/tags/$release_tag"
     release_commit=$(git rev-parse HEAD)
-    grep -q '^IMAGE_TAG=' deploy/.env.server
     sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$release_commit/" deploy/.env.server
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
