@@ -37,3 +37,47 @@ The export check bundles the native JavaScript for iOS and Android. Jest covers
 the API client, secure session behavior, auth form interactions, protected routes,
 and signing out from Account. Check the SecureStore integration on a physical
 phone before distributing a native build.
+
+## Signed Android APK
+
+The **Android APK** workflow builds a standalone app for
+`https://onerep.mooo.com`. Pull requests that change the mobile build verify an
+APK with a disposable key.
+
+Before the first release build, create the GitHub Actions environment
+`android-apk-release` in repository settings. Set its deployment branch rule to
+allow only the `main` branch.
+
+Updates to `com.machinewhisperer.app` require the same signing key. Reuse the
+existing key if the app has already been distributed. For a first release, set
+`signing_dir` to an owner-only directory outside the repository and save a
+strong password as `keystore-password.txt` in that directory, without a trailing
+newline.
+
+```bash
+signing_dir=/path/to/private/signing-directory
+umask 077
+keytool -genkeypair -storetype PKCS12 -keystore "$signing_dir/machine-whisperer.p12" \
+  -alias machine-whisperer -keyalg RSA -keysize 2048 -validity 10000 \
+  -dname 'CN=Machine Whisperer' -storepass:file "$signing_dir/keystore-password.txt" \
+  -keypass:file "$signing_dir/keystore-password.txt"
+```
+
+Back up the keystore and password in the team's credential store. From a
+repository checkout, load the environment secrets over standard input.
+The new PKCS12 key uses the same password for both password secrets. When
+reusing a key, substitute its keystore file, alias, and password files.
+
+```bash
+base64 < "$signing_dir/machine-whisperer.p12" | gh secret set ANDROID_KEYSTORE_BASE64 --env android-apk-release
+gh secret set ANDROID_KEYSTORE_PASSWORD --env android-apk-release < "$signing_dir/keystore-password.txt"
+printf '%s' machine-whisperer | gh secret set ANDROID_KEY_ALIAS --env android-apk-release
+gh secret set ANDROID_KEY_PASSWORD --env android-apk-release < "$signing_dir/keystore-password.txt"
+```
+
+1. In GitHub, open **Actions → Android APK → Run workflow** and select `main`.
+2. Open the completed run and download the **machine-whisperer-android**
+   artifact for that commit. Extract the ZIP and run `sha256sum -c *.apk.sha256`
+   (or `shasum -a 256 -c *.apk.sha256` on macOS).
+3. Open the APK on the phone and allow installs from the app that opened it if
+   Android prompts you. Launch Machine Whisperer and sign in to check the build.

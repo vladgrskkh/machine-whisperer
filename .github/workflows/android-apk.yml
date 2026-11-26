@@ -1,0 +1,131 @@
+name: Android APK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'mobile/**'
+      - '.nvmrc'
+      - '.github/scripts/sign-android-apk.sh'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  EXPO_PUBLIC_API_URL: https://onerep.mooo.com
+  EXPO_NO_TELEMETRY: '1'
+  ANDROID_BUILD_TOOLS: '37.0.0'
+
+jobs:
+  build:
+    name: Build Android APK
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      unsigned-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Install Android SDK packages
+        run: |
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37.0" "build-tools;$ANDROID_BUILD_TOOLS" "ndk;27.1.12297006" "cmake;3.22.1"
+      - name: Generate native Android project
+        working-directory: mobile
+        run: |
+          npm ci
+          npx --no-install expo prebuild --platform android --no-install
+      - name: Assemble unsigned release APK
+        working-directory: mobile/android
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          # Expo's generated release build uses the debug key by default.
+          sed -i '/^        release {$/,/^        }$/ { /^[[:space:]]*signingConfig signingConfigs.debug[[:space:]]*$/d; }' app/build.gradle
+          ./gradlew --no-daemon :app:assembleRelease
+          apk=app/build/outputs/apk/release/app-release-unsigned.apk
+          if ! unzip -p "$apk" assets/index.android.bundle | grep -aF -- "$EXPO_PUBLIC_API_URL" >/dev/null; then
+            echo "Release APK does not bundle the deployed API URL" >&2
+            exit 1
+          fi
+          cp "$apk" "$RUNNER_TEMP/app-release-unsigned.apk"
+      - name: Verify release with a disposable signing key
+        if: github.event_name == 'pull_request'
+        env:
+          APK_KEY_ALIAS: ci-test
+          APK_KEYSTORE_PASSWORD: ci-test-only
+          APK_KEY_PASSWORD: ci-test-only
+        run: |
+          temp_dir=$(mktemp -d)
+          trap 'rm -rf -- "$temp_dir"' EXIT
+          keytool -genkeypair -storetype PKCS12 -keystore "$temp_dir/test.p12" \
+            -alias "$APK_KEY_ALIAS" -storepass:env APK_KEYSTORE_PASSWORD \
+            -keyalg RSA -keysize 2048 -validity 2 -dname 'CN=Android CI test'
+          bash .github/scripts/sign-android-apk.sh "$RUNNER_TEMP/app-release-unsigned.apk" \
+            "$temp_dir/test.p12" "$temp_dir/test.apk"
+      - name: Stage unsigned APK for signing
+        if: github.event_name == 'workflow_dispatch'
+        id: unsigned
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: android-unsigned-${{ github.sha }}
+          path: ${{ runner.temp }}/app-release-unsigned.apk
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+          compression-level: 0
+
+  release:
+    name: Sign Android APK
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    needs: build
+    environment: android-apk-release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.build.outputs.unsigned-artifact-id }}
+          path: ${{ runner.temp }}/unsigned
+      - name: Sign and verify Android APK
+        env:
+          APK_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          APK_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          APK_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          APK_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          : "${APK_KEYSTORE_BASE64:?Configure ANDROID_KEYSTORE_BASE64 in android-apk-release}"
+          umask 077
+          temp_dir=$(mktemp -d)
+          trap 'rm -rf -- "$temp_dir"' EXIT
+          printf '%s' "$APK_KEYSTORE_BASE64" | base64 --decode > "$temp_dir/keystore"
+          unset APK_KEYSTORE_BASE64
+          mkdir -p "$RUNNER_TEMP/signed"
+          cd "$RUNNER_TEMP/signed"
+          apk="machine-whisperer-$GITHUB_SHA.apk"
+          bash "$GITHUB_WORKSPACE/.github/scripts/sign-android-apk.sh" \
+            "$RUNNER_TEMP/unsigned/app-release-unsigned.apk" "$temp_dir/keystore" "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+      - name: Upload verified APK and checksum
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: machine-whisperer-android-${{ github.sha }}
+          path: ${{ runner.temp }}/signed/
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0

@@ -11,6 +11,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.machinewhisperer.app",
       "adaptiveIcon": {
         "backgroundColor": "#137a75",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
