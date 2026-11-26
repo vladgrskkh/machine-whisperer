@@ -139,8 +139,9 @@ for asset in "${expected_assets[@]}"; do
     verify_uploaded_asset "$asset" "$stored"
 done
 
-release=$(read_checked_release)
 verify_release_ref
+# Ownership can change during the tag check. Refresh it before the separate publish request.
+release=$(read_checked_release)
 if is_owned_draft "$release"; then
     gh api --method PATCH "$release_api" -F draft=false -f make_latest=legacy --silent
 fi

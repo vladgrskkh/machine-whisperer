@@ -154,6 +154,19 @@ class PublicationTest(unittest.TestCase):
             }
             fake_tool(work, "git", """#!/bin/bash
 [[ "$1" == -c && "$2" == credential.helper= && "$3" == -c && "$4" == 'credential.helper=!gh auth git-credential' ]] || exit 1
+if [[ "$TAKE_OVER_DRAFT" == 1 ]]; then
+    python3 - "$STATE" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+state = json.loads(path.read_text())
+if "machine-whisperer.apk.sha256" in state["assets"]:
+    state["body"] = "Operator took ownership."
+    path.write_text(json.dumps(state))
+PY
+fi
 printf 'tag-object\\t%s\\n%s\\t%s^{}\\n' "$GITHUB_REF" "$REMOTE_COMMIT" "$GITHUB_REF"
 """)
             api_fixture = """#!/usr/bin/env python3
@@ -237,6 +250,8 @@ path.write_text(json.dumps(state))
                  ["remove empty machine-whisperer.apk", *expected, "publish"]),
                 ("manual draft", True, manual, apk_only, reference_checksum, commit, True, True,
                  ["machine-whisperer.apk.sha256"]),
+                ("draft taken over", True, managed, apk_only, reference_checksum, commit, True, True,
+                 ["machine-whisperer.apk.sha256"]),
                 ("published", False, manual, expected, reference_checksum, commit, True, False, []),
                 ("published missing asset", False, manual, apk_only, reference_checksum, commit, True, False,
                  ["machine-whisperer.apk.sha256"]),
@@ -251,14 +266,18 @@ path.write_text(json.dumps(state))
                 with self.subTest(name=name):
                     checksum.write_text(checksum_text)
                     state.write_text(json.dumps({"draft": draft, "body": body, "assets": assets, "writes": []}))
-                    result = run(["bash", str(script), str(signed)], env={**env, "REMOTE_COMMIT": remote_commit},
+                    run_env = {
+                        **env, "REMOTE_COMMIT": remote_commit, "TAKE_OVER_DRAFT": str(int(name == "draft taken over")),
+                    }
+                    result = run(["bash", str(script), str(signed)], env=run_env,
                                  check=False)
                     self.assertEqual(result.returncode == 0, success, result.stderr)
                     final = json.loads(state.read_text())
                     self.assertEqual(final["writes"], writes)
                     self.assertEqual(final["assets"], expected if success else assets)
                     self.assertIs(final["draft"], final_draft)
-                    self.assertEqual(final["body"], f"{marker}\n\nGenerated notes" if name == "new" else body)
+                    expected_body = {"new": f"{marker}\n\nGenerated notes", "draft taken over": "Operator took ownership."}
+                    self.assertEqual(final["body"], expected_body.get(name, body))
 
     def test_probe_distinguishes_missing_images_from_registry_failures(self):
         probe = next(step["run"] for step in self.jobs["publish"]["steps"] if step.get("id") == "release")
