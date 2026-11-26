@@ -49,7 +49,7 @@ processors:
       - 'replace_pattern(log.attributes["fluent.tag"], "^mw[.]", "")'
       - 'set(log.attributes["service.name"], log.attributes["fluent.tag"])'
       - 'delete_key(log.attributes, "fluent.tag")'
-      # Read structured fields in a scratch map. Export only bounded, typed or explicitly allowed values.
+      # Read structured fields in a scratch map to extract searchable metadata.
       - 'merge_maps(log.cache, ParseJSON(log.body), "upsert") where IsString(log.body) and IsMatch(log.body, "^[{]")'
       - >-
         merge_maps(log.cache, ExtractPatterns(log.body, "^[0-9/-]+ [0-9:.]+ [^ ]+ [[]\\d+[]] (?P<sqlstate>[0-9A-Z]{5}) (?P<level>[A-Z]+):"), "upsert")
@@ -114,21 +114,10 @@ processors:
         ContainsValue(["outbox batch delivery failed", "outbox operation failed"], log.cache["msg"]) and
         ContainsValue(["analytics_http", "analytics_timeout", "analytics_request", "analytics_transport", "claim",
         "acknowledge", "reschedule", "prune"], log.cache["category"])
-      # All backend bodies are fixed text, including native error messages and API request paths.
-      - 'set(log.body, "Service log")'
-      - 'set(log.body, "HTTP request") where log.attributes["http.response.status_code"] != nil'
-      - 'set(log.body, "telemetry ingest failed") where log.cache["msg"] == "telemetry ingest failed" and log.attributes["failure.category"] != nil'
-      - >-
-        set(log.body, log.cache["msg"]) where ContainsValue(["api", "analytics"], log.attributes["service.name"]) and
-        ContainsValue(["api stopped", "trace provider shutdown failed", "starting analytics servers", "analytics servers stopped",
-        "analytics server stopped", "outbox relay started", "outbox relay stopped", "outbox batch claimed",
-        "outbox batch acknowledged", "delivered outbox rows pruned", "outbox batch delivery failed", "outbox operation failed",
-        "device claimed", "machine baseline set", "telemetry alert opened", "telemetry alert recovered",
-        "analytics telemetry batch store failed"], log.cache["msg"])
   filter/log_noise:
     error_mode: propagate
     log_conditions:
-      - 'log.body == "HTTP request" and log.attributes["http.response.status_code"] < 400'
+      - 'log.attributes["http.response.status_code"] != nil and log.attributes["http.response.status_code"] < 400'
       - 'log.severity_number == SEVERITY_NUMBER_DEBUG'
   groupbyattrs/log_service:
     keys: [service.name]
