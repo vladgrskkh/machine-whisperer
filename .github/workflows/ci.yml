@@ -232,6 +232,18 @@ jobs:
           fi
           printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
 
+  android:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-') && !github.event.deleted
+    needs: [check-release, lint, test, build, integration, analytics, deployment, mobile]
+    uses: ./.github/workflows/android-apk.yml
+    with:
+      commit: ${{ needs.check-release.outputs.commit }}
+    secrets:
+      ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
   publish:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/release-') && !github.event.deleted
     needs: [check-release, lint, test, build, integration, analytics, deployment, mobile]

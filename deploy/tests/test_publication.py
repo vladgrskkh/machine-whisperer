@@ -7,14 +7,18 @@ from deploy.tests.support import REPO, fake_tool, run, tool_env
 
 
 class PublicationTest(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
+    @staticmethod
+    def load_workflow(filename):
         # Reuse the runner's YAML parser and keep policy and behavior assertions here.
         result = run([
             "ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.load_file(ARGV.fetch(0)))",
-            ".github/workflows/ci.yml",
+            f".github/workflows/{filename}",
         ], cwd=REPO)
-        cls.workflow = json.loads(result.stdout)
+        return json.loads(result.stdout)
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = cls.load_workflow("ci.yml")
         cls.jobs = cls.workflow["jobs"]
 
     def test_only_release_tag_jobs_can_publish_after_all_checks(self):
@@ -70,6 +74,36 @@ class PublicationTest(unittest.TestCase):
             if name not in ("publish", "promote"):
                 with self.subTest(job=name):
                     self.assertNotRegex(json.dumps(job), r"secrets\.DOCKERHUB_|docker/(login|build-push)-action")
+
+    def test_android_release_builds_and_signs_the_verified_tag_after_all_checks(self):
+        caller = self.jobs.get("android")
+        self.assertIsNotNone(caller, "Release CI must call the Android workflow")
+        self.assertEqual(caller["if"], self.jobs["publish"]["if"])
+        self.assertCountEqual(caller["needs"], self.jobs["publish"]["needs"])
+        self.assertEqual(caller["uses"], "./.github/workflows/android-apk.yml")
+        self.assertEqual(caller["with"], {"commit": "${{ needs.check-release.outputs.commit }}"})
+        self.assertNotIn("environment", caller)
+
+        workflow = self.load_workflow("android-apk.yml")
+        trigger = workflow.get("on", workflow.get("true"))
+        self.assertEqual(set(trigger), {"workflow_call"})
+        call = trigger["workflow_call"]
+        self.assertEqual(call["inputs"], {"commit": {"required": True, "type": "string"}})
+        secrets = ("ANDROID_KEYSTORE_BASE64", "ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+        self.assertEqual(call["secrets"], {name: {"required": True} for name in secrets})
+        self.assertEqual(caller["secrets"], {name: f"${{{{ secrets.{name} }}}}" for name in secrets})
+
+        build, sign = (workflow["jobs"][name] for name in ("build", "release"))
+        for job in (build, sign):
+            checkout = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/checkout@"))
+            self.assertEqual(checkout["with"]["ref"], "${{ inputs.commit }}")
+        self.assertNotIn("environment", build)
+        self.assertNotIn("secrets.", json.dumps(build))
+        self.assertEqual(sign["environment"], "android-apk-release")
+        self.assertEqual(sign["needs"], "build")
+        self.assertNotIn("if", sign)
+        unsigned = next(step for step in build["steps"] if step.get("id") == "unsigned")
+        self.assertNotIn("if", unsigned)
 
     def test_probe_distinguishes_missing_images_from_registry_failures(self):
         probe = next(step["run"] for step in self.jobs["publish"]["steps"] if step.get("id") == "release")
