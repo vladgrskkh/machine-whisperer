@@ -1144,9 +1144,12 @@ class DeploymentEndToEndTest(unittest.TestCase):
         extra_attrs = string_attributes(extra)
         self.assertEqual(extra_attrs["http.request.method"], "POST")
         self.assertEqual(extra_attrs["http.route"], "/v1/machines")
-        status_code, = (item["value"]["intValue"] for item in extra["attributes"]
-                        if item["key"] == "http.response.status_code")
-        self.assertEqual(int(status_code), 201)
+        # Jaeger's pinned Badger adapter may return the legacy HTTP status alias.
+        status_codes = {
+            int(item["value"]["intValue"]) for item in extra["attributes"]
+            if item["key"] in ("http.response.status_code", "http.status_code")
+        }
+        self.assertEqual(status_codes, {201})
         self.assertNotIn(canary, json.dumps([root, spans[chain[1]], extra]))
 
     def assert_unsampled_request_keeps_the_edge_decision(self):
