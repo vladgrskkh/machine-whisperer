@@ -7,12 +7,26 @@ SWAGGER_INIT := go run github.com/swaggo/swag/cmd/swag@v1.16.6 init $(SWAGGER_SO
 OPENAPI_INIT := go run github.com/swaggo/swag/v2/cmd/swag@v2.0.0-rc6 init $(SWAGGER_SOURCES) \
 	--v3.1 --generalInfo openapi.go --instanceName openapi
 # Swaggo emits the nullable extension and inclusive minimum from the shared field tags.
+# The mobile OTLP route needs raw binary media and status-specific response types.
 OPENAPI_SCHEMA := (.. | select(tag == "!!map" and .["x-nullable"] == true)) |= \
 	(.type = [.type, "null"] | del(.["x-nullable"])) | \
-	.components.schemas.BaselineInput.properties.stddev_rms_g |= (.exclusiveMinimum = .minimum | del(.minimum))
+	(.components.schemas.BaselineInput.properties.stddev_rms_g |= (.exclusiveMinimum = .minimum | del(.minimum))) | \
+	(.paths."/v1/mobile/traces".post.requestBody.content = {"application/x-protobuf": {}}) | \
+	del(.paths."/v1/mobile/traces".post.responses[].content."application/x-protobuf") | \
+	(.paths."/v1/mobile/traces".post.responses."200".content = {"application/x-protobuf": {}})
+
+# The Swagger generator places the body format on the parameter instead of
+# its schema. Correct that route without reformatting the generated document.
+SWAGGER_MOBILE_TRACE_FORMAT := /^  \/v1\/mobile\/traces:$$/ { trace_route = 1 } \
+	/^  \// && $$1 != "/v1/mobile/traces:" { trace_route = 0 } \
+	trace_route && /^        format: binary$$/ { move_format = 1; next } \
+	trace_route && move_format && /^        schema:$$/ { print; print "          format: binary"; move_format = 0; next } \
+	{ print } END { if (move_format) exit 1 }
 
 define generate_specs
 	$(SWAGGER_INIT) --output "$(1)"; \
+	awk '$(SWAGGER_MOBILE_TRACE_FORMAT)' "$(1)/swagger.yaml" > "$(1)/swagger_corrected.yaml"; \
+	mv "$(1)/swagger_corrected.yaml" "$(1)/swagger.yaml"; \
 	$(OPENAPI_INIT) --output "$(1)"; \
 	go run github.com/mikefarah/yq/v4@v4.54.3 '$(OPENAPI_SCHEMA)' "$(1)/openapi_swagger.yaml" > "$(1)/openapi.yaml"; \
 	rm "$(1)/openapi_swagger.yaml"

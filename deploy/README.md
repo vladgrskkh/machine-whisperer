@@ -510,6 +510,7 @@ pins both images to that commit, and creates any missing credentials.
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
     deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --loki-only
+    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --mobile-trace-only
     mw config --quiet
     mw pull
     mw up -d --no-build
@@ -524,6 +525,13 @@ that adds Grafana, follow the [named Viewer setup](#grafana-sign-in-and-accounts
 When a release changes the Prometheus configuration, [validate it and recreate
 the Prometheus container](#logs-and-prometheus). This loads the updated file
 and keeps the existing metrics volume.
+
+When trace ingress or the Collector pipeline changes, recreate Nginx and the
+Collector so they reload their bind-mounted configuration.
+
+```bash
+mw up -d --no-deps --force-recreate nginx otel-collector
+```
 
 Verify both migration exit codes and the exporter setup exit code. Check the
 public HTTPS API request, Grafana and Jaeger sign-in, and an authenticated

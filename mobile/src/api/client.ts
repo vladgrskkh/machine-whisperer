@@ -1,3 +1,7 @@
+import type { Context } from '@opentelemetry/api';
+
+import { bestEffort } from '../tracing/best-effort';
+import type { MobileTracing } from '../tracing/mobile-tracing';
 import { ApiError, decodeApiError, sessionRequired } from './errors';
 import {
   isTokenPair, isUser, type BaselineValues, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
@@ -17,15 +21,17 @@ type ApiClientOptions = {
   baseUrl?: string;
   fetch?: Fetch;
   session?: RequestSession;
+  tracing?: MobileTracing;
 };
 
 type JsonRequest = {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE';
   body?: unknown;
   signal?: AbortSignal;
+  traceContext?: Context;
 };
 type ApiPath = `/v1/${string}`;
-type TelemetryQuery = { cursor?: string | null; limit?: number; signal?: AbortSignal };
+type TelemetryQuery = { cursor?: string | null; limit?: number; signal?: AbortSignal; traceHistory?: boolean };
 
 const maxMachineReads = 4;
 
@@ -37,6 +43,7 @@ export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetch: Fetch;
   private readonly session?: RequestSession;
+  private readonly tracing?: MobileTracing;
   private activeMachineReads = 0;
   private readonly waitingMachineReads: (() => void)[] = [];
 
@@ -44,6 +51,7 @@ export class ApiClient {
     this.baseUrl = options.baseUrl?.trim().replace(/\/+$/, '') ?? '';
     this.fetch = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.session = options.session;
+    this.tracing = options.tracing;
   }
 
   signup(credentials: Credentials): Promise<User> {
@@ -84,9 +92,12 @@ export class ApiClient {
     return this.authenticated(`/v1/machines/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  getTelemetry(id: string, { cursor = null, limit = 100, signal }: TelemetryQuery = {}): Promise<TelemetryPage> {
+  getTelemetry(id: string, { cursor = null, limit = 100, signal, traceHistory = false }: TelemetryQuery = {}): Promise<TelemetryPage> {
     const query = cursor === null ? `limit=${limit}` : `limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
-    return this.machineRead(`/v1/machines/${encodeURIComponent(id)}/telemetry?${query}`, signal);
+    const load = (context?: Context) => this.machineRead<TelemetryPage>(
+      `/v1/machines/${encodeURIComponent(id)}/telemetry?${query}`, signal, context,
+    );
+    return traceHistory && this.tracing ? this.tracing.history(load) : load();
   }
 
   async getBaseline(id: string, signal?: AbortSignal): Promise<MachineBaseline | null> {
@@ -119,7 +130,7 @@ export class ApiClient {
     return result;
   }
 
-  private async machineRead<T>(path: ApiPath, signal?: AbortSignal): Promise<T> {
+  private async machineRead<T>(path: ApiPath, signal?: AbortSignal, traceContext?: Context): Promise<T> {
     const generation = this.session?.getAccess()?.generation;
     if (generation === undefined) throw sessionRequired();
     if (signal?.aborted) throw cancelledRequest();
@@ -133,7 +144,7 @@ export class ApiClient {
     try {
       if (signal?.aborted) throw cancelledRequest();
       if (generation !== this.session?.getAccess()?.generation) throw sessionRequired();
-      return await this.authenticated<T>(path, { signal });
+      return await this.authenticated<T>(path, { signal, traceContext });
     } finally {
       const next = this.waitingMachineReads.shift();
       if (next) next();
@@ -181,6 +192,9 @@ export class ApiClient {
     const abort = () => controller.abort();
     signal?.addEventListener('abort', abort);
     const timer = setTimeout(abort, 15_000);
+    const context = request.traceContext;
+    const attempt = context ? bestEffort(() => this.tracing?.attempt(context, token)) : undefined;
+    if (attempt) headers['X-MW-Trace'] = '1';
     try {
       const response = await this.fetch(`${this.baseUrl}${path}`, {
         method: request.method ?? 'GET',
@@ -188,19 +202,23 @@ export class ApiClient {
         body: request.body === undefined ? undefined : JSON.stringify(request.body),
         signal: controller.signal,
       });
+      bestEffort(() => attempt?.response(response));
       if (response.status === 204) return undefined as T;
       const body: unknown = await response.json().catch(() => undefined);
       if (!response.ok) throw decodeApiError(response.status, body);
       if (body === undefined) {
+        bestEffort(() => attempt?.fail('invalid_response'));
         throw new ApiError(response.status, 'invalid_response', 'The server returned an unreadable response.');
       }
       return body as T;
     } catch (error) {
       if (error instanceof ApiError) throw error;
+      bestEffort(() => attempt?.fail(signal?.aborted ? 'cancelled' : controller.signal.aborted ? 'timeout' : 'network_error'));
       throw new ApiError(0, 'network_error', 'Could not reach the server. Check your connection and try again.');
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
+      bestEffort(() => attempt?.end());
     }
   }
 }

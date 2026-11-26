@@ -159,8 +159,10 @@ func serve(ctx context.Context, address string, logger *slog.Logger) error {
 			logger.WarnContext(ctx, "trace provider shutdown failed")
 		}
 	}()
+	mobileTrace, closeMobileTrace := mobileTraceHandler(logger)
+	defer closeMobileTrace()
 	app, err := application.New(ctx, config,
-		application.WithTracing(traces.Provider, traces.Propagator),
+		application.WithTracing(traces.Provider, traces.Propagator), application.WithMobileTrace(mobileTrace),
 		application.WithDatabase(config.Database), application.WithLogger(logger),
 	)
 	if err != nil {

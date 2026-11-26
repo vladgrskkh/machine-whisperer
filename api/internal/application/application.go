@@ -14,6 +14,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/mobiletrace"
 	alertpostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/alert/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/password"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/auth/token"
@@ -69,6 +70,7 @@ type Application struct {
 	rateLimitConfig  middleware.RateLimitConfig
 	tracerProvider   trace.TracerProvider
 	propagator       propagation.TextMapPropagator
+	mobileTrace      *mobiletrace.Handler
 }
 
 type Option func(context.Context, *Application) error

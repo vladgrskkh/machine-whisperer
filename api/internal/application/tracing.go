@@ -6,6 +6,8 @@ import (
 
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/mobiletrace"
 )
 
 func WithTracing(provider trace.TracerProvider, propagator propagation.TextMapPropagator) Option {
@@ -15,6 +17,13 @@ func WithTracing(provider trace.TracerProvider, propagator propagation.TextMapPr
 		}
 		app.tracerProvider = provider
 		app.propagator = propagator
+		return nil
+	}
+}
+
+func WithMobileTrace(handler *mobiletrace.Handler) Option {
+	return func(_ context.Context, app *Application) error {
+		app.mobileTrace = handler
 		return nil
 	}
 }

@@ -23,7 +23,7 @@ func HTTPServer(
 	trustedPeer func(*http.Request) bool,
 ) func(http.Handler) http.Handler {
 	options := append(httpOptions(provider, propagator), otelhttp.WithFilter(func(r *http.Request) bool {
-		return r.URL.Path != "/healthz" && r.URL.Path != "/metrics"
+		return r.URL.Path != "/healthz" && r.URL.Path != "/metrics" && r.URL.Path != "/v1/mobile/traces"
 	}))
 	instrument := otelhttp.NewMiddleware("", options...)
 	return func(next http.Handler) http.Handler {

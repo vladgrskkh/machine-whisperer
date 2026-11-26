@@ -16,7 +16,8 @@ processors:
   transform/allowlist:
     error_mode: propagate
     trace_statements:
-      - 'keep_keys(resource.attributes, ["service.name", "service.namespace"])'
+      - 'keep_keys(resource.attributes, ["service.name", "service.namespace"]) where resource.attributes["service.name"] != "mobile"'
+      - 'keep_keys(resource.attributes, ["service.name", "service.namespace", "service.version"]) where resource.attributes["service.name"] == "mobile"'
       - 'keep_keys(scope.attributes, [])'
       - 'set(scope.version, "")'
       - 'set(span.attributes["http.request.method"], span.attributes["http.method"]) where resource.attributes["service.name"] == "nginx"'
@@ -32,9 +33,11 @@ processors:
       # Pdata event and link slices use nil to clear their typed contents.
       - 'set(span.events, nil)'
       # The stock transform processor cannot edit individual link fields. The
-      # API's outbox worker sets only ID and flag fields, with no attributes or
-      # tracestate. Remove whole links from every other kind of span.
-      - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
+      # The outbox worker and mobile trace handler construct links from
+      # verified context without attributes or trace state.
+      - >-
+        set(span.links, nil) where not ((resource.attributes["service.name"] == "api" and span.name == "outbox.deliver") or
+        (resource.attributes["service.name"] == "mobile" and span.name == "GET /v1/machines/{machine_id}/telemetry"))
   filter/log_sources:
     error_mode: propagate
     log_conditions:

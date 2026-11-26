@@ -213,7 +213,8 @@ class ComposeConfigTest(unittest.TestCase):
 
     def test_only_required_file_backed_secrets_are_granted(self):
         grants = {
-            "api": {"database_url", "analytics_token", "signing_key", "verify_keys", "api_cert", "api_key", "internal_ca"},
+            "api": {"database_url", "analytics_token", "signing_key", "verify_keys", "api_cert", "api_key", "internal_ca",
+                    "mobile_trace_key"},
             "api-migrate": {"database_url"},
             "analytics": {"analytics_token", "clickhouse_password"},
             "analytics-migrate": {"clickhouse_password"},
@@ -235,6 +236,7 @@ class ComposeConfigTest(unittest.TestCase):
                 "API_TLS_CERT_FILE": "api_cert", "API_TLS_KEY_FILE": "api_key",
                 "DATABASE_URL_FILE": "database_url", "AUTH_SIGNING_KEY_FILE": "signing_key",
                 "AUTH_VERIFY_KEYS_FILE": "verify_keys", "ANALYTICS_INGEST_API_KEY_FILE": "analytics_token",
+                "MOBILE_TRACE_SECRET_FILE": "mobile_trace_key",
             },
             "api-migrate": {"DATABASE_URL_FILE": "database_url"},
             "analytics": {"ANALYTICS_INGEST_API_KEY_FILE": "analytics_token", "CLICKHOUSE_PASSWORD_FILE": "clickhouse_password"},

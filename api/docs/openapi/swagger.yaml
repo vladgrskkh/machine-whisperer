@@ -1524,6 +1524,61 @@ paths:
       summary: Submit a telemetry observation by machine ID
       tags:
       - telemetry
+  /v1/mobile/traces:
+    post:
+      consumes:
+      - application/x-protobuf
+      description: Accepts an uncompressed OTLP binary trace batch of at most 32 KiB
+        and 16 spans.
+      parameters:
+      - description: Binary OTLP ExportTraceServiceRequest
+        in: body
+        name: batch
+        required: true
+        schema:
+          format: binary
+          type: string
+      - description: Comma-separated trace receipts
+        in: header
+        name: X-Mw-Trace-Receipts
+        type: string
+      produces:
+      - application/x-protobuf
+      - application/json
+      responses:
+        "200":
+          description: Empty binary OTLP ExportTraceServiceResponse (zero bytes)
+          schema:
+            type: file
+        "400":
+          description: Invalid trace batch (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "401":
+          description: Authentication failed (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "413":
+          description: Trace batch exceeds 32 KiB (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "415":
+          description: Unsupported encoding (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "429":
+          description: Export rate exceeded (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "503":
+          description: Trace export unavailable (JSON)
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      security:
+      - UserAccessJWT: []
+      summary: Submit mobile trace spans
+      tags:
+      - operational
   /v1/openapi.yaml:
     get:
       operationId: downloadOpenAPI

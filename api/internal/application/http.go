@@ -15,6 +15,7 @@ import (
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/devices"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/machines"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
+	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/mobiletrace"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/telemetry"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/users"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
@@ -56,6 +57,10 @@ func (a *Application) Routes() http.Handler {
 	router.Get("/v1/swagger/*", swaggerUI.ServeHTTP)
 	limit := middleware.RateLimit(a.rateLimitConfig)
 	access := middleware.AccessToken(a.verifier)
+	if a.mobileTrace != nil {
+		traceLimit := middleware.RateLimit(a.rateLimitConfig)
+		router.With(middleware.NoStore, traceLimit, access).Post(mobiletrace.ExportPath, a.mobileTrace.ServeHTTP)
+	}
 	router.With(limit).Post("/v1/auth/signup", authhandler.New(a.signup).ServeHTTP)
 	router.Route("/v1/auth/login", func(login chi.Router) {
 		login.Use(middleware.NoStore)
@@ -79,7 +84,8 @@ func (a *Application) Routes() http.Handler {
 		owner.Get("/v1/machines/{id}/baseline", machines.NewGetBaseline(a.getBaseline).ServeHTTP)
 		owner.Put("/v1/machines/{id}/baseline", machines.NewSetBaseline(a.setBaseline).ServeHTTP)
 		owner.Get("/v1/machines/{id}/alerts", alerts.NewList(a.listAlerts).ServeHTTP)
-		owner.Get("/v1/machines/{machine_id}/telemetry", telemetry.NewHistory(a.telemetryHistory).ServeHTTP)
+		owner.Get("/v1/machines/{machine_id}/telemetry",
+			a.mobileTrace.History(telemetry.NewHistory(a.telemetryHistory)).ServeHTTP)
 		owner.Post("/v1/alerts/{id}/acknowledge",
 			alerts.NewAcknowledge(a.acknowledgeAlert).ServeHTTP)
 	})

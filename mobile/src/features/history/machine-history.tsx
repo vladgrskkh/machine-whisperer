@@ -16,7 +16,7 @@ export function MachineHistory({ machine, onEditBaseline, onClaim }: {
   onClaim: () => void;
 }) {
   const { id } = machine;
-  const loadHistory = useCallback((api: ApiClient, signal: AbortSignal) => api.getTelemetry(id, { signal }), [id]);
+  const loadHistory = useCallback((api: ApiClient, signal: AbortSignal) => api.getTelemetry(id, { signal, traceHistory: true }), [id]);
   const loadBaseline = useCallback((api: ApiClient, signal: AbortSignal) => api.getBaseline(id, signal), [id]);
   const loadAlerts = useCallback((api: ApiClient, signal: AbortSignal) => api.listAlerts(id, signal), [id]);
   const history = useMachineQuery(loadHistory, 'Could not load vibration history.', { keepPreviousData: true });

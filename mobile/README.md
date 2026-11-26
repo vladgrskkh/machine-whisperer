@@ -38,6 +38,18 @@ the API client, secure session behavior, auth form interactions, protected route
 and signing out from Account. Check the SecureStore integration on a physical
 phone before distributing a native build.
 
+## Machine history traces
+
+The app records the initial machine history load and its HTTP attempts. The
+protected trace endpoint receives a bounded batch on the API's HTTPS origin.
+Successful requests appear in Jaeger when Nginx samples the backend trace.
+The mobile trace links to the authenticated API span. A fetch failure can
+produce a mobile trace on its own.
+
+When Expo Web is enabled, tracing requires the app and API to share an HTTPS origin.
+Set `EXPO_PUBLIC_MOBILE_TRACING=0` in the build environment to opt out. The
+collector and TLS setup are in the [deployment guide](../deploy/README.md).
+
 ## Signed Android APK
 
 Pushing a [`release-X.Y.Z` tag](../deploy/README.md#docker-hub-images) starts the

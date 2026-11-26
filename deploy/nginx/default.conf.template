@@ -70,6 +70,17 @@ server {
     proxy_set_header tracestate "";
     proxy_set_header baggage "";
 
+    location = /v1/mobile/traces {
+        client_max_body_size 32k;
+        error_page 413 = @mobile_trace_batch_too_large;
+        proxy_read_timeout 3s;
+        otel_trace off;
+        proxy_pass https://$api_endpoint;
+    }
+    location @mobile_trace_batch_too_large {
+        default_type application/json;
+        return 413 '{"error":{"code":"trace_batch_too_large","message":"Trace batch too large"}}';
+    }
     location /v1/ {
         set $mw_log_trace_location on;
         otel_trace $mw_trace_sampled;

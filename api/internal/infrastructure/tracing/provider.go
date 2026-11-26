@@ -20,6 +20,7 @@ import (
 )
 
 const (
+	httpsScheme        = "https"
 	defaultSampleRatio = 0.01
 	exportTimeout      = 2 * time.Second
 	shutdownTimeout    = 3 * time.Second
@@ -33,16 +34,20 @@ type Runtime struct {
 	shutdown   func(context.Context) error
 }
 
-func New(ctx context.Context, serviceName string) (Runtime, error) {
-	endpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
-	if endpoint == "" {
-		endpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+func otlpEndpoint() string {
+	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"); endpoint != "" {
+		return endpoint
 	}
+	return os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+}
+
+func New(ctx context.Context, serviceName string) (Runtime, error) {
+	endpoint := otlpEndpoint()
 	if endpoint == "" {
 		return Runtime{Provider: noop.NewTracerProvider()}, nil
 	}
 	u, err := url.Parse(endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" || u.User != nil ||
+	if err != nil || (u.Scheme != "http" && u.Scheme != httpsScheme) || u.Hostname() == "" || u.User != nil ||
 		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || (u.Path != "" && u.Path != "/") {
 		return Runtime{}, errors.New("OTLP endpoint must be an HTTP or HTTPS origin")
 	}

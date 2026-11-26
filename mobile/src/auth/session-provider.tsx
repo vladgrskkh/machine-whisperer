@@ -1,6 +1,9 @@
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 
 import { ApiClient } from '../api/client';
+import { createMobileTracing, tracingOrigin } from '../tracing/mobile-tracing';
 import { secureTokenStore } from './secure-token-store';
 import { Session } from './session';
 
@@ -10,7 +13,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [value] = useState(() => {
     const baseUrl = process.env.EXPO_PUBLIC_API_URL;
     const session = new Session(secureTokenStore, new ApiClient({ baseUrl }));
-    return { session, api: new ApiClient({ baseUrl, session }) };
+    const browserOrigin = Platform.OS === 'web' ? globalThis.location?.origin ?? '' : undefined;
+    const origin = tracingOrigin(baseUrl, browserOrigin);
+    const tracing = origin && process.env.EXPO_PUBLIC_MOBILE_TRACING !== '0'
+      ? createMobileTracing({ origin, getAccess: () => session.getAccess(), version: Constants.expoConfig?.version })
+      : undefined;
+    return { session, api: new ApiClient({ baseUrl, session, tracing }) };
   });
 
   useEffect(() => { void value.session.initialize(); }, [value]);
