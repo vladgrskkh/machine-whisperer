@@ -379,6 +379,11 @@ Each sampled delivery attempt links to the sampled `telemetry.ingest` spans
 that accepted its readings. Jaeger retains spans for 24 hours in its own
 `jaeger-data` volume. The database backup and restore procedures exclude it.
 
+Expand a database client span to inspect `db.query.text` on reviewed queries.
+PostgreSQL templates show placeholders such as `$1`, and ClickHouse history
+templates use typed placeholders such as `{machine_id:UUID}`. ClickHouse
+insert spans show the batch statement and its column list.
+
 `MW_NGINX_TRACE_SAMPLE_PERCENT` sets the edge rate as a whole percentage from
 0 to 100. `OTEL_TRACES_SAMPLER_ARG` sets the Go root rate from 0 to 1. Both
 default to 1% in production. Use `100` and `1` respectively on the disposable

@@ -86,6 +86,10 @@ func (r *Repository) FindTelemetryEvent(ctx context.Context, deviceID, eventID s
 	return [32]byte(hash), true, nil
 }
 
+// InsertTelemetryEventSQL is the reviewed template for recording the event identity.
+const InsertTelemetryEventSQL = `INSERT INTO telemetry_events (device_id,event_id,machine_id,observed_at,payload_hash,expires_at)
+		VALUES ($1,$2,$3,$4,$5,$6)`
+
 func (r *Repository) InsertTelemetryEvent(ctx context.Context, event telemetry.Event) error {
 	tx := transaction.FromContext(ctx)
 	if tx == nil {
@@ -94,8 +98,7 @@ func (r *Repository) InsertTelemetryEvent(ctx context.Context, event telemetry.E
 	observedAt := event.ObservedAt.UTC().Truncate(time.Microsecond)
 	_, err := tx.Exec(
 		ctx,
-		`INSERT INTO telemetry_events (device_id,event_id,machine_id,observed_at,payload_hash,expires_at)
-		VALUES ($1,$2,$3,$4,$5,$6)`,
+		InsertTelemetryEventSQL,
 		event.DeviceID,
 		event.EventID,
 		event.MachineID,

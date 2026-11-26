@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -67,8 +68,17 @@ func (failingRows) Close() error { return nil }
 
 func TestClickHouseClientSpansCoverBatchSendAndRowConsumption(t *testing.T) {
 	t.Parallel()
-	for _, operation := range []string{"INSERT", "SELECT"} {
-		t.Run(operation, func(t *testing.T) {
+	for _, tc := range []struct {
+		name, operation string
+		cursor          *domain.HistoryCursor
+	}{
+		{name: "insert", operation: "INSERT"},
+		{name: "history", operation: "SELECT"},
+		{name: "cursor", operation: "SELECT", cursor: &domain.HistoryCursor{
+			DeviceID: "secret-device", EventID: "secret-cursor-event", ObservedAt: time.Unix(1000000000, 0),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			recorder := tracetest.NewSpanRecorder()
 			provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
@@ -82,13 +92,13 @@ func TestClickHouseClientSpansCoverBatchSendAndRowConsumption(t *testing.T) {
 			conn := &nativeConn{t: t, recorder: recorder, err: errors.New("sensitive SQL or bound value")}
 			registry := metrics.New()
 			repo := clickhouse.NewRepository(conn, registry, adapterTracer)
-			if operation == "INSERT" {
+			if tc.operation == "INSERT" {
 				err := telemetry.NewIngestBatch(repo, registry, slog.New(slog.DiscardHandler), useCaseTracer).
 					Execute(ctx, []domain.Event{{EventID: "secret-event"}})
 				require.ErrorIs(t, err, conn.err)
 			} else {
 				_, err := telemetry.NewListHistory(repo, useCaseTracer).Execute(ctx, domain.HistoryQuery{
-					MachineID: "secret-machine", Limit: 1,
+					MachineID: "secret-machine", Limit: 1, Cursor: tc.cursor,
 				})
 				require.ErrorIs(t, err, conn.err)
 			}
@@ -101,16 +111,23 @@ func TestClickHouseClientSpansCoverBatchSendAndRowConsumption(t *testing.T) {
 			assert.Equal(t, useCaseSpan.SpanContext(), clientSpan.Parent())
 			assert.Equal(t, parent.SpanContext(), useCaseSpan.Parent())
 			assert.Equal(t, conn.dbSpan, clientSpan.SpanContext())
-			assert.Equal(t, operation+" telemetry_events", clientSpan.Name())
+			assert.Equal(t, tc.operation+" telemetry_events", clientSpan.Name())
 			wantUseCase := "telemetry.batch.ingest"
-			if operation == "SELECT" {
+			if tc.operation == "SELECT" {
 				wantUseCase = "telemetry.history.list"
+				assert.Contains(t, conn.statement, "{machine_id:UUID}")
+				assert.Contains(t, conn.statement, "{limit:UInt64}")
+				if tc.cursor != nil {
+					assert.Contains(t, conn.statement, "{device_id:UUID}")
+					assert.Contains(t, conn.statement, "{event_id:UUID}")
+				}
 			}
 			assert.Equal(t, wantUseCase, useCaseSpan.Name())
 			assert.Equal(t, map[string]any{
-				"db.system.name": "clickhouse", "db.operation.name": operation, "error.type": "database_error",
-				"db.query.summary": operation + " telemetry_events",
+				"db.system.name": "clickhouse", "db.operation.name": tc.operation, "error.type": "database_error",
+				"db.query.summary": tc.operation + " telemetry_events", "db.query.text": conn.statement,
 			}, databaseAttributes(clientSpan))
+			assert.NotContains(t, conn.statement, "secret-")
 			assert.Equal(t, map[string]any{"error.type": "internal"}, databaseAttributes(useCaseSpan))
 			for _, span := range spans {
 				assert.Equal(t, codes.Error, span.Status().Code)
@@ -124,25 +141,31 @@ func TestClickHouseClientSpansCoverBatchSendAndRowConsumption(t *testing.T) {
 type nativeConn struct {
 	ch.Conn
 
-	t        *testing.T
-	recorder *tracetest.SpanRecorder
-	dbSpan   trace.SpanContext
-	err      error
+	t         *testing.T
+	recorder  *tracetest.SpanRecorder
+	dbSpan    trace.SpanContext
+	err       error
+	statement string
 }
 
-func (c *nativeConn) PrepareBatch(ctx context.Context, _ string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
-	c.capture(ctx)
+func (c *nativeConn) PrepareBatch(
+	ctx context.Context,
+	statement string,
+	_ ...driver.PrepareBatchOption,
+) (driver.Batch, error) {
+	c.capture(ctx, statement)
 	return nativeBatch{conn: c}, nil
 }
 
-func (c *nativeConn) Query(ctx context.Context, _ string, _ ...any) (driver.Rows, error) {
-	c.capture(ctx)
+func (c *nativeConn) Query(ctx context.Context, statement string, _ ...any) (driver.Rows, error) {
+	c.capture(ctx, statement)
 	return nativeRows{conn: c}, nil
 }
 
-func (c *nativeConn) capture(ctx context.Context) {
+func (c *nativeConn) capture(ctx context.Context, statement string) {
 	c.t.Helper()
 	c.dbSpan = trace.SpanContextFromContext(ctx)
+	c.statement = statement
 	assert.ErrorIs(c.t, ctx.Err(), context.Canceled)
 	assert.Empty(c.t, c.recorder.Ended())
 }

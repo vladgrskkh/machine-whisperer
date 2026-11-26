@@ -973,11 +973,14 @@ class DeploymentEndToEndTest(unittest.TestCase):
             for parent, child in zip(spans, spans[1:]):
                 self.assertEqual(child.get("parentSpanId"), parent["spanId"], child["name"])
 
-        def assert_db_span(spans, system, ancestor, operation):
+        def assert_db_span(spans, system, ancestor, operation, *query_fragments):
             indexed = {span["spanId"]: span for span in spans}
             for span in spans:
                 attrs = string_attributes(span)
                 if attrs.get("db.system.name") != system or attrs.get("db.operation.name") != operation:
+                    continue
+                statement = attrs.get("db.query.text") or ""
+                if not all(fragment in statement for fragment in query_fragments):
                     continue
                 parent = indexed.get(span.get("parentSpanId"))
                 visited = set()
@@ -987,7 +990,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
                         return
                     visited.add(parent["spanId"])
                     parent = indexed.get(parent.get("parentSpanId"))
-            self.fail(f"No {system} {operation} client span under {ancestor['name']}")
+            self.fail(f"No {system} {operation} client span with the expected SQL under {ancestor['name']}")
 
         edge = span_named(history, "nginx", "proxy /v1/")
         app = span_named(history, "api", HISTORY)
@@ -998,12 +1001,15 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertNotEqual(edge["traceId"], spoof_id)
         self.assertEqual(query.get(spoof_id), [])
         assert_chain(edge, app, history_use_case, span_named(history, "api", "GET"), analytics)
-        assert_db_span(history, "postgresql", history_use_case, "SELECT")
-        assert_db_span(history, "clickhouse", analytics, "SELECT")
+        assert_db_span(history, "postgresql", history_use_case, "SELECT",
+                       "FROM machines WHERE owner_user_id=$1 AND id=$2")
+        assert_db_span(history, "clickhouse", analytics, "SELECT",
+                       "FROM telemetry_events FINAL WHERE machine_id = {machine_id:UUID}", "LIMIT {limit:UInt64}")
 
         producer = span_named(acceptance, "api", "telemetry.ingest")
         assert_chain(span_named(acceptance, "nginx", "proxy /v1/"), span_named(acceptance, "api", f"POST {INGEST}"), producer)
-        assert_db_span(acceptance, "postgresql", producer, "INSERT")
+        assert_db_span(acceptance, "postgresql", producer, "INSERT",
+                       "INSERT INTO telemetry_events", "VALUES ($1,$2,$3,$4,$5,$6)")
         worker = span_named(delivery, "api", "outbox.deliver")
         self.assertFalse(worker.get("parentSpanId"))
         self.assertNotEqual(worker["traceId"], producer["traceId"])
@@ -1016,12 +1022,15 @@ class DeploymentEndToEndTest(unittest.TestCase):
         batch = span_named(delivery, "api", "outbox.batch.deliver")
         receiver = span_named(delivery, "analytics", ANALYTICS_INGEST)
         assert_chain(worker, batch, span_named(delivery, "api", "POST"), receiver)
-        assert_db_span(delivery, "clickhouse", receiver, "INSERT")
-        assert_db_span(delivery, "postgresql", batch, "UPDATE")
+        assert_db_span(delivery, "clickhouse", receiver, "INSERT",
+                       "INSERT INTO telemetry_events", "(schema_version, event_id, device_id, machine_id")
+        assert_db_span(delivery, "postgresql", batch, "UPDATE",
+                       "UPDATE telemetry_outbox", "o.lease_token=$1", "unnest($2::text[]::uuid[],$3::text[]::uuid[])")
 
         stored = json.dumps(history + acceptance + delivery)
         for value in (canary, *private_ids, self.owner_token, self.device_key, "http.target", "http.user_agent",
-                      "url.full", "url.query", "db.query.text", "db.statement", "exception.message"):
+                      "url.full", "url.query", "db.query.parameter", "pgx.query.parameters",
+                      "db.statement", "exception.message"):
             self.assertTrue(value not in stored, "Unexpected private value or field in recorded spans")
         for span in history + acceptance + delivery:
             self.assertEqual(string_attributes(span["resource"])["service.namespace"], "machine-whisperer")

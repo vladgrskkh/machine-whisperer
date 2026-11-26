@@ -19,11 +19,12 @@ import (
 
 func TestPostgresQueryTracerEmitsBoundedClientSpans(t *testing.T) {
 	t.Parallel()
+	const reviewedStatement = "SELECT id FROM machines WHERE id=$1"
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
 	tracer := provider.Tracer("test.postgres")
-	queryTracer := tracing.NewPostgresTracer(tracer)
+	queryTracer := tracing.NewPostgresTracer(provider, reviewedStatement)
 	ctx, parent := tracer.Start(t.Context(), "parent")
 	defer parent.End()
 
@@ -31,6 +32,8 @@ func TestPostgresQueryTracerEmitsBoundedClientSpans(t *testing.T) {
 		sql, commandTag, operation, errorType string
 		err                                   error
 	}{
+		{sql: reviewedStatement, operation: "SELECT"},
+		{sql: reviewedStatement + " AND name='sensitive literal'", operation: "SELECT"},
 		{sql: " select sensitive_value FROM users WHERE email=$1", operation: "SELECT"},
 		{sql: "WITH sensitive_query AS (SELECT $1) UPDATE users SET secret=$1", commandTag: "UPDATE 1", operation: "UPDATE"},
 		{sql: "COPY sensitive_table FROM STDIN", operation: "QUERY"},
@@ -50,18 +53,22 @@ func TestPostgresQueryTracerEmitsBoundedClientSpans(t *testing.T) {
 	queryTracer.TraceQueryEnd(queryCtx, nil, pgx.TraceQueryEndData{})
 
 	spans := recorder.Ended()
-	want := []struct{ operation, errorType string }{
-		{"SELECT", ""}, {"UPDATE", ""}, {"QUERY", ""}, {"INSERT", "database_error"}, {"UPDATE", "canceled"},
+	want := []struct{ operation, errorType, queryText string }{
+		{"SELECT", "", reviewedStatement}, {"SELECT", "", ""}, {"SELECT", "", ""},
+		{"UPDATE", "", ""}, {"QUERY", "", ""}, {"INSERT", "database_error", ""}, {"UPDATE", "canceled", ""},
 	}
 	require.Len(t, spans, len(want))
 	for i, span := range spans {
 		assert.Equal(t, want[i].operation, span.Name())
 		assert.Equal(t, trace.SpanKindClient, span.SpanKind())
 		assert.Equal(t, parent.SpanContext(), span.Parent())
-		assert.Equal(t, "test.postgres", span.InstrumentationScope().Name)
+		assert.Equal(t, "github.com/exaring/otelpgx", span.InstrumentationScope().Name)
 		assert.Empty(t, span.Events())
 		assert.Empty(t, span.Status().Description)
 		attrs := map[string]any{"db.system.name": "postgresql", "db.operation.name": want[i].operation}
+		if want[i].queryText != "" {
+			attrs["db.query.text"] = want[i].queryText
+		}
 		if want[i].errorType != "" {
 			attrs["error.type"] = want[i].errorType
 			assert.Equal(t, codes.Error, span.Status().Code)
@@ -74,4 +81,43 @@ func TestPostgresQueryTracerEmitsBoundedClientSpans(t *testing.T) {
 		}
 		assert.Equal(t, attrs, got)
 	}
+}
+
+func TestPostgresQueryTracerScopesNestedSpanEnds(t *testing.T) {
+	t.Parallel()
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+	queryTracer := tracing.NewPostgresTracer(provider)
+	ctx, parent := provider.Tracer("test").Start(t.Context(), "request")
+	defer parent.End()
+
+	query := pgx.TraceQueryStartData{SQL: "SELECT 1"}
+	outer := queryTracer.TraceQueryStart(ctx, nil, query)
+	outerSpan := trace.SpanContextFromContext(outer)
+	inner := queryTracer.TraceQueryStart(outer, nil, query)
+	queryTracer.TraceQueryEnd(inner, nil, pgx.TraceQueryEndData{})
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	assert.Equal(t, trace.SpanContextFromContext(inner), spans[0].SpanContext())
+	assert.Equal(t, outerSpan, spans[0].Parent())
+
+	for _, tc := range []struct {
+		name   string
+		parent trace.SpanContext
+	}{
+		{name: "non-recording sampled parent", parent: outerSpan},
+		{name: "unsampled parent", parent: outerSpan.WithTraceFlags(0)},
+		{name: "invalid parent"},
+	} {
+		nested := queryTracer.TraceQueryStart(trace.ContextWithSpanContext(outer, tc.parent), nil, query)
+		queryTracer.TraceQueryEnd(nested, nil, pgx.TraceQueryEndData{Err: context.Canceled})
+		require.Len(t, recorder.Ended(), 1, tc.name)
+	}
+
+	queryTracer.TraceQueryEnd(outer, nil, pgx.TraceQueryEndData{})
+	spans = recorder.Ended()
+	require.Len(t, spans, 2)
+	assert.Equal(t, outerSpan, spans[1].SpanContext())
+	assert.Equal(t, codes.Unset, spans[1].Status().Code)
 }

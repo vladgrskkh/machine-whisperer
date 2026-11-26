@@ -83,13 +83,16 @@ func (r *Outbox) ClaimBatch(
 	return token.String(), events, nil
 }
 
-func (r *Outbox) MarkDelivered(ctx context.Context, leaseToken string, keys []telemetry.EventKey) (int64, error) {
-	devices, events := outboxKeyArrays(keys)
-	tag, err := r.pool.Exec(ctx, `UPDATE telemetry_outbox AS o
+// MarkDeliveredSQL is the reviewed template for acknowledging an outbox batch.
+const MarkDeliveredSQL = `UPDATE telemetry_outbox AS o
 		SET delivered_at=statement_timestamp(),lease_token=NULL,lease_until=NULL,last_error_category=NULL
 		FROM unnest($2::text[]::uuid[],$3::text[]::uuid[]) AS keys(device_id,event_id)
 		WHERE (o.device_id,o.event_id)=(keys.device_id,keys.event_id) AND o.lease_token=$1
-		  AND o.delivered_at IS NULL AND o.lease_until > statement_timestamp()`, leaseToken, devices, events)
+		  AND o.delivered_at IS NULL AND o.lease_until > statement_timestamp()`
+
+func (r *Outbox) MarkDelivered(ctx context.Context, leaseToken string, keys []telemetry.EventKey) (int64, error) {
+	devices, events := outboxKeyArrays(keys)
+	tag, err := r.pool.Exec(ctx, MarkDeliveredSQL, leaseToken, devices, events)
 	if err != nil {
 		return 0, fmt.Errorf("mark outbox rows delivered: %w", err)
 	}

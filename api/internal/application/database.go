@@ -8,6 +8,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	machinepostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/machine/postgres"
+	telemetrypostgres "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/telemetry/postgres"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
 )
 
@@ -42,7 +44,12 @@ func (a *Application) setupDatabase(ctx context.Context) error {
 	if a.databaseConfig == nil {
 		return errors.New("database pool is required")
 	}
-	tracer := tracing.NewPostgresTracer(a.tracerProvider.Tracer(instrumentationScope + "infrastructure/tracing"))
+	tracer := tracing.NewPostgresTracer(
+		a.tracerProvider,
+		machinepostgres.FindByOwnerSQL,
+		telemetrypostgres.InsertTelemetryEventSQL,
+		telemetrypostgres.MarkDeliveredSQL,
+	)
 	pool, err := newPool(ctx, a.databaseConfig.URL, tracer)
 	if err != nil {
 		return err
