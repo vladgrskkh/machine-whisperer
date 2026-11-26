@@ -27,8 +27,9 @@ func TestApplicationTracesPostgresInSignup(t *testing.T) {
 	recorder := tracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	t.Cleanup(func() { assert.NoError(t, provider.Shutdown(context.WithoutCancel(t.Context()))) })
+	pool := testutil.Postgres(t).Config()
 	cfg := testfixture.AuthConfig(t)
-	cfg.Database.URL = testutil.Postgres(t).Config().ConnString()
+	cfg.Database.URL = pool.ConnString()
 	app, err := application.New(t.Context(), cfg,
 		application.WithDatabase(cfg.Database),
 		application.WithTracing(provider, propagation.TraceContext{}),
@@ -43,6 +44,7 @@ func TestApplicationTracesPostgresInSignup(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
+	seen := len(recorder.Ended())
 	for index, status := range []int{http.StatusCreated, http.StatusConflict} {
 		response, err := server.Client().Post(server.URL+"/v1/auth/signup", "application/json",
 			strings.NewReader(`{"email":"private@example.com","password":"private signup password"}`))
@@ -51,29 +53,73 @@ func TestApplicationTracesPostgresInSignup(t *testing.T) {
 		<-handled
 		require.Equal(t, status, response.StatusCode)
 
-		spans := recorder.Ended()
-		require.Len(t, spans, (index+1)*3)
-		query, signup, request := spans[index*3], spans[index*3+1], spans[index*3+2]
-		assert.Equal(t, "INSERT", query.Name())
+		ended := recorder.Ended()
+		spans := ended[seen:]
+		seen = len(ended)
+		query, prepare := signupDatabaseSpans(t, spans)
+		signup := findSpanByName(t, spans, "auth.signup")
+		request := findSpanByName(t, spans, "POST /v1/auth/signup")
 		assert.Equal(t, trace.SpanKindClient, query.SpanKind())
 		assert.Equal(t, signup.SpanContext(), query.Parent())
-		assert.Equal(t, "auth.signup", signup.Name())
 		assert.Equal(t, request.SpanContext(), signup.Parent())
 		assert.Equal(t, codes.Unset, signup.Status().Code)
-		assert.Equal(t, "POST /v1/auth/signup", request.Name())
-		assert.Empty(t, query.Events())
-		assert.Empty(t, query.Status().Description)
-		want := map[string]any{"db.system.name": "postgresql", "db.operation.name": "INSERT"}
+		assert.Equal(t, "github.com/exaring/otelpgx", query.InstrumentationScope().Name)
+		if index == 0 {
+			require.NotNil(t, prepare)
+			assert.Equal(t, query.SpanContext(), prepare.Parent())
+		}
+		attrs := databaseSpanAttributes(query)
+		assert.Equal(t, "postgresql", attrs["db.system.name"])
+		assert.Equal(t, "INSERT", attrs["db.operation.name"])
+		assert.Equal(t, pool.ConnConfig.Host, attrs["server.address"])
+		assert.Equal(t, int64(pool.ConnConfig.Port), attrs["server.port"])
+		assert.Equal(t, pool.ConnConfig.Database, attrs["db.namespace"])
+		assert.Equal(t, pool.ConnConfig.User, attrs["user.name"])
+		assert.NotContains(t, attrs, "pgx.query.parameters")
 		if status == http.StatusConflict {
-			want["error.type"] = "database_error"
 			assert.Equal(t, codes.Error, query.Status().Code)
+			assert.Equal(t, "23505", attrs["pgx.sql_state"])
 		} else {
 			assert.Equal(t, codes.Unset, query.Status().Code)
+			assert.Equal(t, int64(1), attrs["pgx.rows_affected"])
 		}
-		got := make(map[string]any)
-		for _, attr := range query.Attributes() {
-			got[string(attr.Key)] = attr.Value.AsInterface()
-		}
-		assert.Equal(t, want, got)
 	}
+}
+
+func signupDatabaseSpans(t *testing.T, spans []sdktrace.ReadOnlySpan) (sdktrace.ReadOnlySpan, sdktrace.ReadOnlySpan) {
+	t.Helper()
+	const signupSQL = "INSERT INTO users (id,email,password_hash) VALUES ($1,$2,$3) RETURNING id::text,email,created_at"
+	var query, prepare sdktrace.ReadOnlySpan
+	for _, span := range spans {
+		attrs := databaseSpanAttributes(span)
+		if attrs["db.query.text"] != signupSQL {
+			continue
+		}
+		if _, prepared := attrs["pgx.prepare_stmt.name"]; prepared {
+			prepare = span
+		} else {
+			query = span
+		}
+	}
+	require.NotNil(t, query, "signup query span with bound placeholders")
+	return query, prepare
+}
+
+func findSpanByName(t *testing.T, spans []sdktrace.ReadOnlySpan, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	for _, span := range spans {
+		if span.Name() == name {
+			return span
+		}
+	}
+	t.Fatalf("missing %s span", name)
+	return nil
+}
+
+func databaseSpanAttributes(span sdktrace.ReadOnlySpan) map[string]any {
+	attrs := make(map[string]any)
+	for _, attr := range span.Attributes() {
+		attrs[string(attr.Key)] = attr.Value.AsInterface()
+	}
+	return attrs
 }

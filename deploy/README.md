@@ -379,10 +379,13 @@ Each sampled delivery attempt links to the sampled `telemetry.ingest` spans
 that accepted its readings. Jaeger retains spans for 24 hours in its own
 `jaeger-data` volume. The database backup and restore procedures exclude it.
 
-Expand a database client span to inspect `db.query.text` on reviewed queries.
-PostgreSQL templates show placeholders such as `$1`, and ClickHouse history
-templates use typed placeholders such as `{machine_id:UUID}`. ClickHouse
-insert spans show the batch statement and its column list.
+Expand a database client span to inspect `db.query.text`. PostgreSQL uses
+`otelpgx` to trace query execution and preparation, with placeholders such as
+`$1`. Its client spans can include the database host, port, namespace, role,
+rows affected, and SQLSTATE. ClickHouse history uses typed placeholders such
+as `{machine_id:UUID}`, and insert spans show the batch statement and column
+list. Parameter capture is disabled. The Collector clears raw database
+exception events and status messages before exporting to Jaeger.
 
 `MW_NGINX_TRACE_SAMPLE_PERCENT` sets the edge rate as a whole percentage from
 0 to 100. `OTEL_TRACES_SAMPLER_ARG` sets the Go root rate from 0 to 1. Both

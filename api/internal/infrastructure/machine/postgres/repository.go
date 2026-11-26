@@ -14,10 +14,6 @@ import (
 	transaction "github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/transaction/postgres"
 )
 
-// FindByOwnerSQL is the reviewed template for the owner-scoped machine lookup.
-const FindByOwnerSQL = `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
-		FROM machines WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL`
-
 var errTransactionRequired = errors.New("machine baseline write requires a transaction")
 
 type Repository struct{ pool *pgxpool.Pool }
@@ -87,7 +83,10 @@ func (r *Repository) FindByOwner(ctx context.Context, ownerUserID, machineID str
 	if tx := transaction.FromContext(ctx); tx != nil {
 		queryRow = tx.QueryRow
 	}
-	value, err := scanMachine(queryRow(ctx, FindByOwnerSQL, ownerUserID, machineID))
+	value, err := scanMachine(
+		queryRow(ctx, `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
+		FROM machines WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL`, ownerUserID, machineID),
+	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return machine.Machine{}, machine.ErrNotFound
 	}
