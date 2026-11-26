@@ -40,13 +40,15 @@ phone before distributing a native build.
 
 ## Signed Android APK
 
-The **Android APK** workflow builds a standalone app for
-`https://onerep.mooo.com`. Pull requests that change the mobile build verify an
-APK with a disposable key.
+Pushing a [`release-X.Y.Z` tag](../deploy/README.md#docker-hub-images) starts the
+release CI run. After the checks pass, CI builds and signs the standalone APK
+for `https://onerep.mooo.com` from the tagged commit. Pull requests and pushes to
+`main` run the mobile lint, type, test, and export checks.
 
 Before the first release build, create the GitHub Actions environment
-`android-apk-release` in repository settings. Set its deployment branch rule to
-allow only the `main` branch.
+`android-apk-release` in repository settings. Under **Selected branches and tags**,
+add a **Tag** rule for `release-*`. Remove the former `main` branch rule when the
+tag workflow lands.
 
 Updates to `com.machinewhisperer.app` require the same signing key. Reuse the
 existing key if the app has already been distributed. For a first release, set
@@ -75,9 +77,10 @@ printf '%s' machine-whisperer | gh secret set ANDROID_KEY_ALIAS --env android-ap
 gh secret set ANDROID_KEY_PASSWORD --env android-apk-release < "$signing_dir/keystore-password.txt"
 ```
 
-1. In GitHub, open **Actions → Android APK → Run workflow** and select `main`.
-2. Open the completed run and download the **machine-whisperer-android**
-   artifact for that commit. Extract the ZIP and run `sha256sum -c *.apk.sha256`
-   (or `shasum -a 256 -c *.apk.sha256` on macOS).
+1. In GitHub, open **Actions → CI** and select the completed run for the release
+   tag.
+2. Under **Artifacts**, download **machine-whisperer-android-`<commit>`**.
+   Extract the ZIP and run `sha256sum -c *.apk.sha256` (or
+   `shasum -a 256 -c *.apk.sha256` on macOS).
 3. Open the APK on the phone and allow installs from the app that opened it if
    Android prompts you. Launch Machine Whisperer and sign in to check the build.

@@ -3,9 +3,9 @@
 ## Prerequisites
 
 Use an x86-64 Linux host with Docker Engine 28.2 or newer, the Docker Compose v2
-plugin, Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands
-from the monorepo root on the Docker host. The operator account needs Docker
-access and access to the secret files. The supported Engine versions keep
+plugin, Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run deployment
+commands from the monorepo root on the Docker host. The operator account needs
+Docker access and access to the secret files. The supported Engine versions keep
 localhost-published ports off the local network.
 [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
 
@@ -26,33 +26,63 @@ on port 80 during both issuance and renewal.
 
 ## Docker Hub images
 
-After all checks pass on a push to `main`, GitHub Actions publishes
-`machine-whisperer-api` and `machine-whisperer-analytics` to Docker Hub.
-In GitHub Settings → Environments, use the `dockerhub-publish` environment
-with the deployment branch rule allowing only `main`. Add environment secrets
-`DOCKERHUB_PUBLISH_USERNAME` (publishing account) and `DOCKERHUB_PUBLISH_TOKEN`
-(write token). After adding them, delete the old `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN` repository secrets. Keep the new names exclusive to this
-environment. Use the optional Actions variable `DOCKERHUB_NAMESPACE` for an
-organization. It defaults to the publishing username.
+### Publish a release
 
-Before the first release, open **Settings → General → Tag mutability** on
-both Docker Hub repositories. Select **Specific tags are immutable** and
-save `^sha-[0-9a-f]{40}$`. On a rerun, CI reuses an existing commit image.
-After both images are available, a serialized job promotes their SHA tags to
-`latest` if the commit is still the head of `main`. Use the SHA tag for
-production and recovery. `latest` is a convenience alias updated separately
-on each repository. [Docker Hub immutable tags](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/)
+Once the release workflow is on `main`, tag the commit you want to ship.
+Run these commands from your local clone to release the current `main` commit
+as `release-0.1.0`. Use a new `release-X.Y.Z` tag for each version.
+For the first release, [set up the registry](#set-up-the-registry-once) before
+pushing the tag.
 
-Public images can be pulled anonymously. For private images, configure a
-Docker credential store for the VPS operator, run
-`docker login --username YOUR_PULL_USERNAME`, and enter a separate read-only
-pull token at the password prompt. Keep registry tokens in their respective
-credential stores. The VPS generates its application credentials with
-`prepare-secrets.sh`. Keep both registry tokens out of `deploy/.env.server`
-and the application secret files.
+```bash
+git fetch origin main &&
+    git tag -a release-0.1.0 FETCH_HEAD -m 'Release 0.1.0' &&
+    git push origin refs/tags/release-0.1.0
+```
+
+In **Actions → CI**, open the run for `release-0.1.0` and wait for `publish`
+and `promote` to pass. `publish` builds or reuses the `sha-<commit>` images for
+`machine-whisperer-api` and `machine-whisperer-analytics`. `promote` adds the
+`release-0.1.0` tags to both images and updates `latest` for the highest
+release version. The VPS uses `sha-<commit>` to match its Git checkout for
+deployments and recovery. Once the images are published, [deploy that
+tag](#deploy-a-release). For the signed APK from the same run, see
+[Signed Android APK](../mobile/README.md#signed-android-apk).
+
+For a runner or registry failure, fix the cause and rerun the failed jobs.
+Use a new tag for code fixes. Docker Hub updates `latest` separately for each
+image. A rerun for an older release can finish its version tags while leaving
+`latest` unchanged.
+
+### Set up the registry once
+
+1. In **GitHub Settings → Environments → dockerhub-publish**, allow the
+   `release-*` **Tag** under **Selected branches and tags**. Remove the former
+   `main` rule once the tag workflow is active. Add `DOCKERHUB_PUBLISH_USERNAME`
+   and `DOCKERHUB_PUBLISH_TOKEN` as environment secrets for the publishing
+   account and its write token. The optional Actions variable
+   `DOCKERHUB_NAMESPACE` selects a registry organization. It defaults to the
+   publishing username.
+2. For both Docker Hub repositories, open **Settings → General → Tag
+   mutability**, select **Specific tags are immutable**, and save
+   `^(sha-[0-9a-f]{40}|release-[0-9]+\.[0-9]+\.[0-9]+)$`.
+   [Docker Hub immutable tags](https://docs.docker.com/docker-hub/repos/manage/hub-images/immutable-tags/)
+3. For private images, configure a Docker credential store on the VPS, run
+   `docker login --username YOUR_PULL_USERNAME`, and enter a separate
+   read-only token at the prompt. Keep registry tokens in their credential
+   stores and application secrets in the directory from `prepare-secrets.sh`.
+
+Keep publishing credentials scoped to the `dockerhub-publish` environment.
+If you are migrating from repository secrets `DOCKERHUB_USERNAME` and
+`DOCKERHUB_TOKEN`, remove those legacy secrets after setting up the environment.
+
+A release tag runs workflow code from the tagged commit with publishing and
+signing access. If `main` has restricted write access, apply equivalent
+restrictions to release tag creation, updates, and deletion.
 
 ## First startup
+
+On the VPS, check out a published release tag before creating the env file.
 
 ```bash
 (umask 077; cp -n deploy/.env.server.example deploy/.env.server)
@@ -62,9 +92,8 @@ install -d -m 0755 deploy/acme-webroot
 ```
 
 Set `DOCKERHUB_NAMESPACE` in `deploy/.env.server` to the Docker Hub user or
-organization that owns both repositories. For every production deployment, check out the published
-commit and set `IMAGE_TAG` to `sha-` followed by its full 40-character Git SHA.
-The example value `latest` tracks the moving tag.
+organization that owns both repositories. Set `IMAGE_TAG` to `sha-` followed
+by the checked-out commit's full SHA from `git rev-parse HEAD`.
 
 Set `ACME_EMAIL` in `deploy/.env.server` to the operator's email address for
 the Let's Encrypt account. The default `DOMAIN` is `onerep.mooo.com`. Set it
@@ -109,6 +138,7 @@ restarts and upgrades.
 
 ```bash
 project=machine-whisperer
+unset IMAGE_TAG DOCKERHUB_NAMESPACE
 mw config --quiet
 mw pull
 mw up -d --no-build
@@ -443,28 +473,44 @@ docker run --rm --network none -v "$volume:/data:ro" --entrypoint du nginx:1.31.
 
 ## Upgrade and public TLS renewal
 
-Take a backup before changing releases. Check out the intended release commit
-or tag. If upgrading a checkout that used local builds, add
-`DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
-[First startup](#first-startup). The commands below pin both images to the
-checked-out commit and add any missing PostgreSQL exporter, Grafana, Jaeger,
-and Loki credentials. Set `secrets_dir` to the existing host directory
-configured by `MW_SECRETS_DIR`.
+### Deploy a release
+
+Wait for `publish` and `promote` to pass for the release tag. On the VPS, use
+the existing Compose project and the `mw` function from
+[First startup](#first-startup). Make sure `deploy/.env.server` sets
+`DOCKERHUB_NAMESPACE` and has one `IMAGE_TAG=...` line with no spaces around
+`=`. Then [back up the running stack](#back-up-the-volumes).
+
+Set `release_tag` to the tag that passed CI and `secrets_dir` to the existing
+directory configured by `MW_SECRETS_DIR`. This checks out the tagged source,
+pins both images to that commit, and creates any missing credentials.
 
 ```bash
-git fetch origin
-git checkout --detach RELEASE_COMMIT_OR_TAG
-sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
-secrets_dir=deploy/secrets
-deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
-deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
-deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
-deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --loki-only
-mw config --quiet
-mw pull
-mw up -d --no-build
-mw ps -a
-mw logs --tail=100 api-migrate analytics-migrate postgres-exporter-setup
+(
+    set -e
+    unset DOCKERHUB_NAMESPACE IMAGE_TAG
+    release_tag=release-0.1.0
+    secrets_dir=deploy/secrets
+    tag_assignment='^[[:space:]]*(export[[:space:]]+)?IMAGE_TAG[[:space:]]*[=:]'
+    if [[ $(grep -Ec "$tag_assignment" deploy/.env.server) != 1 ]] ||
+        ! grep -q '^IMAGE_TAG=' deploy/.env.server; then
+        printf '%s\n' 'Set IMAGE_TAG=... on one line in deploy/.env.server.' >&2
+        exit 1
+    fi
+    git fetch origin tag "$release_tag"
+    git switch --detach "refs/tags/$release_tag"
+    release_commit=$(git rev-parse HEAD)
+    sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$release_commit/" deploy/.env.server
+    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
+    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
+    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
+    deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --loki-only
+    mw config --quiet
+    mw pull
+    mw up -d --no-build
+    mw ps -a
+    mw logs --tail=100 api-migrate analytics-migrate postgres-exporter-setup
+)
 ```
 
 The credential commands preserve existing secrets. On the first upgrade
@@ -477,6 +523,9 @@ and keeps the existing metrics volume.
 Verify both migration exit codes and the exporter setup exit code. Check the
 public HTTPS API request, Grafana and Jaeger sign-in, and an authenticated
 Loki query after upgrading.
+
+### Renew public TLS
+
 Install the example systemd units after successful issuance. Set both paths
 in the service to the absolute location of a root-controlled deployment
 checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`
