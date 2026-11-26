@@ -560,8 +560,6 @@ class DeploymentEndToEndTest(unittest.TestCase):
         trace_id, span_id = fields["trace_id"], fields["span_id"]
         self.assertRegex(trace_id, r"^[0-9a-f]{32}$")
         self.assertRegex(span_id, r"^[0-9a-f]{16}$")
-        trace = eventually("the failure log's sampled trace in Jaeger", lambda: JaegerQuery(self.stack).get(trace_id))
-        self.assertEqual([service_name(span) for span in trace if span["spanId"] == span_id], ["api"])
         self.logged_trace_id = trace_id
         self.logged_trace_start = now
         edge = eventually(
@@ -572,7 +570,14 @@ class DeploymentEndToEndTest(unittest.TestCase):
         )
         self.assertRegex(edge[0]["stream"]["request_id"], r"^[0-9a-f]{32}$")
         edge_span_id = edge[0]["stream"]["span_id"]
-        self.assertEqual([service_name(span) for span in trace if span["spanId"] == edge_span_id], ["nginx"])
+        self.assertRegex(edge_span_id, r"^[0-9a-f]{16}$")
+        jaeger = JaegerQuery(self.stack)
+        expected_spans = {("api", span_id), ("nginx", edge_span_id)}
+
+        def found_spans():
+            return expected_spans <= {(service_name(span), span["spanId"]) for span in jaeger.get(trace_id)}
+
+        eventually("both logged span IDs in Jaeger", found_spans)
 
         # A real SQL error reaches Loki as a SQLSTATE and a fixed body.
         self.stack.compose("exec", "-T", "postgres", "psql", "-Xq", "-U", "machine_whisperer",
