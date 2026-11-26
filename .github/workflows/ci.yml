@@ -30,13 +30,25 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.percentage }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
-      - run: go test ./... -v -count=1 -race
+      - name: Run API unit tests
+        run: |
+          packages=$(bash ../.github/scripts/api-coverage-packages.sh)
+          go test ./... -v -count=1 -race -coverpkg="$packages" -coverprofile="$RUNNER_TEMP/api-unit-coverage.out"
+      - name: Export API unit coverage
+        id: coverage
+        continue-on-error: true
+        uses: ./.github/actions/go-coverage
+        with:
+          service: api
+          suite: unit
 
   build:
     runs-on: ubuntu-latest
@@ -57,10 +69,21 @@ jobs:
         with:
           go-version-file: api/go.mod
           cache-dependency-path: api/go.sum
-      - run: make test-integration
+      - name: Run API integration-tagged tests
+        run: |
+          packages=$(bash ../.github/scripts/api-coverage-packages.sh -tags=integration)
+          make test-integration GO_TEST_FLAGS="-coverpkg=$packages -coverprofile=$RUNNER_TEMP/api-integration-coverage.out"
+      - name: Export API integration coverage
+        continue-on-error: true
+        uses: ./.github/actions/go-coverage
+        with:
+          service: api
+          suite: integration
 
   analytics:
     runs-on: ubuntu-latest
+    outputs:
+      coverage: ${{ steps.coverage.outputs.percentage }}
     defaults:
       run:
         working-directory: analytics
@@ -70,12 +93,50 @@ jobs:
         with:
           go-version-file: analytics/go.mod
           cache-dependency-path: analytics/go.sum
-      - run: make build test test-integration
+      - run: make build
+      - name: Run Analytics unit tests
+        run: make test GO_TEST_FLAGS="-coverpkg=./cmd/...,./internal/... -coverprofile=$RUNNER_TEMP/analytics-unit-coverage.out"
+      - name: Export Analytics unit coverage
+        id: coverage
+        continue-on-error: true
+        uses: ./.github/actions/go-coverage
+        with:
+          service: analytics
+          suite: unit
+      - name: Run Analytics integration tests
+        run: make test-integration GO_TEST_FLAGS="-coverpkg=./internal/... -coverprofile=$RUNNER_TEMP/analytics-integration-coverage.out"
+      - name: Export Analytics integration coverage
+        continue-on-error: true
+        uses: ./.github/actions/go-coverage
+        with:
+          service: analytics
+          suite: integration
+          note: Integration coverage reflects the internal packages reached by this suite.
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.12.2
           working-directory: analytics
           args: --config ../api/.golangci.yml --build-tags=integration --timeout=5m
+
+  coverage-badges:
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.test.outputs.coverage != '' && needs.analytics.outputs.coverage != ''
+    needs: [test, analytics]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: coverage-badges
+      queue: max
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish unit coverage badges
+        working-directory: .
+        env:
+          API_COVERAGE: ${{ needs.test.outputs.coverage }}
+          ANALYTICS_COVERAGE: ${{ needs.analytics.outputs.coverage }}
+        run: bash .github/scripts/publish-go-coverage-badges.sh
 
   deployment:
     runs-on: ubuntu-latest

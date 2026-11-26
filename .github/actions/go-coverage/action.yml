@@ -1,0 +1,56 @@
+name: Export Go coverage
+description: Summarize statement coverage and upload the native Go profile and HTML report
+
+inputs:
+  service:
+    description: Service directory
+    required: true
+  suite:
+    description: Test suite name
+    required: true
+  note:
+    description: Optional context for interpreting the coverage percentage
+
+outputs:
+  percentage:
+    description: Statement coverage percentage
+    value: ${{ steps.report.outputs.percentage }}
+
+runs:
+  using: composite
+  steps:
+    - name: Generate Go coverage report
+      id: report
+      shell: bash
+      working-directory: ${{ inputs.service }}
+      env:
+        SERVICE: ${{ inputs.service }}
+        SUITE: ${{ inputs.suite }}
+        NOTE: ${{ inputs.note }}
+      run: |
+        profile="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.out"
+        report="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.html"
+        percentage=$(go tool cover -func="$profile" | awk '$1 == "total:" { print $NF }')
+        if [[ ! "$percentage" =~ ^[0-9]+(\.[0-9]+)?%$ ]]; then
+          echo "::error::Could not read the Go statement coverage total from $profile"
+          exit 1
+        fi
+        printf 'percentage=%s\n' "$percentage" >> "$GITHUB_OUTPUT"
+        {
+          printf '| Service | Suite | Statement coverage |\n'
+          printf '| --- | --- | --- |\n'
+          printf '| %s | %s | %s |\n\n' "$SERVICE" "$SUITE" "$percentage"
+          if [[ -n "$NOTE" ]]; then
+            printf '%s\n\n' "$NOTE"
+          fi
+        } >> "$GITHUB_STEP_SUMMARY"
+        go tool cover -html="$profile" -o "$report"
+    - name: Upload Go coverage report
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.service }}-${{ inputs.suite }}-coverage
+        path: |
+          ${{ runner.temp }}/${{ inputs.service }}-${{ inputs.suite }}-coverage.out
+          ${{ runner.temp }}/${{ inputs.service }}-${{ inputs.suite }}-coverage.html
+        if-no-files-found: error
+        overwrite: true
