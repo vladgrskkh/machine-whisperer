@@ -150,7 +150,7 @@ func serve(ctx context.Context, address string) error {
 	if err != nil {
 		return err
 	}
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	traces, err := tracing.New(ctx, "api")
 	if err != nil {
 		return err
@@ -203,7 +203,7 @@ func main() {
 	err := serve(ctx, address)
 	stop()
 	if err != nil {
-		slog.New(slog.NewTextHandler(os.Stderr, nil)).Error("api stopped", "error", err)
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("api stopped", "error", err)
 		os.Exit(1)
 	}
 }

@@ -362,6 +362,60 @@ with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
+## Centralized service logs
+
+Sign in to Grafana and open **Explore** with the **Loki** data source. Select
+an incident time range and filter by `service_name` and `severity_text`.
+The **API ingest failures** dashboard in **Machine Whisperer** opens the
+saved query for rejected telemetry from requests that reach the ingest handler.
+
+```logql
+{service_name="api"} | severity_text="ERROR"
+{service_name="postgres"} | db_response_status_code="42P01"
+{service_name="nginx"} | request_id="<request ID from the log details>"
+```
+
+Expand a sample to find fields such as `http_response_status_code`,
+`failure_category` and `trace_id`. To follow a sampled event, copy its
+`trace_id` to `https://<DOMAIN>/jaeger/trace/<trace_id>` and sign in to
+Jaeger when prompted. Jaeger retains traces for 24 hours. Nginx generates
+request IDs locally. Both IDs are searchable metadata. `service_name` is the
+only stream label.
+
+Docker forwards logs for API, Analytics, Nginx, PostgreSQL and ClickHouse to
+the Collector at `127.0.0.1:24224`. Set `MW_FLUENT_FORWARD_PORT` in the Compose
+env file if the host port is in use. The Collector processes the ordinary
+Docker log records locally and sends allowlisted fields and fixed message text
+to Loki using native OTLP/HTTP. Native error text, request paths and bodies,
+credentials, and SQL query text and values are excluded from the centralized
+store. Loki listens on an internal storage network shared with the Collector
+and the query proxy. Grafana reaches only the proxy, which permits read-only
+queries and label discovery.
+
+Delivery is asynchronous. Each forwarding container uses a 256 KiB Docker
+ring buffer, a 1,024-record Fluentd buffer and a rotated local cache with two
+5 MB files before compression. Use `mw logs --since=30m api nginx` to read
+its local cache. Delivery can drop logs when buffers fill or retry limits are
+reached. The Collector, Loki and Grafana use the default Docker log driver,
+which keeps their own output out of the forwarding path.
+[Docker Fluentd driver](https://docs.docker.com/engine/logging/drivers/fluentd/) ·
+[Docker dual logging](https://docs.docker.com/engine/logging/dual-logging/)
+
+Loki keeps seven days in `loki-data`, with a 256 MiB container memory ceiling
+and a 160 MiB Go runtime target. WAL replay has a 64 MB memory ceiling. On a 3.8 GiB disposable Docker host, 40,000
+synthetic records across the five services increased the volume from 140 KiB
+to 5.4 MiB including the WAL and a forced flush. Sampled memory peaked near
+100 MiB for Loki and 78 MiB for the Collector. Use 2 GiB as the initial disk
+budget for Loki and compare against a representative day of traffic before
+increasing retention. The age-based compactor deletes asynchronously. The
+backup and restore procedures exclude `loki-data`.
+
+```bash
+mw stats --no-stream loki otel-collector
+volume=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/loki"}}{{.Name}}{{end}}{{end}}' "$(mw ps -q loki)")
+docker run --rm --network none -v "$volume:/data:ro" --entrypoint du nginx:1.31.10-alpine3.24-slim -sh /data
+```
+
 ## Upgrade and public TLS renewal
 
 Take a backup before changing releases. Check out the intended release commit

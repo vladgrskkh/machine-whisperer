@@ -86,8 +86,9 @@ func (a *Application) Routes() http.Handler {
 	deviceTelemetry := router.With(
 		middleware.NoStore, middleware.DeviceToken(a.deviceAuth), middleware.RequireRole(device.RoleTelemetryWriter),
 	)
-	deviceTelemetry.Post("/v1/devices/me/telemetry", telemetry.NewDeviceIngest(a.ingestTelemetry).ServeHTTP)
-	deviceTelemetry.Post("/v1/machines/{machine_id}/telemetry", telemetry.NewIngest(a.ingestTelemetry).ServeHTTP)
+	deviceTelemetry.Post("/v1/devices/me/telemetry", telemetry.NewDeviceIngest(a.ingestTelemetry, a.logger).ServeHTTP)
+	deviceTelemetry.Post("/v1/machines/{machine_id}/telemetry",
+		telemetry.NewIngest(a.ingestTelemetry, a.logger).ServeHTTP)
 
 	return router
 }

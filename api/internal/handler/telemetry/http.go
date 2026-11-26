@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/telemetry"
@@ -50,8 +52,8 @@ type Ingester interface {
 // @Header 401 {string} WWW-Authenticate "Bearer"
 // @Deprecated
 // @Router /v1/machines/{machine_id}/telemetry [post]
-func NewIngest(usecase Ingester) http.Handler {
-	return newIngest(usecase, true)
+func NewIngest(usecase Ingester, logger *slog.Logger) http.Handler {
+	return newIngest(usecase, logger, true)
 }
 
 // NewDeviceIngest handles ingestion using the device's machine binding.
@@ -78,11 +80,11 @@ func NewIngest(usecase Ingester) http.Handler {
 // @Header all {string} Cache-Control "Always no-store."
 // @Header 401 {string} WWW-Authenticate "Bearer"
 // @Router /v1/devices/me/telemetry [post]
-func NewDeviceIngest(usecase Ingester) http.Handler {
-	return newIngest(usecase, false)
+func NewDeviceIngest(usecase Ingester, logger *slog.Logger) http.Handler {
+	return newIngest(usecase, logger, false)
 }
 
-func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
+func newIngest(usecase Ingester, logger *slog.Logger, machineIDFromPath bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		deviceID, assignedMachineID, ok := middleware.DeviceBinding(r.Context())
 		if !ok {
@@ -93,6 +95,7 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 		if machineIDFromPath {
 			parsedMachineID, err := handler.ParseUUID(chi.URLParam(r, "machine_id"))
 			if err != nil {
+				logIngestFailure(r.Context(), logger, http.StatusBadRequest, "invalid_input")
 				handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid machine ID")
 				return
 			}
@@ -104,12 +107,15 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 		}
 		switch {
 		case errors.Is(err, handler.ErrInvalidBody), errors.Is(err, telemetryusecase.ErrInvalidObservation):
+			logIngestFailure(r.Context(), logger, http.StatusBadRequest, "invalid_input")
 			handler.Error(w, http.StatusBadRequest, "invalid_input", "Invalid telemetry observation")
 		case errors.Is(err, machine.ErrNotFound):
+			logIngestFailure(r.Context(), logger, http.StatusNotFound, "machine_not_found")
 			handler.Error(w, http.StatusNotFound, "machine_not_found", "Machine not found")
 		case errors.Is(err, telemetry.ErrEventConflict),
 			errors.Is(err, telemetryusecase.ErrObservationWindow),
 			errors.Is(err, telemetryusecase.ErrObservationOrder):
+			logIngestFailure(r.Context(), logger, http.StatusConflict, conflictCategory(err))
 			handler.Error(
 				w,
 				http.StatusConflict,
@@ -117,11 +123,35 @@ func newIngest(usecase Ingester, machineIDFromPath bool) http.Handler {
 				"Telemetry observation conflicts with acceptance rules",
 			)
 		case err != nil:
+			logIngestFailure(r.Context(), logger, http.StatusInternalServerError, "internal_error")
 			handler.InternalError(w)
 		default:
 			w.WriteHeader(http.StatusAccepted)
 		}
 	})
+}
+
+func conflictCategory(err error) string {
+	switch {
+	case errors.Is(err, telemetryusecase.ErrObservationOrder):
+		return "out_of_order"
+	case errors.Is(err, telemetryusecase.ErrObservationWindow):
+		return "outside_window"
+	default:
+		return "event_conflict"
+	}
+}
+
+func logIngestFailure(ctx context.Context, logger *slog.Logger, status int, category string) {
+	level := slog.LevelWarn
+	if status == http.StatusInternalServerError {
+		level = slog.LevelError
+	}
+	attributes := []slog.Attr{slog.Int("http.response.status_code", status), slog.String("failure_category", category)}
+	if span := trace.SpanContextFromContext(ctx); span.IsValid() && span.IsSampled() {
+		attributes = append(attributes, slog.String("trace_id", span.TraceID().String()))
+	}
+	logger.LogAttrs(ctx, level, "telemetry ingest failed", attributes...)
 }
 
 func decodeObservation(body io.Reader) (telemetry.Observation, error) {

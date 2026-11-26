@@ -18,7 +18,7 @@ class ComposeConfigTest(unittest.TestCase):
         cls.services = cls.config["services"]
 
     @staticmethod
-    def compose_config(provisioning_cidr="", nginx_sampling="", app_sampling=""):
+    def compose_config(provisioning_cidr="", nginx_sampling="", app_sampling="", fluent_port=""):
         env = {
             **os.environ, "DOCKERHUB_NAMESPACE": "mw-fixture", "IMAGE_TAG": "sha-123abc",
             "DOMAIN": "fixture.test", "ACME_EMAIL": "fixture@example.invalid",
@@ -26,6 +26,7 @@ class ComposeConfigTest(unittest.TestCase):
             "MW_SECRETS_DIR": "./secrets", "MW_EDGE_SUBNET": "", "MW_PROXY_IP": "", "MW_API_IP": "",
             "MW_PROVISIONING_CIDR": provisioning_cidr,
             "MW_NGINX_TRACE_SAMPLE_PERCENT": nginx_sampling, "OTEL_TRACES_SAMPLER_ARG": app_sampling,
+            "MW_FLUENT_FORWARD_PORT": fluent_port,
         }
         result = run([
             "docker", "compose", "--env-file", ".env.server.example", "--profile", "certbot",
@@ -43,11 +44,12 @@ class ComposeConfigTest(unittest.TestCase):
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
             "grafana": {"grafana-proxy", "monitoring"},
-            "otel-collector": {"trace-edge", "trace-apps", "monitoring"}, "jaeger": {"monitoring", "jaeger-proxy"},
+            "otel-collector": {"trace-edge", "trace-apps", "monitoring", "log-store"}, "jaeger": {"monitoring", "jaeger-proxy"},
+            "loki": {"log-store"}, "loki-query-proxy": {"monitoring", "log-store"},
         }
         self.assertEqual(set(self.services), set(networks))
         for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy", "jaeger-proxy",
-                        "trace-edge", "trace-apps"):
+                        "trace-edge", "trace-apps", "log-store"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -62,7 +64,57 @@ class ComposeConfigTest(unittest.TestCase):
             ("nginx", "0.0.0.0", "80", 80), ("nginx", "0.0.0.0", "443", 443),
             ("prometheus", "127.0.0.1", "9090", 9090),
             ("jaeger", "127.0.0.1", "16686", 16686),
+            ("otel-collector", "127.0.0.1", "24224", 24224),
         })
+
+    def test_only_selected_services_forward_logs_and_keep_a_bounded_local_cache(self):
+        selected = {"api", "analytics", "nginx", "postgres", "clickhouse"}
+        self.assertEqual({name for name, service in self.services.items()
+                          if service.get("logging", {}).get("driver") == "fluentd"}, selected)
+        for name in selected:
+            with self.subTest(service=name):
+                service = self.services[name]
+                options = service["logging"]["options"]
+                self.assertEqual(options["tag"], f"mw.{name}")
+                self.assertEqual(options["fluentd-address"], "127.0.0.1:24224")
+                self.assertEqual(options["fluentd-async"], "true")
+                self.assertEqual(options["mode"], "non-blocking")
+                self.assertEqual(options["cache-disabled"], "false")
+                self.assertEqual(options["fluentd-buffer-limit"], "1024")
+                self.assertEqual(options["max-buffer-size"], "256k")
+                self.assertEqual((options["cache-max-size"], options["cache-max-file"]), ("5m", "2"))
+                self.assertNotIn("otel-collector", service.get("depends_on", {}))
+                self.assertNotIn("loki", service.get("depends_on", {}))
+        receiver = self.services["otel-collector"]
+        self.assertTrue(all(volume["read_only"] and Path(volume["source"]).is_relative_to(DEPLOY)
+                            for volume in receiver["volumes"]))
+        self.assertFalse(receiver.get("privileged"))
+        self.assertFalse(receiver.get("pid"))
+        self.assertEqual([network for network, config in receiver["networks"].items()
+                          if "collector-fluent" in (config or {}).get("aliases", [])], ["monitoring"])
+
+    def test_overriding_the_fluent_port_changes_the_driver_and_receiver_together(self):
+        services = self.compose_config(fluent_port="24500")["services"]
+        self.assertEqual(services["api"]["logging"]["options"]["fluentd-address"], "127.0.0.1:24500")
+        port, = services["otel-collector"]["ports"]
+        self.assertEqual((port["host_ip"], str(port["published"]), port["target"]), ("127.0.0.1", "24500", 24224))
+
+    def test_loki_mounts_its_configuration_read_only(self):
+        mount, = (volume for volume in self.services["loki"]["volumes"] if volume["type"] == "bind")
+        self.assertEqual(Path(mount["source"]), DEPLOY / "loki/loki.yaml")
+        self.assertTrue(mount["read_only"])
+
+    def test_grafana_reaches_loki_through_a_proxy_on_a_separate_network(self):
+        proxy = self.services["loki-query-proxy"]
+        self.assertFalse(proxy.get("ports"))
+        mounts = proxy["volumes"]
+        mount, = mounts
+        self.assertTrue(mount["read_only"])
+        self.assertEqual(Path(mount["source"]), DEPLOY / "nginx/loki-query.conf")
+        self.assertTrue(Path(mount["source"]).is_file())
+        self.assertEqual(set(self.services["loki"]["networks"]), {"log-store"})
+        self.assertNotIn("log-store", self.services["grafana"]["networks"])
+        self.assertNotIn("loki-query-proxy", self.services["grafana"].get("depends_on", {}))
 
     def test_application_metrics_use_aliases_scoped_to_the_scrape_bridge(self):
         for name in ("api", "analytics"):
@@ -99,6 +151,8 @@ class ComposeConfigTest(unittest.TestCase):
             "grafana": "grafana/grafana:13.3.2",
             "otel-collector": "otel/opentelemetry-collector-contrib:0.166.0",
             "jaeger": "cr.jaegertracing.io/jaegertracing/jaeger:2.23.0",
+            "loki": "grafana/loki:3.7.10",
+            "loki-query-proxy": "nginx:1.31.10-alpine3.24-slim",
         }.items():
             with self.subTest(service=name):
                 self.assertEqual(self.services[name]["image"], image)
@@ -147,7 +201,7 @@ class ComposeConfigTest(unittest.TestCase):
             ("postgres", "/var/lib/postgresql"), ("clickhouse", "/var/lib/clickhouse"),
             ("prometheus", "/prometheus"),
             ("grafana", "/var/lib/grafana"),
-            ("jaeger", "/tmp"),
+            ("jaeger", "/tmp"), ("loki", "/loki"),
         ):
             with self.subTest(volume_service=name):
                 self.assertTrue(any(
@@ -173,7 +227,7 @@ class ComposeConfigTest(unittest.TestCase):
             "prometheus": set(),
             "grafana": {"grafana_admin_password"},
             "otel-collector": set(),
-            "jaeger": set(),
+            "jaeger": set(), "loki": set(), "loki-query-proxy": set(),
         }
         secret_files = {
             "api": {

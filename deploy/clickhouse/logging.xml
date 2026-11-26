@@ -1,0 +1,12 @@
+<clickhouse>
+    <logger>
+        <console>true</console>
+        <console_log_level>information</console_log_level>
+        <startup_console_log_level>information</startup_console_log_level>
+        <shutdown_console_log_level>information</shutdown_console_log_level>
+        <formatting>
+            <type>json</type>
+            <channel>console</channel>
+        </formatting>
+    </logger>
+</clickhouse>

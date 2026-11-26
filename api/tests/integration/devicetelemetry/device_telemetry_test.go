@@ -537,6 +537,11 @@ func TestDeviceTelemetryLogsExcludeSecretsAndBody(t *testing.T) {
 		testfixture.Bearer(f.Device.APIKey),
 	)
 	assert.Equal(t, http.StatusAccepted, response.Status)
+
+	const privateBody = `{"unrecognized":"private_body_canary"}`
+	failure := testfixture.AuthHTTPRequest(t, f.Server, http.MethodPost, path, privateBody,
+		testfixture.Bearer(f.Device.APIKey))
+	assert.Equal(t, http.StatusBadRequest, failure.Status)
 	f.Server.Close()
 
 	entries := logs.String()
@@ -545,15 +550,24 @@ func TestDeviceTelemetryLogsExcludeSecretsAndBody(t *testing.T) {
 	assert.NotContains(t, entries, queryValue)
 	assert.NotContains(t, entries, eventID)
 	assert.NotContains(t, entries, "vibration_rms_g")
-	var logged bool
+	assert.NotContains(t, entries, "private_body_canary")
+	var logged, loggedFailure bool
 	for line := range strings.SplitSeq(strings.TrimSpace(entries), "\n") {
 		var entry struct {
-			Message string `json:"msg"`
+			Message  string `json:"msg"`
+			Category string `json:"failure_category"`
+			Status   int    `json:"http.response.status_code"`
 		}
 		require.NoError(t, json.Unmarshal([]byte(line), &entry))
 		if entry.Message == "POST "+path {
 			logged = true
 		}
+		if entry.Message == "telemetry ingest failed" {
+			loggedFailure = true
+			assert.Equal(t, "invalid_input", entry.Category)
+			assert.Equal(t, http.StatusBadRequest, entry.Status)
+		}
 	}
 	assert.True(t, logged)
+	assert.True(t, loggedFailure, "rejected ingest should emit a safe business event")
 }

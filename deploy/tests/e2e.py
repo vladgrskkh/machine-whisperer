@@ -41,7 +41,11 @@ SCRAPE_TARGETS = {
 GRAFANA = "/grafana"
 GRAFANA_DATASOURCE = GRAFANA + "/api/datasources/uid/mw-prometheus"
 GRAFANA_PROMETHEUS = GRAFANA + "/api/datasources/proxy/uid/mw-prometheus"
-GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry")
+GRAFANA_LOKI_PROXY = GRAFANA + "/api/datasources/proxy/uid/mw-loki"
+GRAFANA_LOKI = GRAFANA_LOKI_PROXY + "/loki/api/v1"
+INGEST_FAILURE_DASHBOARD = "mw-api-ingest-failures"
+GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry",
+                      INGEST_FAILURE_DASHBOARD)
 JAEGER = "/jaeger"
 # ClickHouse omits these native event counters until those events occur.
 SPARSE_CLICKHOUSE_EVENTS = {
@@ -104,6 +108,8 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assert_grafana_provisioning_and_access()
             self.assert_application_without_grafana()
             self.assert_application_metrics()
+            self.assert_service_logs_in_grafana()
+            self.assert_tracing_during_loki_outage()
             self.assert_jaeger_access()
             # The p95 panels need requests between two scrapes of the same histogram.
             self.run_k6_scenarios()
@@ -450,6 +456,134 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertFalse(response.get("warnings"), response)
         return response["data"]
 
+    def loki_data(self, path, params):
+        endpoint = GRAFANA_LOKI + path + "?" + urlencode(params)
+        response = self.request("GET", endpoint, 200, opener=self.grafana_viewer)
+        self.assertEqual(response["status"], "success", response)
+        return response["data"]
+
+    def loki_range(self, query, start):
+        result = self.loki_data("/query_range", {"query": query, "start": start, "limit": 200})
+        self.assertEqual(result["resultType"], "streams")
+        return result["result"]
+
+    def assert_service_logs_in_grafana(self):
+        ip = self.stack.network_address("otel-collector", "trace-apps")
+        trace_apps = f"{self.stack.project}_trace-apps"
+        unreachable = self.stack.network_probe(trace_apps, f"http://{ip}:24224/")
+        self.assertIn(unreachable.returncode, (7, 28), unreachable.stderr)
+        self.assertEqual(unreachable.stdout, " 000")
+
+        path = GRAFANA + "/api/datasources/uid/mw-loki"
+        self.request("GET", path, 401, decode=False)
+        self.request("GET", GRAFANA_LOKI + "/labels", 401, decode=False)
+        datasource = self.request("GET", path, 200, opener=self.grafana_viewer)
+        self.assertEqual((datasource["type"], datasource["url"], datasource["readOnly"]),
+                         ("loki", "http://loki-query-proxy:3100", True))
+
+        self.request("GET", GRAFANA_LOKI_PROXY + "/config", 404, decode=False, opener=self.grafana_viewer)
+        self.request("POST", GRAFANA_LOKI + "/labels", 403, {}, headers={"Origin": self.base_url},
+                     decode=False, opener=self.grafana_viewer)
+        rejected = self.stack.network_probe(f"{self.stack.project}_monitoring",
+                                            "http://loki-query-proxy:3100/loki/api/v1/labels", method="POST")
+        self.assertEqual((rejected.returncode, rejected.stdout.rpartition(" ")[2]), (0, "405"), rejected.stderr)
+        now = time.time_ns()
+        start = now - 300_000_000_000
+        selector = '{service_name=~"api|analytics|nginx|postgres|clickhouse"}'
+        expected_services = {"api", "analytics", "nginx", "postgres", "clickhouse"}
+
+        def series():
+            rows = self.loki_data("/series", {"match[]": selector, "start": start})
+            return rows if {row["service_name"] for row in rows} == expected_services else None
+
+        streams = eventually("the five monitored services in Loki", series, timeout=60)
+        self.assertTrue(all(set(stream) == {"service_name"} for stream in streams), streams)
+
+        untraced = time.time_ns()
+        self.request("GET", "/untraced-log-check", 404, decode=False)
+        edge_without_trace = eventually("a failure log from an untraced Nginx route", lambda: self.loki_range(
+            '{service_name="nginx"} | http_response_status_code="404"', untraced))
+        self.assertTrue(all("trace_id" not in row["stream"] for row in edge_without_trace))
+
+        now = time.time_ns()
+        private = "private-canary-" + secrets.token_hex(10)
+        self.request("POST", INGEST + "?private=" + private, 400, {"unexpected": private}, self.device_key)
+        query = self.dashboard_panel(INGEST_FAILURE_DASHBOARD, "Rejected telemetry observations")["targets"][0]
+        self.assertEqual(query["datasource"], {"type": "loki", "uid": "mw-loki"})
+        failure = eventually(
+            "a sanitized API failure through the saved Loki query",
+            lambda: self.loki_range(query["expr"] + ' | failure_category="invalid_input"'
+                                    + ' | severity_text="WARN" | http_response_status_code="400"', now),
+            timeout=40,
+        )
+        self.assertEqual(failure[0]["values"][0][1], "telemetry ingest failed")
+        panel_data = self.request("POST", GRAFANA + "/api/ds/query", 200, {
+            "from": str(now // 1_000_000), "to": str(time.time_ns() // 1_000_000),
+            "queries": [{**query, "maxLines": 20, "intervalMs": 1000, "maxDataPoints": 100}],
+        }, headers={"Origin": self.base_url}, opener=self.grafana_viewer)
+        self.assertIn("telemetry ingest failed", json.dumps(panel_data["results"][query["refId"]]["frames"]))
+        trace_id = failure[0]["stream"]["trace_id"]
+        self.assertRegex(trace_id, r"^[0-9a-f]{32}$")
+        self.assertTrue(eventually("the failure log's sampled trace in Jaeger", lambda: JaegerQuery(self.stack).get(trace_id)))
+        self.logged_trace_id = trace_id
+        self.logged_trace_start = now
+        edge = eventually(
+            "the matching Nginx failure with a request ID",
+            lambda: self.loki_range('{service_name="nginx"} | trace_id="' + trace_id
+                                    + '" | http_response_status_code="400"', now),
+            timeout=30,
+        )
+        self.assertRegex(edge[0]["stream"]["request_id"], r"^[0-9a-f]{32}$")
+
+        # A real SQL error reaches Loki as a SQLSTATE and a fixed body.
+        self.stack.compose("exec", "-T", "postgres", "psql", "-Xq", "-U", "machine_whisperer",
+                           "-d", "machine_whisperer", "-c", f"SELECT '{private}'::integer", check=False)
+        database = self.stack.inspect("postgres")["Id"]
+
+        def postgres_logged_the_canary():
+            local = run(["docker", "logs", database])
+            return any("22P02 ERROR:" in line and private in line
+                       for line in (local.stdout + local.stderr).splitlines())
+
+        eventually("the SQL canary in PostgreSQL's local error text", postgres_logged_the_canary)
+        postgres = eventually("a sanitized PostgreSQL error", lambda: self.loki_range(
+            '{service_name="postgres"} | db_response_status_code="22P02" | severity_text="ERROR"', now))
+        self.assertEqual(postgres[0]["values"][0][1], "Service log")
+        emitted = json.dumps(self.loki_range(selector, now))
+        self.assertNotIn(private, emitted)
+        self.assertNotIn(self.device_key, emitted)
+
+    def assert_tracing_during_loki_outage(self):
+        self.stack.compose("stop", "loki")
+        self.assertFalse(self.stack.inspect("loki")["State"]["Running"])
+        start = datetime.now(timezone.utc)
+        self.request("POST", INGEST, 400, {"unexpected": True}, self.device_key)
+        self.request("GET", self.history_path, 200, token=self.owner_token)
+        end = datetime.now(timezone.utc)
+        traces = JaegerQuery(self.stack)
+        eventually("a sampled history request with Loki stopped",
+                   lambda: traces.find("api", HISTORY, start, end), timeout=45, caught=NETWORK_ERRORS)
+        old_loki = self.stack.inspect("loki")["Id"]
+        self.stack.compose("up", "-d", "--no-deps", "--force-recreate", "--no-build", "loki")
+        self.assertNotEqual(self.stack.inspect("loki")["Id"], old_loki)
+        endpoint = GRAFANA_LOKI + "/labels"
+        eventually("Loki to return through Grafana", lambda: self.response(
+            "GET", endpoint, opener=self.grafana_viewer)[0] == 200, timeout=60, caught=NETWORK_ERRORS)
+        eventually("the existing failure log after Loki restarts", lambda: self.loki_range(
+            '{service_name="api"} | trace_id="' + self.logged_trace_id + '"', self.logged_trace_start),
+            timeout=45, caught=NETWORK_ERRORS)
+
+        restarted = time.time_ns()
+        expired = {
+            **self.observation, "event_id": str(uuid4()),
+            "observed_at": (datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),
+        }
+        self.request("POST", INGEST, 409, expired, self.device_key)
+        new_failure = eventually("a new API failure after Loki restarts", lambda: self.loki_range(
+            '{service_name="api"} |= "telemetry ingest failed" | failure_category="outside_window"'
+            ' | http_response_status_code="409"', restarted), timeout=45, caught=NETWORK_ERRORS)
+        self.assertNotEqual(new_failure[0]["stream"]["trace_id"], self.logged_trace_id)
+
     def dashboard_panel(self, uid, title):
         panels = [panel for panel in self.dashboard_panels(self.grafana_dashboards[uid]["panels"])
                   if panel["title"] == title]
@@ -511,6 +645,8 @@ class DeploymentEndToEndTest(unittest.TestCase):
             for regex in (re.escape(instance), all_instances)
         ]
         for uid, dashboard in self.grafana_dashboards.items():
+            if uid == INGEST_FAILURE_DASHBOARD:
+                continue  # The saved Loki query runs against emitted logs.
             selections = go_selections if uid == "mw-go-services" else [{}]
             for panel in self.dashboard_panels(dashboard["panels"]):
                 for target in panel.get("targets", []):
@@ -869,6 +1005,17 @@ class DeploymentEndToEndTest(unittest.TestCase):
     def assert_telemetry_during_collector_outage(self):
         self.stack.compose("stop", "otel-collector")
         self.assertFalse(self.stack.inspect("otel-collector")["State"]["Running"])
+        self.stack.compose("up", "-d", "--no-deps", "--force-recreate", "--no-build", "--wait",
+                           "--wait-timeout", "90", "api", timeout=120)
+        self.assertFalse(self.stack.inspect("otel-collector")["State"]["Running"])
+        self.request("POST", INGEST, 400, {"unexpected": True}, self.device_key)
+        container = self.stack.inspect("api")["Id"]
+
+        def in_local_logs():
+            result = run(["docker", "logs", container])
+            return "telemetry ingest failed" in result.stdout + result.stderr
+
+        eventually("the outage event to remain readable with docker logs", in_local_logs)
         observation = {
             **self.observation, "event_id": str(uuid4()),
             "observed_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
