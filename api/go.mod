@@ -4,6 +4,7 @@ go 1.26.5
 
 require (
 	github.com/caarlos0/env/v11 v11.4.2
+	github.com/exaring/otelpgx v0.13.0
 	github.com/felixge/httpsnoop v1.1.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/go-chi/httplog/v3 v3.5.1-0.20260926230837-c043f3269f71

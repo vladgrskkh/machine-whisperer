@@ -928,13 +928,27 @@ class DeploymentEndToEndTest(unittest.TestCase):
         })
         history_end = datetime.now(timezone.utc)
 
-        def trace_with(service, name, start, end, required):
+        def db_spans(spans, system, operation, *query_fragments):
+            for span in spans:
+                if span.get("kind") not in (3, "SPAN_KIND_CLIENT"):
+                    continue
+                attrs = string_attributes(span)
+                if attrs.get("db.system.name") != system or attrs.get("db.operation.name") != operation:
+                    continue
+                # A prepare span uses the same operation and statement as its execution span.
+                if attrs.get("pgx.prepare_stmt.name") is not None:
+                    continue
+                if all(fragment in (attrs.get("db.query.text") or "") for fragment in query_fragments):
+                    yield span
+
+        def trace_with(service, name, start, end, required, *statements):
             def complete_trace():
                 traces = {}
                 for span in query.find(service, name, start, end):
                     traces.setdefault(span["traceId"], []).append(span)
                 return next((spans for spans in traces.values()
-                             if required <= {(service_name(span), span["name"]) for span in spans}), None)
+                             if required <= {(service_name(span), span["name"]) for span in spans}
+                             and all(any(db_spans(spans, *statement)) for statement in statements)), None)
 
             try:
                 return eventually(name + " and its downstream spans in Jaeger", complete_trace, timeout=45,
@@ -953,17 +967,38 @@ class DeploymentEndToEndTest(unittest.TestCase):
                     summary.append(f"{emitter} matched {sorted(names & expected)}, other names {len(names - expected)}")
                 raise AssertionError(f"{error}\nNearby spans by service: {'; '.join(summary)}") from None
 
+        owner_lookup = ("postgresql", "SELECT", "FROM machines WHERE owner_user_id=$1 AND id=$2")
+        history_read = ("clickhouse", "SELECT", "FROM telemetry_events FINAL WHERE machine_id = {machine_id:UUID}",
+                        "LIMIT {limit:UInt64}")
+        machine_lock = ("postgresql", "WITH", "WITH locked_machine AS MATERIALIZED", "WHERE id=$1")
+        telemetry_insert = ("postgresql", "INSERT", "INSERT INTO telemetry_events", "VALUES ($1,$2,$3,$4,$5,$6)")
+        batch_insert = ("clickhouse", "INSERT", "INSERT INTO telemetry_events",
+                        "(schema_version, event_id, device_id, machine_id")
+        mark_delivered = ("postgresql", "UPDATE", "UPDATE telemetry_outbox", "o.lease_token=$1",
+                          "unnest($2::text[]::uuid[],$3::text[]::uuid[])")
         history = trace_with("api", HISTORY, history_start, history_end, {
             ("nginx", "proxy /v1/"), ("api", HISTORY), ("api", "GET"), ("api", "telemetry.history.list"),
-            ("api", "SELECT"), ("analytics", ANALYTICS_HISTORY), ("analytics", "SELECT telemetry_events"),
-        })
+            ("analytics", ANALYTICS_HISTORY),
+        }, owner_lookup, history_read)
         acceptance = trace_with("api", "telemetry.ingest", ingest_start, ingest_end, {
-            ("nginx", "proxy /v1/"), ("api", f"POST {INGEST}"), ("api", "telemetry.ingest"), ("api", "INSERT"),
-        })
+            ("nginx", "proxy /v1/"), ("api", f"POST {INGEST}"), ("api", "telemetry.ingest"),
+        }, machine_lock, telemetry_insert)
         delivery = trace_with("api", "outbox.deliver", ingest_start, datetime.now(timezone.utc), {
             ("api", "outbox.deliver"), ("api", "outbox.batch.deliver"), ("api", "POST"),
-            ("api", "UPDATE"), ("analytics", ANALYTICS_INGEST), ("analytics", "INSERT telemetry_events"),
-        })
+            ("analytics", ANALYTICS_INGEST),
+        }, batch_insert, mark_delivered)
+
+        email = f"{canary}@example.test"
+        password = f"trace-password-{secrets.token_hex(8)}"
+        signup = "/v1/auth/signup"
+        credentials = {"email": email, "password": password}
+        self.request("POST", signup, 201, credentials)
+        conflict_start = datetime.now(timezone.utc)
+        self.request("POST", signup, 409, credentials)
+        signup_insert = ("postgresql", "INSERT", "INSERT INTO users", "VALUES ($1,$2,$3)")
+        conflict = trace_with("api", f"POST {signup}", conflict_start, datetime.now(timezone.utc), {
+            ("api", f"POST {signup}"), ("api", "auth.signup"),
+        }, signup_insert)
 
         def span_named(spans, service, name):
             span, = (item for item in spans if service_name(item) == service and item["name"] == name)
@@ -973,21 +1008,17 @@ class DeploymentEndToEndTest(unittest.TestCase):
             for parent, child in zip(spans, spans[1:]):
                 self.assertEqual(child.get("parentSpanId"), parent["spanId"], child["name"])
 
-        def assert_db_span(spans, system, ancestor, operation):
+        def assert_db_span(spans, ancestor, statement):
             indexed = {span["spanId"]: span for span in spans}
-            for span in spans:
-                attrs = string_attributes(span)
-                if attrs.get("db.system.name") != system or attrs.get("db.operation.name") != operation:
-                    continue
+            for span in db_spans(spans, *statement):
                 parent = indexed.get(span.get("parentSpanId"))
                 visited = set()
                 while parent is not None and parent["spanId"] not in visited:
                     if parent["spanId"] == ancestor["spanId"]:
-                        self.assertIn(span.get("kind"), (3, "SPAN_KIND_CLIENT"))
-                        return
+                        return span
                     visited.add(parent["spanId"])
                     parent = indexed.get(parent.get("parentSpanId"))
-            self.fail(f"No {system} {operation} client span under {ancestor['name']}")
+            self.fail(f"No {statement[0]} {statement[1]} client span with the expected SQL under {ancestor['name']}")
 
         edge = span_named(history, "nginx", "proxy /v1/")
         app = span_named(history, "api", HISTORY)
@@ -998,12 +1029,21 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertNotEqual(edge["traceId"], spoof_id)
         self.assertEqual(query.get(spoof_id), [])
         assert_chain(edge, app, history_use_case, span_named(history, "api", "GET"), analytics)
-        assert_db_span(history, "postgresql", history_use_case, "SELECT")
-        assert_db_span(history, "clickhouse", analytics, "SELECT")
+        pg_read = assert_db_span(history, history_use_case, owner_lookup)
+        self.assertEqual(pg_read["scope"]["name"], "github.com/exaring/otelpgx")
+        postgres_attrs = {item["key"]: item["value"] for item in pg_read["attributes"]}
+        self.assertEqual(postgres_attrs["server.address"]["stringValue"], "postgres")
+        self.assertEqual(int(postgres_attrs["server.port"]["intValue"]), 5432)
+        self.assertEqual(postgres_attrs["db.namespace"]["stringValue"], "machine_whisperer")
+        self.assertEqual(postgres_attrs["user.name"]["stringValue"], "machine_whisperer")
+        self.assertEqual(int(postgres_attrs["pgx.rows_affected"]["intValue"]), 1)
+        self.assertNotIn("server.address", string_attributes(app))
+        assert_db_span(history, analytics, history_read)
 
         producer = span_named(acceptance, "api", "telemetry.ingest")
         assert_chain(span_named(acceptance, "nginx", "proxy /v1/"), span_named(acceptance, "api", f"POST {INGEST}"), producer)
-        assert_db_span(acceptance, "postgresql", producer, "INSERT")
+        assert_db_span(acceptance, producer, machine_lock)
+        assert_db_span(acceptance, producer, telemetry_insert)
         worker = span_named(delivery, "api", "outbox.deliver")
         self.assertFalse(worker.get("parentSpanId"))
         self.assertNotEqual(worker["traceId"], producer["traceId"])
@@ -1016,14 +1056,20 @@ class DeploymentEndToEndTest(unittest.TestCase):
         batch = span_named(delivery, "api", "outbox.batch.deliver")
         receiver = span_named(delivery, "analytics", ANALYTICS_INGEST)
         assert_chain(worker, batch, span_named(delivery, "api", "POST"), receiver)
-        assert_db_span(delivery, "clickhouse", receiver, "INSERT")
-        assert_db_span(delivery, "postgresql", batch, "UPDATE")
+        assert_db_span(delivery, receiver, batch_insert)
+        assert_db_span(delivery, batch, mark_delivered)
+        failed_insert = assert_db_span(conflict, span_named(conflict, "api", "auth.signup"), signup_insert)
+        self.assertEqual(string_attributes(failed_insert)["pgx.sql_state"], "23505")
+        self.assertIn(failed_insert.get("status", {}).get("code"), (2, "STATUS_CODE_ERROR"))
 
-        stored = json.dumps(history + acceptance + delivery)
-        for value in (canary, *private_ids, self.owner_token, self.device_key, "http.target", "http.user_agent",
-                      "url.full", "url.query", "db.query.text", "db.statement", "exception.message"):
+        traces = history + acceptance + delivery + conflict
+        stored = json.dumps(traces)
+        for value in (canary, email, password, *private_ids, self.owner_token, self.device_key,
+                      "http.target", "http.user_agent",
+                      "url.full", "url.query", "db.query.parameter", "pgx.query.parameters",
+                      "db.statement", "exception.message"):
             self.assertTrue(value not in stored, "Unexpected private value or field in recorded spans")
-        for span in history + acceptance + delivery:
+        for span in traces:
             self.assertEqual(string_attributes(span["resource"])["service.namespace"], "machine-whisperer")
             self.assertFalse(span.get("traceState"))
             self.assertFalse(span.get("events"))

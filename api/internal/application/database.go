@@ -5,10 +5,9 @@ import (
 	"errors"
 	"time"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-
-	"github.com/vladgrskkh/machine-whisperer/api/internal/infrastructure/tracing"
 )
 
 const databaseStartupTimeout = 10 * time.Second
@@ -42,7 +41,7 @@ func (a *Application) setupDatabase(ctx context.Context) error {
 	if a.databaseConfig == nil {
 		return errors.New("database pool is required")
 	}
-	tracer := tracing.NewPostgresTracer(a.tracerProvider.Tracer(instrumentationScope + "infrastructure/tracing"))
+	tracer := otelpgx.NewTracer(otelpgx.WithTracerProvider(a.tracerProvider))
 	pool, err := newPool(ctx, a.databaseConfig.URL, tracer)
 	if err != nil {
 		return err
