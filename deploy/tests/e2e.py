@@ -24,7 +24,7 @@ from uuid import UUID, uuid4
 
 from deploy.tests.compose_stack import ComposeStack, LoopbackHTTPSConnection, eventually
 from deploy.tests.jaeger_query import JaegerQuery, service_name, string_attributes
-from deploy.tests.otlp import mobile_history_trace
+from deploy.tests.otlp import ingress_history_trace
 from deploy.tests.support import DEPLOY, run
 
 
@@ -918,7 +918,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_path = history_path
         self.observation = observation
         self.assert_recorded_traces(ingest_start, ingest_end, (machine, device_id, observation["event_id"]))
-        self.assert_mobile_history_trace()
+        self.assert_ingress_history_trace()
 
     def assert_recorded_traces(self, ingest_start, ingest_end, private_ids):
         query = JaegerQuery(self.stack)
@@ -1038,7 +1038,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_trace_id = edge["traceId"]
         self.history_edge_span_id = edge["spanId"]
 
-    def assert_mobile_history_trace(self):
+    def assert_ingress_history_trace(self):
         trace_id = secrets.token_hex(16)
         root_id, request_id = (secrets.token_hex(8) for _ in range(2))
         started = time.time_ns()
@@ -1049,21 +1049,21 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(headers["X-Mw-Sampled-Trace"], trace_id)
 
-        canary = f"mobile-private-{secrets.token_hex(8)}"
-        payload = mobile_history_trace(trace_id, root_id, request_id, started, canary)
+        canary = f"trace-private-{secrets.token_hex(8)}"
+        payload = ingress_history_trace(trace_id, root_id, request_id, started, canary)
         otlp = {"Content-Type": "application/x-protobuf"}
         self.request("POST", "/otlp/v1/traces", 401, payload, headers=otlp, decode=False)
         self.request("POST", "/otlp/v1/traces", 200, payload, token=self.owner_token, headers=otlp, decode=False)
         query = JaegerQuery(self.stack)
         chain = [
-            ("mobile", "machine.history.load"), ("mobile", HISTORY), ("nginx", "proxy /v1/"), ("api", HISTORY),
+            ("machine-whisperer", "machine.history.load"), ("machine-whisperer", HISTORY), ("nginx", "proxy /v1/"), ("api", HISTORY),
         ]
 
         def complete():
             spans = {(service_name(span), span["name"]): span for span in query.get(trace_id)}
             return spans if all(key in spans for key in (*chain, ("analytics", ANALYTICS_HISTORY))) else None
 
-        spans = eventually("one mobile-rooted history trace", complete, timeout=45, caught=NETWORK_ERRORS)
+        spans = eventually("one app-rooted history trace", complete, timeout=45, caught=NETWORK_ERRORS)
         self.assertEqual(spans[chain[0]]["spanId"], root_id)
         self.assertFalse(spans[chain[0]].get("parentSpanId"))
         self.assertEqual(spans[chain[1]]["spanId"], request_id)

@@ -46,9 +46,9 @@ export function tracingOrigin(baseUrl?: string, browserOrigin?: string): string 
   }
 }
 
-export function createMobileTracing(options: Options): MobileTracing | undefined {
+export function createTracing(options: Options): Tracing | undefined {
   try {
-    return new MobileTracing(options);
+    return new Tracing(options);
   } catch {
     return undefined;
   }
@@ -76,7 +76,7 @@ function actionFailure(error: unknown): Failure {
   }
 }
 
-export class MobileTracing {
+export class Tracing {
   private readonly tracer: Tracer;
   private readonly actions = new Map<string, Action>();
   private readonly queue: Action[] = [];
@@ -85,7 +85,7 @@ export class MobileTracing {
   constructor(private readonly options: Options) {
     const provider = new TracerProvider({
       resource: resourceFromAttributes({
-        'service.name': 'mobile',
+        'service.name': 'machine-whisperer',
         'service.namespace': 'machine-whisperer',
         'service.version': options.version,
       }),
@@ -101,7 +101,7 @@ export class MobileTracing {
         async shutdown() {},
       }],
     });
-    this.tracer = provider.getTracer('machine-whisperer.mobile');
+    this.tracer = provider.getTracer('machine-whisperer.tracing');
   }
 
   async history<T>(operation: (context?: Context) => Promise<T>): Promise<T> {
@@ -187,19 +187,21 @@ export class MobileTracing {
   }
 
   private async send(action: Action) {
+    let controller: AbortController | undefined;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       const access = this.options.getAccess();
       if (!access || access.generation !== action.generation) return;
       const data = ProtobufTraceSerializer.serializeRequest(action.spans);
       if (!data || data.byteLength > maxExportBytes) return;
-      const controller = new AbortController();
-      timeout = setTimeout(() => controller.abort(), exportTimeout);
+      const transport = new AbortController();
+      controller = transport;
+      timeout = setTimeout(() => transport.abort(), exportTimeout);
       const fetch = this.options.fetch ?? expoFetch;
       await fetch(this.options.origin + '/otlp/v1/traces', {
         method: 'POST',
         body: data.slice().buffer,
-        signal: controller.signal,
+        signal: transport.signal,
         redirect: 'error',
         headers: {
           Authorization: 'Bearer ' + access.token,
@@ -209,6 +211,8 @@ export class MobileTracing {
     } catch {
       // An unavailable telemetry path leaves app requests and sessions independent.
     } finally {
+      // Fetch may resolve before the response body finishes.
+      bestEffort(() => controller?.abort());
       if (timeout !== undefined) clearTimeout(timeout);
     }
   }

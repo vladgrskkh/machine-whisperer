@@ -401,7 +401,7 @@ with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
-Search `mobile` for `machine.history.load` to open the app's history trace.
+Search `machine-whisperer` for `machine.history.load` to open the app's history trace.
 Nginx continues W3C trace context on the exact machine telemetry URL, which
 also serves legacy device POST requests. Requests without valid context start
 at Nginx. The edge samples using its own request ID and forwards its own
@@ -412,8 +412,8 @@ machine ownership checks independently.
 The app uploads OTLP/HTTP protobuf to `POST /otlp/v1/traces`. Nginx checks the
 user's access token through the existing API profile route and enforces a
 32 KiB body limit and upload rate limits. Nginx strips client headers before
-forwarding to the Collector's private HTTP receiver on the `trace-mobile`
-network. The Collector sets the mobile identity and limits the names and
+forwarding to the Collector's private HTTP receiver on the `trace-ingress`
+network. The Collector sets the app service name and limits the names and
 metadata before export. For a configuration upgrade, follow the [Nginx and
 Collector reload steps](#centralized-service-logs).
 

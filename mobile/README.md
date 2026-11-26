@@ -38,16 +38,16 @@ the API client, secure session behavior, auth form interactions, protected route
 and signing out from Account. Check the SecureStore integration on a physical
 phone before distributing a native build.
 
-## Machine history traces
+## Tracing
 
 The app records the initial machine history load and its HTTP attempts. The
 protected trace endpoint receives a bounded batch on the API's HTTPS origin.
 Nginx continues the app's W3C trace context and controls sampling. A sampled
-history load appears in Jaeger as one trace rooted at the mobile action. A
-fetch failure can produce a mobile trace on its own.
+history load appears in Jaeger as one `machine-whisperer` trace rooted at
+the app action. A fetch failure can produce a trace on its own.
 
 When Expo Web is enabled, tracing requires the app and API to share an HTTPS origin.
-Set `EXPO_PUBLIC_MOBILE_TRACING=0` in the build environment to opt out. The
+Set `EXPO_PUBLIC_TRACING=0` in the build environment to opt out. The
 collector and TLS setup are in the [deployment guide](../deploy/README.md).
 
 ## Signed Android APK

@@ -29,8 +29,8 @@ map $mw_log_trace_location $mw_log_trace_id {
     on $mw_sampled_trace_id;
     default "";
 }
-limit_req_zone $binary_remote_addr zone=mobile_trace_rate:1m rate=2r/s;
-limit_conn_zone $server_name zone=mobile_trace_connections:1m;
+limit_req_zone $binary_remote_addr zone=trace_ingress_rate:1m rate=2r/s;
+limit_conn_zone $server_name zone=trace_ingress_connections:1m;
 
 server {
     listen 80;
@@ -79,20 +79,20 @@ server {
         if ($http_content_encoding != "") { return 415; }
         client_max_body_size 32k;
         client_body_timeout 3s;
-        limit_req zone=mobile_trace_rate burst=4 nodelay;
+        limit_req zone=trace_ingress_rate burst=4 nodelay;
         limit_req_status 429;
-        limit_conn mobile_trace_connections 8;
+        limit_conn trace_ingress_connections 8;
         limit_conn_status 429;
-        auth_request /_internal/mobile-trace-auth;
+        auth_request /_internal/trace-ingress-auth;
         otel_trace off;
         proxy_connect_timeout 2s;
         proxy_read_timeout 3s;
         proxy_pass_request_headers off;
         proxy_set_header Content-Type application/x-protobuf;
-        set $mobile_collector otel-mobile-ingress:4318;
-        proxy_pass http://$mobile_collector/v1/traces;
+        set $trace_collector otel-trace-ingress:4318;
+        proxy_pass http://$trace_collector/v1/traces;
     }
-    location = /_internal/mobile-trace-auth {
+    location = /_internal/trace-ingress-auth {
         internal;
         proxy_method GET;
         proxy_pass_request_body off;

@@ -5,10 +5,10 @@ receivers:
         endpoint: 0.0.0.0:4317
         max_recv_msg_size_mib: 4
 
-  otlp/mobile:
+  otlp/ingress:
     protocols:
       http:
-        endpoint: otel-mobile-ingress:4318
+        endpoint: otel-trace-ingress:4318
         max_request_body_size: 32768
         read_timeout: 5s
 
@@ -42,13 +42,13 @@ processors:
       # API's outbox worker sets only ID and flag fields, with no attributes or
       # tracestate. Remove whole links from every other kind of span.
       - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
-  filter/mobile:
+  filter/trace_ingress:
     error_mode: propagate
     trace_conditions:
       - >-
         not ((span.name == "machine.history.load" and span.kind == SPAN_KIND_INTERNAL) or
         (span.name == "GET /v1/machines/{machine_id}/telemetry" and span.kind == SPAN_KIND_CLIENT))
-  transform/mobile:
+  transform/trace_ingress:
     error_mode: propagate
     trace_statements:
       - 'keep_keys(resource.attributes, ["service.version"])'
@@ -56,10 +56,10 @@ processors:
       - >-
         delete_key(resource.attributes, "service.version") where IsString(resource.attributes["service.version"]) and
         not IsMatch(resource.attributes["service.version"], "^[0-9]{1,8}(\\.[0-9]{1,8}){1,3}$")
-      - 'set(resource.attributes["service.name"], "mobile")'
+      - 'set(resource.attributes["service.name"], "machine-whisperer")'
       - 'set(resource.attributes["service.namespace"], "machine-whisperer")'
       - 'keep_keys(scope.attributes, [])'
-      - 'set(scope.name, "machine-whisperer.mobile")'
+      - 'set(scope.name, "machine-whisperer.tracing")'
       - 'set(scope.version, "")'
       - 'keep_keys(span.attributes, ["http.response.status_code", "error.type"])'
       - >-
@@ -204,9 +204,9 @@ service:
       receivers: [otlp]
       processors: [memory_limiter, transform/allowlist, batch]
       exporters: [otlp_grpc/jaeger]
-    traces/mobile:
-      receivers: [otlp/mobile]
-      processors: [memory_limiter, filter/mobile, transform/mobile, batch]
+    traces/ingress:
+      receivers: [otlp/ingress]
+      processors: [memory_limiter, filter/trace_ingress, transform/trace_ingress, batch]
       exporters: [otlp_grpc/jaeger]
     logs:
       receivers: [fluent_forward]

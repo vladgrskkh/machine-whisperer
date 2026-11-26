@@ -1,4 +1,4 @@
-"""Binary OTLP fixture for the mobile trace ingress test."""
+"""Binary OTLP fixture for the trace ingress test."""
 from struct import pack
 from time import time_ns
 
@@ -21,7 +21,7 @@ def _attribute(key, value):
     return _bytes_field(1, key.encode()) + _bytes_field(2, any_value)
 
 
-def mobile_history_trace(trace_id, root_id, request_id, start_ns, private_canary):
+def ingress_history_trace(trace_id, root_id, request_id, start_ns, private_canary):
     end_ns = time_ns()
 
     def span(span_id, name, kind, parent=None):

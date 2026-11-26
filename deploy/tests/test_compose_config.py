@@ -37,7 +37,7 @@ class ComposeConfigTest(unittest.TestCase):
     def test_only_ingress_and_loopback_queries_publish_ports_and_private_networks_are_internal(self):
         networks = {
             "certbot": {"acme"},
-            "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "loki-proxy", "trace-edge", "trace-mobile"},
+            "nginx": {"edge", "nginx-status", "grafana-proxy", "jaeger-proxy", "loki-proxy", "trace-edge", "trace-ingress"},
             "nginx-exporter": {"nginx-status", "infra-scrape"},
             "api": {"edge", "data", "scrape", "trace-apps"}, "api-migrate": {"data"},
             "postgres": {"data"}, "postgres-exporter-setup": {"data"}, "postgres-exporter": {"data"},
@@ -45,13 +45,13 @@ class ComposeConfigTest(unittest.TestCase):
             "database-metrics-proxy": {"infra-scrape", "data"},
             "prometheus": {"monitoring", "scrape", "infra-scrape"},
             "grafana": {"grafana-proxy", "monitoring"},
-            "otel-collector": {"trace-edge", "trace-apps", "trace-mobile", "monitoring", "log-store"},
+            "otel-collector": {"trace-edge", "trace-apps", "trace-ingress", "monitoring", "log-store"},
             "jaeger": {"monitoring", "jaeger-proxy"},
             "loki": {"log-store"}, "loki-query-proxy": {"monitoring", "loki-proxy", "log-store"},
         }
         self.assertEqual(set(self.services), set(networks))
         for network in ("data", "scrape", "infra-scrape", "nginx-status", "grafana-proxy", "jaeger-proxy",
-                        "loki-proxy", "trace-edge", "trace-apps", "trace-mobile", "log-store"):
+                        "loki-proxy", "trace-edge", "trace-apps", "trace-ingress", "log-store"):
             with self.subTest(network=network):
                 self.assertTrue(self.config["networks"][network]["internal"])
         for name, expected in networks.items():
@@ -95,7 +95,7 @@ class ComposeConfigTest(unittest.TestCase):
         self.assertEqual([network for network, config in receiver["networks"].items()
                           if "collector-fluent" in (config or {}).get("aliases", [])], ["monitoring"])
         self.assertEqual([network for network, config in receiver["networks"].items()
-                          if "otel-mobile-ingress" in (config or {}).get("aliases", [])], ["trace-mobile"])
+                          if "otel-trace-ingress" in (config or {}).get("aliases", [])], ["trace-ingress"])
 
     def test_overriding_the_fluent_port_changes_the_driver_and_receiver_together(self):
         services = self.compose_config(fluent_port="24500")["services"]

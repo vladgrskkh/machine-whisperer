@@ -1,7 +1,7 @@
 import type { Context } from '@opentelemetry/api';
 
 import { bestEffort } from '../tracing/best-effort';
-import type { MobileTracing } from '../tracing/mobile-tracing';
+import type { Tracing } from '../tracing/tracing';
 import { ApiError, decodeApiError, sessionRequired } from './errors';
 import {
   isTokenPair, isUser, type BaselineValues, type ClaimDeviceRequest, type ClaimedDevice, type CreateMachineRequest,
@@ -21,7 +21,7 @@ type ApiClientOptions = {
   baseUrl?: string;
   fetch?: Fetch;
   session?: RequestSession;
-  tracing?: MobileTracing;
+  tracing?: Tracing;
 };
 
 type JsonRequest = {
@@ -43,7 +43,7 @@ export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetch: Fetch;
   private readonly session?: RequestSession;
-  private readonly tracing?: MobileTracing;
+  private readonly tracing?: Tracing;
   private activeMachineReads = 0;
   private readonly waitingMachineReads: (() => void)[] = [];
 
