@@ -83,8 +83,8 @@ the generated files across upgrades and restores. If you generate a replacement
 `clickhouse-password` file, use `openssl rand -hex 32`. Analytics and ClickHouse
 require exactly 64 lowercase hexadecimal characters and allow trailing CR/LF.
 The directory is mode `0700` and mounted files are mode `0444` so non-root
-container users can read them. The internal CA
-private key stays on the host at mode `0600`. Nginx uses the CA certificate
+container users can read them. The internal CA private key and the Jaeger
+sign-in password stay on the host at mode `0600`. Nginx uses the CA certificate
 to verify the API's internal TLS certificate for hostname `api`. The generated
 API certificate is valid for 365 days. Track its expiration and [renew it
 using the existing CA](#renew-the-internal-api-certificate) before expiry.
@@ -324,8 +324,15 @@ mw up -d --no-deps --force-recreate prometheus
 
 ## Distributed traces
 
-Jaeger's HTTP UI and query API listen on host loopback at `127.0.0.1:16686`.
-Open `http://127.0.0.1:16686` on your workstation after connecting the tunnel.
+Open `https://<DOMAIN>/jaeger/` in a browser. Sign in as `jaeger` with the
+password in `deploy/secrets/jaeger-password` (or the equivalent file in
+`MW_SECRETS_DIR`). Nginx requires HTTP Basic authentication for the UI and
+query API, using the hashed `jaeger-htpasswd` file. Share the sign-in details
+with authorized operators through your password manager.
+
+The direct HTTP query port is bound to host loopback at `127.0.0.1:16686`.
+To use it from your workstation, first connect the SSH tunnel and then open
+`http://127.0.0.1:16686`.
 
 ```bash
 ssh -N -L 127.0.0.1:16686:127.0.0.1:16686 operator@onerep.mooo.com
@@ -347,7 +354,9 @@ intended sampling rate and with tracing disabled on a disposable workload.
 
 Nginx and the Go services send OTLP to the Collector over their separate
 internal networks. The Collector drops raw request attributes and event records
-before writing to Jaeger. It retains links only on API worker attempt spans.
+before writing to Jaeger over the monitoring network. It retains links only
+on API worker attempt spans. Nginx reaches Jaeger's query listener over a
+separate internal bridge.
 The stock Collector operates on whole links, so the API constructs each link
 with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
@@ -359,8 +368,8 @@ Take a backup before changing releases. Check out the intended release commit
 or tag. If upgrading a checkout that used local builds, add
 `DOCKERHUB_NAMESPACE` and `IMAGE_TAG` to the saved env file as described under
 [First startup](#first-startup). The commands below pin both images to the
-checked-out commit and add any missing PostgreSQL exporter and Grafana
-bootstrap credentials. Set `secrets_dir` to the existing host directory
+checked-out commit and add any missing PostgreSQL exporter, Grafana, and
+Jaeger credentials. Set `secrets_dir` to the existing host directory
 configured by `MW_SECRETS_DIR`.
 
 ```bash
@@ -370,6 +379,7 @@ sed -i "s/^IMAGE_TAG=.*/IMAGE_TAG=sha-$(git rev-parse HEAD)/" deploy/.env.server
 secrets_dir=deploy/secrets
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --postgres-exporter-only
 deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --grafana-only
+deploy/scripts/prepare-secrets.sh --output-dir "$secrets_dir" --jaeger-only
 mw config --quiet
 mw pull
 mw up -d --no-build
@@ -377,7 +387,7 @@ mw ps -a
 mw logs --tail=100 api-migrate analytics-migrate postgres-exporter-setup
 ```
 
-The two credential commands preserve existing secrets. On the first upgrade
+The credential commands preserve existing secrets. On the first upgrade
 that adds Grafana, follow the [named Viewer setup](#grafana-sign-in-and-accounts).
 
 When a release changes the Prometheus configuration, [validate it and recreate
@@ -385,7 +395,7 @@ the Prometheus container](#logs-and-prometheus). This loads the updated file
 and keeps the existing metrics volume.
 
 Verify both migration exit codes and the exporter setup exit code. Check the
-public HTTPS API request and Grafana sign-in after upgrading.
+public HTTPS API request, Grafana sign-in, and Jaeger sign-in after upgrading.
 Install the example systemd units after successful issuance. Set both paths
 in the service to the absolute location of a root-controlled deployment
 checkout and, for a custom project, add `Environment=COMPOSE_PROJECT_NAME=...`

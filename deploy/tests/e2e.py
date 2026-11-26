@@ -42,6 +42,7 @@ GRAFANA = "/grafana"
 GRAFANA_DATASOURCE = GRAFANA + "/api/datasources/uid/mw-prometheus"
 GRAFANA_PROMETHEUS = GRAFANA + "/api/datasources/proxy/uid/mw-prometheus"
 GRAFANA_DASHBOARDS = ("mw-nginx", "mw-go-services", "mw-postgres", "mw-clickhouse", "mw-telemetry")
+JAEGER = "/jaeger"
 # ClickHouse omits these native event counters until those events occur.
 SPARSE_CLICKHOUSE_EVENTS = {
     ("mw-clickhouse", 3, "A"): "FailedQuery",
@@ -103,6 +104,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
             self.assert_grafana_provisioning_and_access()
             self.assert_application_without_grafana()
             self.assert_application_metrics()
+            self.assert_jaeger_access()
             # The p95 panels need requests between two scrapes of the same histogram.
             self.run_k6_scenarios()
             self.assert_dashboard_queries()
@@ -262,6 +264,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.stack.compose("exec", "-T", "nginx", "nginx", "-t")
         self.assertEqual(self.stack.http(http_port, "/v1/users/me")[0], 503)
         self.assertEqual(self.stack.http(http_port, GRAFANA + "/")[0], 503)
+        self.assertEqual(self.stack.http(http_port, JAEGER + "/")[0], 503)
         self.stack.enable_tls()
         tls_started = time.time()
         eventually("a successful Nginx status scrape after enabling TLS", lambda: (
@@ -272,12 +275,58 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.stack.compose("exec", "-T", "nginx", "nginx", "-t")
         status, location, _ = self.stack.http(http_port, "/v1/users/me")
         self.assertEqual((status, location), (308, f"https://{self.stack.domain}/v1/users/me"))
+        status, location, _ = self.stack.http(http_port, JAEGER + "/")
+        self.assertEqual((status, location), (308, f"https://{self.stack.domain}{JAEGER}/"))
 
         self.configure_tls_client()
         self.assert_auth_failed("GET", "/v1/users/me")
         self.request("POST", PROVISION, 403, headers={"X-Forwarded-For": "192.0.2.1"}, decode=False)
         for private in ("/healthz", "/metrics", "/stub_status", "/internal/v1/telemetry-batches"):
             self.request("GET", private, 404, decode=False)
+
+    def assert_jaeger_access(self):
+        services_api = "/api/v3/services"
+        bridge = f"{self.stack.project}_jaeger-proxy"
+        ip = self.stack.network_address("jaeger", "jaeger-proxy")
+        query = self.stack.network_probe(bridge, f"http://{ip}:16686{services_api}")
+        self.assertEqual((query.returncode, query.stdout), (0, f"{ip} 200"), query.stderr)
+        otlp = self.stack.network_probe(bridge, f"http://{ip}:4317/")
+        self.assertIn(otlp.returncode, (7, 28), otlp.stderr)
+        self.assertEqual(otlp.stdout, " 000", "Jaeger OTLP is reachable from the Nginx bridge")
+
+        status, headers, _ = self.response("GET", JAEGER + "?lookback=1h")
+        self.assertEqual(status, 308)
+        self.assertEqual(headers["Location"], self.base_url + JAEGER + "/?lookback=1h")
+
+        services = JAEGER + services_api
+        trace_api = JAEGER + f"/api/v3/traces/{self.history_trace_id}"
+        trace_page = JAEGER + f"/trace/{self.history_trace_id}"
+        for path in (JAEGER + "/", services, trace_api, trace_page):
+            status, headers, _ = self.response("GET", path)
+            self.assertEqual(status, 401, path)
+            self.assertEqual(headers["WWW-Authenticate"], 'Basic realm="Jaeger"')
+        self.request("GET", services_api, 404, decode=False)
+        bad_credentials = base64.b64encode(b"jaeger:wrong-password").decode()
+        self.request("GET", services, 401, headers={"Authorization": f"Basic {bad_credentials}"}, decode=False)
+
+        password = (self.stack.secrets / "jaeger-password").read_text().strip()
+        credentials = base64.b64encode(f"jaeger:{password}".encode()).decode()
+        auth = {"Authorization": f"Basic {credentials}"}
+        for path in (JAEGER + "/", trace_page):
+            status, headers, page = self.response("GET", path, headers=auth)
+            self.assertEqual(status, 200, path)
+            self.assertEqual(headers.get_content_type(), "text/html")
+            self.assertIn(b"Jaeger", page)
+        script = re.search(rb'<script\b[^>]*\bsrc="\./([^"\s]+\.js)"', page)
+        self.assertIsNotNone(script, "Missing Jaeger UI JavaScript entry point")
+        asset = JAEGER + "/" + script.group(1).decode()
+        self.request("GET", asset, 401, decode=False)
+        status, headers, _ = self.response("GET", asset, headers=auth)
+        self.assertEqual(status, 200, asset)
+        self.assertIn(headers.get_content_type(), ("text/javascript", "application/javascript"))
+        self.assertIn("api", self.request("GET", services, 200, headers=auth)["services"])
+        trace = self.request("GET", trace_api, 200, headers=auth)
+        self.assertIn(self.history_trace_id, json.dumps(trace["result"]))
 
     def wait_for_grafana_login(self):
         eventually(

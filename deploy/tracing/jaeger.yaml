@@ -21,7 +21,8 @@ receivers:
   otlp:
     protocols:
       grpc:
-        endpoint: 0.0.0.0:4317
+        # Bind ingestion to the monitoring bridge shared with the Collector.
+        endpoint: jaeger-otlp:4317
 
 exporters:
   jaeger_storage_exporter:
