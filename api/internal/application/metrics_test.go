@@ -52,6 +52,7 @@ func TestApplicationMetricsUseIndependentRegistriesAndBoundedRoutes(t *testing.T
 		{http.MethodPut, "/v1/auth/login", http.StatusMethodNotAllowed},
 		{http.MethodPost, "/v1/auth/login", http.StatusBadRequest},
 		{http.MethodDelete, "/healthz", http.StatusMethodNotAllowed},
+		{http.MethodDelete, "/v1/machines/" + uuid.NewString(), http.StatusUnauthorized},
 		{"custom-" + uuid.NewString(), "/healthz", http.StatusMethodNotAllowed},
 		{http.MethodGet, "/metrics", http.StatusNotFound},
 	}
@@ -88,10 +89,12 @@ func TestApplicationMetricsUseIndependentRegistriesAndBoundedRoutes(t *testing.T
 		got[[3]string{labels["method"], labels["route"], labels["status_class"]}] = sample.GetCounter().GetValue()
 	}
 	assert.Equal(t, map[[3]string]float64{
+		{"DELETE", "/v1/machines/{id}", "4xx"}:                 1,
+		{"DELETE", "unmatched", "4xx"}:                         1,
 		{"GET", "/healthz", "2xx"}:                             1,
 		{"GET", "unmatched", "4xx"}:                            3,
 		{"PUT", "unmatched", "4xx"}:                            1,
-		{"OTHER", "unmatched", "4xx"}:                          2,
+		{"OTHER", "unmatched", "4xx"}:                          1,
 		{"POST", "/v1/auth/login", "4xx"}:                      1,
 		{"POST", "/v1/machines/{machine_id}/telemetry", "4xx"}: 8,
 	}, got)
@@ -124,7 +127,7 @@ func TestApplicationMetricsUseIndependentRegistriesAndBoundedRoutes(t *testing.T
 		_ = response.Body.Close()
 		assert.Equal(t, http.StatusNotFound, response.StatusCode)
 	}
-	assert.Len(t, scrapeMetrics(t, firstMetrics)["mw_http_requests_total"].GetMetric(), 6)
+	assert.Len(t, scrapeMetrics(t, firstMetrics)["mw_http_requests_total"].GetMetric(), 8)
 }
 
 func newMetricsServer(t *testing.T, app *application.Application) *httptest.Server {
@@ -159,7 +162,7 @@ func assertMetricFamily(
 func assertRequestDurations(t *testing.T, families map[string]*dto.MetricFamily) {
 	t.Helper()
 	durations := assertMetricFamily(t, families, "mw_http_request_duration_seconds", dto.MetricType_HISTOGRAM)
-	require.Len(t, durations.GetMetric(), 6)
+	require.Len(t, durations.GetMetric(), 8)
 	for _, sample := range durations.GetMetric() {
 		assert.Len(t, sample.GetLabel(), 2)
 		histogram := sample.GetHistogram()

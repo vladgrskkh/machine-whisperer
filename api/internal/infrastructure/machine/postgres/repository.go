@@ -41,13 +41,31 @@ func (r *Repository) Create(ctx context.Context, value machine.Machine) error {
 	return nil
 }
 
+func (r *Repository) DeleteByOwner(ctx context.Context, ownerUserID, machineID string) error {
+	var owned bool
+	// Keep the original timestamp on retries, including when two requests race.
+	err := r.pool.QueryRow(ctx, `WITH archived AS (
+		UPDATE machines SET deleted_at=clock_timestamp()
+		WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL RETURNING 1
+	)
+	SELECT EXISTS (SELECT 1 FROM archived)
+		OR EXISTS (SELECT 1 FROM machines WHERE owner_user_id=$1 AND id=$2)`, ownerUserID, machineID).Scan(&owned)
+	if err != nil {
+		return fmt.Errorf("archive owner machine: %w", err)
+	}
+	if !owned {
+		return machine.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) ListByOwner(ctx context.Context, ownerUserID string) ([]machine.Machine, error) {
 	query := r.pool.Query
 	if tx := transaction.FromContext(ctx); tx != nil {
 		query = tx.Query
 	}
 	rows, err := query(ctx, `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
-		FROM machines WHERE owner_user_id=$1 ORDER BY created_at DESC,id DESC`, ownerUserID)
+		FROM machines WHERE owner_user_id=$1 AND deleted_at IS NULL ORDER BY created_at DESC,id DESC`, ownerUserID)
 	if err != nil {
 		return nil, fmt.Errorf("list owner machines: %w", err)
 	}
@@ -67,7 +85,7 @@ func (r *Repository) FindByOwner(ctx context.Context, ownerUserID, machineID str
 	}
 	value, err := scanMachine(
 		queryRow(ctx, `SELECT id::text,owner_user_id::text,name,created_at,last_telemetry_observed_at
-		FROM machines WHERE owner_user_id=$1 AND id=$2`, ownerUserID, machineID),
+		FROM machines WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL`, ownerUserID, machineID),
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return machine.Machine{}, machine.ErrNotFound
@@ -104,7 +122,7 @@ func (r *Repository) GetByOwner(ctx context.Context, ownerID, machineID string) 
 	baseline, err := scanBaseline(
 		queryRow(ctx, `SELECT b.machine_id::text,b.mean_rms_g,b.stddev_rms_g,b.version,b.updated_at
 		FROM machine_baselines b JOIN machines m ON m.id=b.machine_id
-		WHERE m.owner_user_id=$1 AND m.id=$2`, ownerID, machineID),
+		WHERE m.owner_user_id=$1 AND m.id=$2 AND m.deleted_at IS NULL`, ownerID, machineID),
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return machine.Baseline{}, machine.ErrBaselineNotFound
@@ -125,8 +143,8 @@ func (r *Repository) SetByOwner(
 
 	// Serialize baseline changes with telemetry ingestion on the machine row.
 	var lockedID string
-	err := tx.QueryRow(ctx, `SELECT id::text FROM machines WHERE owner_user_id=$1 AND id=$2 FOR UPDATE`,
-		ownerID, machineID).Scan(&lockedID)
+	err := tx.QueryRow(ctx, `SELECT id::text FROM machines
+		WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL FOR UPDATE`, ownerID, machineID).Scan(&lockedID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return machine.Baseline{}, machine.ErrNotFound
 	}

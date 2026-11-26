@@ -54,7 +54,7 @@ func (r *Repository) LockMachineForTelemetry(ctx context.Context, machineID stri
 	var lastObservedAt *time.Time
 	var dbNow time.Time
 	err := tx.QueryRow(ctx, `WITH locked_machine AS MATERIALIZED (
-		SELECT last_telemetry_observed_at FROM machines WHERE id=$1 FOR UPDATE
+		SELECT last_telemetry_observed_at FROM machines WHERE id=$1 AND deleted_at IS NULL FOR UPDATE
 	)
 	SELECT last_telemetry_observed_at,clock_timestamp() FROM locked_machine`, machineID).Scan(&lastObservedAt, &dbNow)
 	if errors.Is(err, pgx.ErrNoRows) {

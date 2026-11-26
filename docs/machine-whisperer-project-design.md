@@ -270,8 +270,9 @@ before returning machine data.
 | `GET /v1/users/me` | User JWT | No body | `200` with `id`, `email`, `created_at` |
 | `POST /internal/v1/device-provisioning` | User JWT with `device_provisioner`; manufacturing network | No body | `201` with `device_id`, one-time `api_key`, and `claim_payload` |
 | `POST /v1/machines` | User JWT | `{"name":"Pump"}` | `201` with `id`, `name`, `created_at` |
-| `GET /v1/machines` | User JWT | No body | `200` with the owner's machines |
-| `GET /v1/machines/{id}` | User JWT | No body | `200` with the owned machine |
+| `GET /v1/machines` | User JWT | No body | `200` with the owner's active machines |
+| `GET /v1/machines/{id}` | User JWT | No body | `200` with the active owned machine |
+| `DELETE /v1/machines/{id}` | User JWT | No body | `204` after archiving an owned machine or on the owner's retry |
 | `POST /v1/devices/claim` | User JWT | `device_id`, `claim_code`, `machine_id` | `200` with `device_id`, `machine_id`, `status: "claimed"` |
 | `POST /v1/devices/me/telemetry` | Device API key | Telemetry event, shown in §3 | `202`, empty body; event is queued for export |
 | `GET /v1/machines/{id}/baseline` | User JWT | No body | `200` with the prepared baseline for that machine |

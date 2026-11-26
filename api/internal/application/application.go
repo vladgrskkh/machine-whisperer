@@ -57,6 +57,7 @@ type Application struct {
 	telemetryWorker  *telemetryworker.Worker
 	metrics          *metrics.Metrics
 	createMachine    *machine.Create
+	deleteMachine    *machine.Delete
 	listMachines     *machine.List
 	machineDetail    *machine.Detail
 	getBaseline      *machine.GetBaseline
@@ -201,6 +202,7 @@ func (a *Application) setupEnrollment(
 	)
 	a.claim = device.NewClaim(devices, transactions, deviceTracer)
 	a.createMachine = machine.NewCreate(machines, token.IDs{}, machineTracer)
+	a.deleteMachine = machine.NewDelete(machines, machineTracer)
 	a.listMachines = machine.NewList(machines, machineTracer)
 	a.machineDetail = machine.NewDetail(machines, machineTracer)
 	a.telemetryHistory = telemetry.NewListHistory(machines, history, telemetryTracer)

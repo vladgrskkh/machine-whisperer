@@ -533,7 +533,7 @@ paths:
         - internal
   /v1/alerts/{id}/acknowledge:
     post:
-      description: The alert must belong to the caller. Repeated acknowledgements preserve the first timestamp and leave the recovery state unchanged.
+      description: The alert must belong to an active machine owned by the caller. Repeated acknowledgements preserve the first timestamp and leave the recovery state unchanged.
       operationId: acknowledgeAlert
       parameters:
         - description: Alert UUID.
@@ -855,7 +855,7 @@ paths:
   /v1/devices/claim:
     post:
       description: |-
-        Binds the device to a machine owned by the caller and consumes the single-use claim code.
+        Binds the device to an active machine owned by the caller and consumes the single-use claim code.
         Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
         Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
       operationId: claimDevice
@@ -1045,7 +1045,7 @@ paths:
         - telemetry
   /v1/machines:
     get:
-      description: Returns an empty array when the user owns no machines.
+      description: Lists active machines. Returns an empty array when the user owns no active machines.
       operationId: listMachines
       responses:
         "200":
@@ -1161,8 +1161,82 @@ paths:
       tags:
         - machines
   /v1/machines/{id}:
+    delete:
+      description: |-
+        Removes the machine from active owner routes and stops telemetry ingestion. The machine record, sensor binding, baselines, alerts and telemetry history are retained. Previously accepted telemetry continues to export.
+        Repeating the request for the same owned machine succeeds.
+      operationId: deleteMachine
+      parameters:
+        - description: Machine UUID.
+          in: path
+          name: id
+          required: true
+          schema:
+            format: uuid
+            type: string
+      responses:
+        "204":
+          description: Machine deleted or already deleted.
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid machine ID (`invalid_input`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "401":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Invalid or missing bearer credentials (`authentication_failed`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+            WWW-Authenticate:
+              description: Bearer
+              schema:
+                type: string
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: The machine is missing or belongs to another user (`machine_not_found`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+          description: Unexpected server error (`internal_error`).
+          headers:
+            Cache-Control:
+              description: Always no-store.
+              schema:
+                type: string
+      security:
+        - UserAccessJWT: []
+      summary: Delete a machine
+      tags:
+        - machines
     get:
-      description: The machine must belong to the caller.
+      description: The machine must be active and belong to the caller.
       operationId: getMachine
       parameters:
         - description: Machine UUID.
@@ -1239,7 +1313,7 @@ paths:
         - machines
   /v1/machines/{id}/alerts:
     get:
-      description: The machine must belong to the caller. Orders alerts by newest trigger first and returns an empty array when none exist.
+      description: The machine must be active and belong to the caller. Orders alerts by newest trigger first and returns an empty array when none exist.
       operationId: listMachineAlerts
       parameters:
         - description: Machine UUID.
@@ -1318,7 +1392,7 @@ paths:
         - alerts
   /v1/machines/{id}/baseline:
     get:
-      description: The machine must belong to the caller.
+      description: The machine must be active and belong to the caller.
       operationId: getMachineBaseline
       parameters:
         - description: Machine UUID.
@@ -1395,7 +1469,7 @@ paths:
         - machines
     put:
       description: |-
-        The machine must belong to the caller. Repeating the same values preserves the version and timestamp.
+        The machine must be active and belong to the caller. Repeating the same values preserves the version and timestamp.
         Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
       operationId: setMachineBaseline
       parameters:
@@ -1483,7 +1557,7 @@ paths:
   /v1/machines/{machine_id}/telemetry:
     get:
       description: |-
-        The machine must belong to the caller. Observations are available after export.
+        The machine must be active and belong to the caller. Observations are available after export.
         Orders by descending observation time, device ID and event ID. Empty pages have an empty items array. An exhausted page has a null next_cursor.
         Provide each of limit and cursor at most once.
       operationId: listMachineTelemetry

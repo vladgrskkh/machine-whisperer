@@ -80,6 +80,10 @@ export class ApiClient {
     return this.authenticated(`/v1/machines/${encodeURIComponent(id)}`);
   }
 
+  deleteMachine(id: string): Promise<void> {
+    return this.authenticated(`/v1/machines/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+
   getTelemetry(id: string, { cursor = null, limit = 100, signal }: TelemetryQuery = {}): Promise<TelemetryPage> {
     const query = cursor === null ? `limit=${limit}` : `limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
     return this.machineRead(`/v1/machines/${encodeURIComponent(id)}/telemetry?${query}`, signal);

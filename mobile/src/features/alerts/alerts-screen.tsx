@@ -9,6 +9,7 @@ import { QueryRefreshStatus } from '../../ui/query-refresh-status';
 import { colors, typography } from '../../ui/theme';
 import { WorkspaceCard } from '../../ui/workspace-card';
 import { WorkspaceScreen } from '../../ui/workspace-screen';
+import { useMachineDeletions } from '../machines/machine-deletion-provider';
 import { useMachineQuery } from '../machines/use-machine-query';
 import { loadMachineAlerts, type NamedAlert } from './load-machine-alerts';
 
@@ -19,6 +20,7 @@ type Acknowledgement = { state: 'pending' | 'seen' } | { state: 'error'; message
 
 export function AlertsScreen() {
   const { api } = useSession();
+  const { deletedIds } = useMachineDeletions();
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const [updates, setUpdates] = useState<Record<string, Acknowledgement>>({});
@@ -31,6 +33,7 @@ export function AlertsScreen() {
     return loading.current;
   }, []);
   const { query, refresh, retry } = useMachineQuery(load, 'Could not load machine alerts.', { keepPreviousData: true });
+  const alerts = query.state === 'ready' ? query.data.alerts.filter(({ machine }) => !deletedIds.has(machine.id)) : [];
 
   async function acknowledge(id: string) {
     if (pending.current.has(id)) return;
@@ -70,14 +73,14 @@ export function AlertsScreen() {
           )}
           <AlertGroup
             title="Active alerts"
-            entries={query.data.alerts.filter(({ alert }) => alert.recovered_at === null)}
+            entries={alerts.filter(({ alert }) => alert.recovered_at === null)}
             complete={query.data.failures === 0}
             updates={updates}
             onAcknowledge={acknowledge}
           />
           <AlertGroup
             title="Recovered alerts"
-            entries={query.data.alerts.filter(({ alert }) => alert.recovered_at !== null)}
+            entries={alerts.filter(({ alert }) => alert.recovered_at !== null)}
             complete={query.data.failures === 0}
             updates={updates}
             onAcknowledge={acknowledge}

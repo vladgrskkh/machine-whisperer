@@ -22,7 +22,8 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerID, machineID string)
 		a.last_z_score,a.peak_z_score,a.recovery_device_id::text,a.recovery_event_id::text,
 		a.recovered_at,a.recovery_baseline_version,a.acknowledged_at
 		FROM machine_alerts a JOIN machines m ON m.id=a.machine_id
-		WHERE m.owner_user_id=$1 AND m.id=$2 ORDER BY a.triggered_at DESC,a.id DESC`, ownerID, machineID)
+		WHERE m.owner_user_id=$1 AND m.id=$2 AND m.deleted_at IS NULL
+		ORDER BY a.triggered_at DESC,a.id DESC`, ownerID, machineID)
 	if err != nil {
 		return nil, fmt.Errorf("list owner machine alerts: %w", err)
 	}
@@ -33,7 +34,7 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerID, machineID string)
 	if len(values) == 0 {
 		var owned bool
 		err = r.pool.QueryRow(ctx, `SELECT EXISTS (
-			SELECT 1 FROM machines WHERE owner_user_id=$1 AND id=$2
+			SELECT 1 FROM machines WHERE owner_user_id=$1 AND id=$2 AND deleted_at IS NULL
 		)`, ownerID, machineID).Scan(&owned)
 		if err != nil {
 			return nil, fmt.Errorf("check alert history machine ownership: %w", err)
@@ -47,10 +48,13 @@ func (r *Repository) ListByOwner(ctx context.Context, ownerID, machineID string)
 
 func (r *Repository) Acknowledge(ctx context.Context, ownerID, alertID string) (bool, error) {
 	var owned, changed bool
-	// Lock before testing acknowledgement so concurrent retries see the winning update.
-	err := r.pool.QueryRow(ctx, `WITH owned AS (
-		SELECT a.id,a.acknowledged_at FROM machine_alerts a JOIN machines m ON m.id=a.machine_id
-		WHERE m.owner_user_id=$1 AND a.id=$2 FOR UPDATE OF a
+	// Lock the machine before the alert, matching the lock order in telemetry ingestion.
+	err := r.pool.QueryRow(ctx, `WITH active_machine AS MATERIALIZED (
+		SELECT m.id FROM machine_alerts a JOIN machines m ON m.id=a.machine_id
+		WHERE m.owner_user_id=$1 AND a.id=$2 AND m.deleted_at IS NULL FOR SHARE OF m
+	), owned AS (
+		SELECT a.id,a.acknowledged_at FROM machine_alerts a JOIN active_machine m ON m.id=a.machine_id
+		WHERE a.id=$2 FOR UPDATE OF a
 	), acknowledged AS (
 		UPDATE machine_alerts a SET acknowledged_at=clock_timestamp()
 		FROM owned WHERE a.id=owned.id AND owned.acknowledged_at IS NULL RETURNING 1

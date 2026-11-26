@@ -75,6 +75,7 @@ func (a *Application) Routes() http.Handler {
 		owner.Post("/v1/machines", machines.NewCreate(a.createMachine).ServeHTTP)
 		owner.Get("/v1/machines", machines.NewList(a.listMachines).ServeHTTP)
 		owner.Get("/v1/machines/{id}", machines.NewDetail(a.machineDetail).ServeHTTP)
+		owner.Delete("/v1/machines/{id}", machines.NewDelete(a.deleteMachine).ServeHTTP)
 		owner.Get("/v1/machines/{id}/baseline", machines.NewGetBaseline(a.getBaseline).ServeHTTP)
 		owner.Put("/v1/machines/{id}/baseline", machines.NewSetBaseline(a.setBaseline).ServeHTTP)
 		owner.Get("/v1/machines/{id}/alerts", alerts.NewList(a.listAlerts).ServeHTTP)

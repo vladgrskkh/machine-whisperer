@@ -250,9 +250,21 @@ The enrollment and authentication IP counters are held in each API process. Conf
 
 Owner routes accept a user access JWT. `POST /v1/machines` takes `{"name":"Pump"}`
 and returns `201`. Names are trimmed and limited to 100 Unicode characters.
-`GET /v1/machines` lists the user's machines, and `GET /v1/machines/{id}` retrieves
-one. Machine objects contain `id`, `name` and `created_at`. A lookup outside the
-user's machines returns `404`.
+`GET /v1/machines` lists the user's active machines, and `GET /v1/machines/{id}`
+retrieves one. Machine objects contain `id`, `name` and `created_at`. A lookup
+outside the user's active machines returns `404`.
+
+`DELETE /v1/machines/{id}` archives an owned machine and returns `204` with an
+empty body, including on an owner's retry. Send no request body. A malformed ID
+returns `400 invalid_input`, and a missing machine or one owned by another user
+returns `404 machine_not_found`. The machine, baseline, alerts and telemetry
+history become unavailable through owner routes.
+
+Archiving retains the machine record, baseline, detector state, alerts,
+telemetry history and existing sensor bindings. The claim code for each bound
+sensor stays consumed. Valid sensor credentials receive `404 machine_not_found`
+when submitting to the archived machine. The outbox continues to deliver
+previously accepted telemetry under the original machine ID.
 
 `POST /v1/devices/claim` takes JSON with `device_id` and `claim_code` from the QR
 object and the selected `machine_id`. A successful claim returns `200` with
@@ -409,7 +421,7 @@ An exhausted page has a null `next_cursor`.
 | `200` | The requested page. An empty page uses `"items":[]`. |
 | `400` | The machine ID, limit or cursor is invalid. |
 | `401` | User credentials are missing or invalid. |
-| `404` | The machine is missing or belongs to another user. |
+| `404` | The machine is missing, archived or belongs to another user. |
 | `503` | The PostgreSQL ownership lookup failed, or Analytics could not serve history due to a transport, storage, or service error. Retry the request later. |
 
 History responses use `Cache-Control: no-store`. The API uses

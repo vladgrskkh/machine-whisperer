@@ -39,7 +39,7 @@ type deviceClaimBody struct {
 // @Summary Claim a device for a machine
 // @ID claimDevice
 // @Tags devices
-// @Description Binds the device to a machine owned by the caller and consumes the single-use claim code.
+// @Description Binds the device to an active machine owned by the caller and consumes the single-use claim code.
 // @Description Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
 // @Description Shares a per-IP request budget with signup, login, refresh, device provisioning and device claim.
 // @Accept json

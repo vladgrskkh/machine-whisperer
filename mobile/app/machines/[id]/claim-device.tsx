@@ -5,6 +5,7 @@ import { ActivityIndicator, Text } from 'react-native';
 import type { ApiClient } from '../../../src/api/client';
 import { parseUUID } from '../../../src/api/uuid';
 import { ClaimDeviceForm } from '../../../src/features/devices/claim-device-form';
+import { useMachineDeletions } from '../../../src/features/machines/machine-deletion-provider';
 import { useMachineQuery } from '../../../src/features/machines/use-machine-query';
 import { Button } from '../../../src/ui/button';
 import { colors, typography } from '../../../src/ui/theme';
@@ -38,14 +39,16 @@ function SelectedMachine({ id }: { id: string }) {
 export default function ClaimDeviceRoute() {
   const params = useLocalSearchParams<{ id: string }>();
   const id = parseUUID(params.id);
+  const { deletedIds } = useMachineDeletions();
 
   return (
     <WorkspaceScreen>
       <Link href="/machines" dismissTo style={typography.link}>‹  Machines</Link>
       <Text accessibilityRole="header" style={typography.heading}>Scan device QR</Text>
-      {id
-        ? <SelectedMachine key={id} id={id} />
-        : <Text accessibilityRole="alert" style={typography.error}>Invalid machine ID.</Text>}
+      {!id && <Text accessibilityRole="alert" style={typography.error}>Invalid machine ID.</Text>}
+      {id && (deletedIds.has(id)
+        ? <Text accessibilityRole="alert" style={typography.error}>This machine was deleted.</Text>
+        : <SelectedMachine key={id} id={id} />)}
     </WorkspaceScreen>
   );
 }

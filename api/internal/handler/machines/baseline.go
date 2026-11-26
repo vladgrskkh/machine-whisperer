@@ -6,11 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/go-chi/chi/v5"
-
 	"github.com/vladgrskkh/machine-whisperer/api/internal/domain/machine"
 	"github.com/vladgrskkh/machine-whisperer/api/internal/handler"
-	"github.com/vladgrskkh/machine-whisperer/api/internal/handler/middleware"
 )
 
 const invalidBaseline = "Invalid baseline values or request body"
@@ -46,7 +43,7 @@ type baselineBody struct {
 // @Summary Get the current vibration baseline
 // @ID getMachineBaseline
 // @Tags machines
-// @Description The machine must belong to the caller.
+// @Description The machine must be active and belong to the caller.
 // @Produce json
 // @Security UserAccessJWT
 // @Param id path string true "Machine UUID." Format(uuid)
@@ -60,7 +57,7 @@ type baselineBody struct {
 // @Router /v1/machines/{id}/baseline [get]
 func NewGetBaseline(usecase BaselineGetter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ownerID, machineID, ok := baselineTarget(w, r)
+		ownerID, machineID, ok := machineTarget(w, r)
 		if !ok {
 			return
 		}
@@ -74,7 +71,7 @@ func NewGetBaseline(usecase BaselineGetter) http.Handler {
 // @Summary Set the current vibration baseline
 // @ID setMachineBaseline
 // @Tags machines
-// @Description The machine must belong to the caller. Repeating the same values preserves the version and timestamp.
+// @Description The machine must be active and belong to the caller. Repeating the same values preserves the version and timestamp.
 // @Description Send one JSON object of at most 8 KiB. Malformed JSON, unknown or duplicate keys and trailing values return 400.
 // @Accept json
 // @Produce json
@@ -91,7 +88,7 @@ func NewGetBaseline(usecase BaselineGetter) http.Handler {
 // @Router /v1/machines/{id}/baseline [put]
 func NewSetBaseline(usecase BaselineSetter) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ownerID, machineID, ok := baselineTarget(w, r)
+		ownerID, machineID, ok := machineTarget(w, r)
 		if !ok {
 			return
 		}
@@ -107,20 +104,6 @@ func NewSetBaseline(usecase BaselineSetter) http.Handler {
 		baseline, err := usecase.Execute(r.Context(), ownerID, machineID, *meanRMSG, *stddevRMSG)
 		writeBaseline(w, baseline, err)
 	})
-}
-
-func baselineTarget(w http.ResponseWriter, r *http.Request) (string, string, bool) {
-	ownerID, ok := middleware.UserID(r.Context())
-	if !ok {
-		middleware.Unauthorized(w)
-		return "", "", false
-	}
-	machineID, err := handler.ParseUUID(chi.URLParam(r, "id"))
-	if err != nil {
-		handler.Error(w, http.StatusBadRequest, invalidInput, "Invalid machine ID")
-		return "", "", false
-	}
-	return ownerID, machineID, true
 }
 
 func writeBaseline(w http.ResponseWriter, baseline machine.Baseline, err error) {
