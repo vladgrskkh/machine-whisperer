@@ -8,6 +8,8 @@ inputs:
   suite:
     description: Test suite name
     required: true
+  profiles:
+    description: Paths of input profiles, one per line, for merged coverage
   note:
     description: Optional context for interpreting the coverage percentage
 
@@ -26,15 +28,27 @@ runs:
       env:
         SERVICE: ${{ inputs.service }}
         SUITE: ${{ inputs.suite }}
+        PROFILES: ${{ inputs.profiles }}
         NOTE: ${{ inputs.note }}
       run: |
         profile="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.out"
         report="$RUNNER_TEMP/$SERVICE-$SUITE-coverage.html"
-        percentage=$(go tool cover -func="$profile" | awk '$1 == "total:" { print $NF }')
-        if [[ ! "$percentage" =~ ^[0-9]+(\.[0-9]+)?%$ ]]; then
-          echo "::error::Could not read the Go statement coverage total from $profile"
-          exit 1
+        inputs=("$profile")
+        if [[ -n "$PROFILES" ]]; then
+          mapfile -t inputs <<< "$PROFILES"
         fi
+        module=$(go list -m)
+        go run "$GITHUB_ACTION_PATH/profile.go" -module "$module" "${inputs[@]}" > "$profile.filtered"
+        mv "$profile.filtered" "$profile"
+
+        percentage=$(LC_ALL=C awk '
+          NR > 1 {
+            statements += $(NF - 1)
+            if ($NF > 0) covered += $(NF - 1)
+          }
+          END { printf "%.1f%%", statements ? 100 * covered / statements : 0 }
+        ' "$profile")
+        go tool cover -html="$profile" -o "$report"
         printf 'percentage=%s\n' "$percentage" >> "$GITHUB_OUTPUT"
         {
           printf '| Service | Suite | Statement coverage |\n'
@@ -44,7 +58,6 @@ runs:
             printf '%s\n\n' "$NOTE"
           fi
         } >> "$GITHUB_STEP_SUMMARY"
-        go tool cover -html="$profile" -o "$report"
     - name: Upload Go coverage report
       uses: actions/upload-artifact@v7
       with:

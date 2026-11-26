@@ -29,9 +29,9 @@ else
   git switch --orphan coverage-badges
 fi
 
-jq -n --arg label "API unit coverage" --arg message "$API_COVERAGE" \
+jq -n --arg label "API coverage" --arg message "$API_COVERAGE" \
   '{schemaVersion: 1, label: $label, message: $message, color: "blue"}' > api.json
-jq -n --arg label "Analytics unit coverage" --arg message "$ANALYTICS_COVERAGE" \
+jq -n --arg label "Analytics coverage" --arg message "$ANALYTICS_COVERAGE" \
   '{schemaVersion: 1, label: $label, message: $message, color: "blue"}' > analytics.json
 
 git add api.json analytics.json

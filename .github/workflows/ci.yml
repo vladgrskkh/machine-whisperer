@@ -30,8 +30,6 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    outputs:
-      coverage: ${{ steps.coverage.outputs.percentage }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -43,7 +41,6 @@ jobs:
           packages=$(bash ../.github/scripts/api-coverage-packages.sh)
           go test ./... -v -count=1 -race -coverpkg="$packages" -coverprofile="$RUNNER_TEMP/api-unit-coverage.out"
       - name: Export API unit coverage
-        id: coverage
         continue-on-error: true
         uses: ./.github/actions/go-coverage
         with:
@@ -82,8 +79,6 @@ jobs:
 
   analytics:
     runs-on: ubuntu-latest
-    outputs:
-      coverage: ${{ steps.coverage.outputs.percentage }}
     defaults:
       run:
         working-directory: analytics
@@ -97,7 +92,6 @@ jobs:
       - name: Run Analytics unit tests
         run: make test GO_TEST_FLAGS="-coverpkg=./cmd/...,./internal/... -coverprofile=$RUNNER_TEMP/analytics-unit-coverage.out"
       - name: Export Analytics unit coverage
-        id: coverage
         continue-on-error: true
         uses: ./.github/actions/go-coverage
         with:
@@ -118,11 +112,50 @@ jobs:
           working-directory: analytics
           args: --config ../api/.golangci.yml --build-tags=integration --timeout=5m
 
+  coverage:
+    needs: [test, integration, analytics]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    outputs:
+      api: ${{ steps.api.outputs.percentage }}
+      analytics: ${{ steps.analytics.outputs.percentage }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: api/go.mod
+          cache: false
+      - name: Test profile merging and generated file filtering
+        run: go test ../.github/actions/go-coverage/profile.go ../.github/actions/go-coverage/profile_test.go
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: '*-coverage'
+          path: ${{ runner.temp }}/coverage-inputs
+          merge-multiple: true
+      - name: Export merged API coverage
+        id: api
+        uses: ./.github/actions/go-coverage
+        with:
+          service: api
+          suite: merged
+          profiles: |-
+            ${{ runner.temp }}/coverage-inputs/api-unit-coverage.out
+            ${{ runner.temp }}/coverage-inputs/api-integration-coverage.out
+      - name: Export merged Analytics coverage
+        id: analytics
+        uses: ./.github/actions/go-coverage
+        with:
+          service: analytics
+          suite: merged
+          profiles: |-
+            ${{ runner.temp }}/coverage-inputs/analytics-unit-coverage.out
+            ${{ runner.temp }}/coverage-inputs/analytics-integration-coverage.out
+
   coverage-badges:
     if: >-
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.test.outputs.coverage != '' && needs.analytics.outputs.coverage != ''
-    needs: [test, analytics]
+      needs.coverage.outputs.api != '' && needs.coverage.outputs.analytics != ''
+    needs: coverage
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -131,11 +164,11 @@ jobs:
       queue: max
     steps:
       - uses: actions/checkout@v4
-      - name: Publish unit coverage badges
+      - name: Publish merged coverage badges
         working-directory: .
         env:
-          API_COVERAGE: ${{ needs.test.outputs.coverage }}
-          ANALYTICS_COVERAGE: ${{ needs.analytics.outputs.coverage }}
+          API_COVERAGE: ${{ needs.coverage.outputs.api }}
+          ANALYTICS_COVERAGE: ${{ needs.coverage.outputs.analytics }}
         run: bash .github/scripts/publish-go-coverage-badges.sh
 
   deployment:
