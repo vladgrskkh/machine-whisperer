@@ -409,6 +409,21 @@ with identifiers and flags alone. Keep the trace networks limited to trusted
 Compose members. Trace queues and retry windows are bounded and can drop spans
 when the backend is unavailable.
 
+Search `machine-whisperer` for `machine.history.load` to open the app's history trace.
+Nginx continues valid W3C trace context on public `/v1/` routes. Requests
+without valid context start at Nginx, and factory provisioning always starts
+a fresh trace. The edge samples using its own request ID and forwards its
+own sampling flag. Trace IDs carry diagnostic context. The API enforces its
+existing access and machine ownership checks independently.
+
+The app uploads OTLP/HTTP protobuf to `POST /otlp/v1/traces`. Nginx checks the
+user's access token through the existing API profile route and enforces a
+32 KiB body limit and upload rate limits. Nginx strips client headers before
+forwarding to the Collector's private HTTP receiver on the `trace-ingress`
+network. The Collector sets the app service name, preserves span names and
+parentage, and strips unapproved metadata before export. For a configuration
+upgrade, follow the [Nginx and Collector reload steps](#centralized-service-logs).
+
 ## Centralized service logs
 
 Sign in to Grafana and open **Explore** with the **Loki** data source. Select

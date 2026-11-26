@@ -53,6 +53,7 @@ services:
       jaeger-proxy: {}
       loki-proxy: {}
       trace-edge: {}
+      trace-ingress: {}
     volumes:
       - ./nginx:/opt/mw/nginx:ro
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
@@ -312,6 +313,8 @@ services:
     networks:
       trace-edge: {}
       trace-apps: {}
+      trace-ingress:
+        aliases: [otel-trace-ingress]
       monitoring:
         aliases: [collector-fluent]
       log-store: {}
@@ -372,6 +375,8 @@ networks:
   trace-edge:
     internal: true
   trace-apps:
+    internal: true
+  trace-ingress:
     internal: true
   monitoring: {}
   log-store:

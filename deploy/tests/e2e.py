@@ -24,6 +24,7 @@ from uuid import UUID, uuid4
 
 from deploy.tests.compose_stack import ComposeStack, LoopbackHTTPSConnection, eventually
 from deploy.tests.jaeger_query import JaegerQuery, service_name, string_attributes
+from deploy.tests.otlp import ingress_history_trace
 from deploy.tests.support import DEPLOY, run
 
 
@@ -798,7 +799,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
     def response(self, method, path, body=None, token=None, headers=None, *, opener=None):
         headers = dict(headers or {})
         data = None
-        if body is not None:
+        if isinstance(body, bytes):
+            data = body
+        elif body is not None:
             headers["Content-Type"] = "application/json"
             data = json.dumps(body).encode()
         if token is not None:
@@ -915,15 +918,25 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_path = history_path
         self.observation = observation
         self.assert_recorded_traces(ingest_start, ingest_end, (machine, device_id, observation["event_id"]))
+        self.assert_ingress_history_trace()
 
     def assert_recorded_traces(self, ingest_start, ingest_end, private_ids):
         query = JaegerQuery(self.stack)
-        spoof_id = secrets.token_hex(16)
+        client_trace_id = secrets.token_hex(16)
+        client_span_id = secrets.token_hex(8)
         canary = f"trace-fixture-{secrets.token_hex(8)}"
+        profile = "/v1/users/me"
+        profile_start = datetime.now(timezone.utc)
+        status, headers, _ = self.response("GET", profile + f"?fixture={canary}", token=self.owner_token, headers={
+            # The edge samples independently of the client's unsampled flag.
+            "traceparent": f"00-{client_trace_id}-{client_span_id}-00",
+            "tracestate": f"fixture={canary}", "baggage": f"fixture={canary}", "User-Agent": canary,
+        })
+        profile_end = datetime.now(timezone.utc)
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["X-Mw-Sampled-Trace"], client_trace_id)
         history_start = datetime.now(timezone.utc)
         self.request("GET", self.history_path + f"?fixture={canary}", 200, token=self.owner_token, headers={
-            # An external unsampled decision must not suppress a sampled edge root.
-            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-00",
             "tracestate": f"fixture={canary}", "baggage": f"fixture={canary}", "User-Agent": canary,
         })
         history_end = datetime.now(timezone.utc)
@@ -976,6 +989,9 @@ class DeploymentEndToEndTest(unittest.TestCase):
                         "(schema_version, event_id, device_id, machine_id")
         mark_delivered = ("postgresql", "UPDATE", "UPDATE telemetry_outbox", "o.lease_token=$1",
                           "unnest($2::text[]::uuid[],$3::text[]::uuid[])")
+        continued = trace_with("api", f"GET {profile}", profile_start, profile_end, {
+            ("nginx", "proxy /v1/"), ("api", f"GET {profile}"),
+        })
         history = trace_with("api", HISTORY, history_start, history_end, {
             ("nginx", "proxy /v1/"), ("api", HISTORY), ("api", "GET"), ("api", "telemetry.history.list"),
             ("analytics", ANALYTICS_HISTORY),
@@ -1020,14 +1036,20 @@ class DeploymentEndToEndTest(unittest.TestCase):
                     parent = indexed.get(parent.get("parentSpanId"))
             self.fail(f"No {statement[0]} {statement[1]} client span with the expected SQL under {ancestor['name']}")
 
+        continued_edge = span_named(continued, "nginx", "proxy /v1/")
+        continued_api = span_named(continued, "api", f"GET {profile}")
+        self.assertEqual(continued_edge["traceId"], client_trace_id)
+        self.assertEqual(continued_edge["parentSpanId"], client_span_id)
+        self.assertEqual(continued_api["traceId"], client_trace_id)
+        assert_chain(continued_edge, continued_api)
+
         edge = span_named(history, "nginx", "proxy /v1/")
         app = span_named(history, "api", HISTORY)
         history_use_case = span_named(history, "api", "telemetry.history.list")
         analytics = span_named(history, "analytics", ANALYTICS_HISTORY)
         self.assertFalse(edge.get("parentSpanId"))
         self.assertEqual(string_attributes(edge)["http.request.method"], "GET")
-        self.assertNotEqual(edge["traceId"], spoof_id)
-        self.assertEqual(query.get(spoof_id), [])
+        self.assertNotEqual(edge["traceId"], client_trace_id)
         assert_chain(edge, app, history_use_case, span_named(history, "api", "GET"), analytics)
         pg_read = assert_db_span(history, history_use_case, owner_lookup)
         self.assertEqual(pg_read["scope"]["name"], "github.com/exaring/otelpgx")
@@ -1062,7 +1084,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.assertEqual(string_attributes(failed_insert)["pgx.sql_state"], "23505")
         self.assertIn(failed_insert.get("status", {}).get("code"), (2, "STATUS_CODE_ERROR"))
 
-        traces = history + acceptance + delivery + conflict
+        traces = continued + history + acceptance + delivery + conflict
         stored = json.dumps(traces)
         for value in (canary, email, password, *private_ids, self.owner_token, self.device_key,
                       "http.target", "http.user_agent",
@@ -1078,6 +1100,58 @@ class DeploymentEndToEndTest(unittest.TestCase):
         self.history_trace_id = edge["traceId"]
         self.history_edge_span_id = edge["spanId"]
 
+    def assert_ingress_history_trace(self):
+        trace_id = secrets.token_hex(16)
+        root_id, request_id, extra_id = (secrets.token_hex(8) for _ in range(3))
+        started = time.time_ns()
+        status, headers, _ = self.response("GET", self.history_path, token=self.owner_token, headers={
+            # The edge still samples this request under the fixture's edge-owned 100% policy.
+            "traceparent": f"00-{trace_id}-{request_id}-00",
+        })
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["X-Mw-Sampled-Trace"], trace_id)
+
+        canary = f"trace-private-{secrets.token_hex(8)}"
+        payload = ingress_history_trace(trace_id, root_id, request_id, extra_id, started, canary)
+        otlp = {"Content-Type": "application/x-protobuf"}
+        self.request("POST", "/otlp/v1/traces", 401, payload, headers=otlp, decode=False)
+        self.request("POST", "/otlp/v1/traces", 200, payload, token=self.owner_token, headers=otlp, decode=False)
+        query = JaegerQuery(self.stack)
+        chain = [
+            ("machine-whisperer", "machine.history.load"), ("machine-whisperer", HISTORY), ("nginx", "proxy /v1/"), ("api", HISTORY),
+        ]
+        extra_key = ("machine-whisperer", "POST /v1/machines")
+
+        def complete():
+            spans = {(service_name(span), span["name"]): span for span in query.get(trace_id)}
+            required = (*chain, extra_key, ("analytics", ANALYTICS_HISTORY))
+            return spans if all(key in spans for key in required) else None
+
+        spans = eventually("one app-rooted history trace", complete, timeout=45, caught=NETWORK_ERRORS)
+        root = spans[chain[0]]
+        self.assertEqual(root["spanId"], root_id)
+        self.assertFalse(root.get("parentSpanId"))
+        root_attrs = string_attributes(root)
+        self.assertNotIn("http.request.method", root_attrs)
+        self.assertNotIn("http.route", root_attrs)
+        self.assertEqual(spans[chain[1]]["spanId"], request_id)
+        for parent, child in zip(chain, chain[1:]):
+            self.assertEqual(spans[child]["parentSpanId"], spans[parent]["spanId"], child)
+        extra = spans[extra_key]
+        self.assertEqual(extra["spanId"], extra_id)
+        self.assertEqual(extra["parentSpanId"], root_id)
+        self.assertIn(extra.get("kind"), (2, "SPAN_KIND_SERVER"))
+        extra_attrs = string_attributes(extra)
+        self.assertEqual(extra_attrs["http.request.method"], "POST")
+        self.assertEqual(extra_attrs["http.route"], "/v1/machines")
+        # Jaeger's pinned Badger adapter may return the legacy HTTP status alias.
+        status_codes = {
+            int(item["value"]["intValue"]) for item in extra["attributes"]
+            if item["key"] in ("http.response.status_code", "http.status_code")
+        }
+        self.assertEqual(status_codes, {201})
+        self.assertNotIn(canary, json.dumps([root, spans[chain[1]], extra]))
+
     def assert_unsampled_request_keeps_the_edge_decision(self):
         def restart_edge(percent):
             self.stack.env["MW_NGINX_TRACE_SAMPLE_PERCENT"] = percent
@@ -1087,11 +1161,13 @@ class DeploymentEndToEndTest(unittest.TestCase):
                        caught=NETWORK_ERRORS)
 
         restart_edge("0")
-        spoof_id = secrets.token_hex(16)
+        client_trace_id = secrets.token_hex(16)
         start = datetime.now(timezone.utc)
-        self.request("GET", self.history_path, 200, token=self.owner_token, headers={
-            "traceparent": f"00-{spoof_id}-{secrets.token_hex(8)}-01",
+        status, headers, _ = self.response("GET", self.history_path, token=self.owner_token, headers={
+            "traceparent": f"00-{client_trace_id}-{secrets.token_hex(8)}-01",
         })
+        self.assertEqual(status, 200)
+        self.assertIsNone(headers.get("X-Mw-Sampled-Trace"))
         end = datetime.now(timezone.utc)
         restart_edge("100")
         control_start = datetime.now(timezone.utc)
@@ -1102,7 +1178,7 @@ class DeploymentEndToEndTest(unittest.TestCase):
         eventually("sampled control after the unsampled request",
                    lambda: query.find("api", HISTORY, control_start, control_end), timeout=45, caught=NETWORK_ERRORS)
         self.assertEqual(query.find("api", HISTORY, start, end), [])
-        self.assertEqual(query.get(spoof_id), [])
+        self.assertEqual(query.get(client_trace_id), [])
 
     def assert_telemetry_during_collector_outage(self):
         self.stack.compose("stop", "otel-collector")

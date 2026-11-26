@@ -5,6 +5,13 @@ receivers:
         endpoint: 0.0.0.0:4317
         max_recv_msg_size_mib: 4
 
+  otlp/ingress:
+    protocols:
+      http:
+        endpoint: otel-trace-ingress:4318
+        max_request_body_size: 32768
+        read_timeout: 5s
+
   fluent_forward:
     endpoint: collector-fluent:24224
 
@@ -45,6 +52,40 @@ processors:
       # API's outbox worker sets only ID and flag fields, with no attributes or
       # tracestate. Remove whole links from every other kind of span.
       - 'set(span.links, nil) where resource.attributes["service.name"] != "api" or span.name != "outbox.deliver"'
+  transform/trace_ingress:
+    error_mode: propagate
+    trace_statements:
+      - 'keep_keys(resource.attributes, ["service.version"])'
+      - 'delete_key(resource.attributes, "service.version") where not IsString(resource.attributes["service.version"])'
+      - >-
+        delete_key(resource.attributes, "service.version") where IsString(resource.attributes["service.version"]) and
+        not IsMatch(resource.attributes["service.version"], "^[0-9]{1,8}(\\.[0-9]{1,8}){1,3}$")
+      - 'set(resource.attributes["service.name"], "machine-whisperer")'
+      - 'set(resource.attributes["service.namespace"], "machine-whisperer")'
+      - 'keep_keys(scope.attributes, [])'
+      - 'set(scope.name, "machine-whisperer.tracing")'
+      - 'set(scope.version, "")'
+      - 'keep_keys(span.attributes, ["http.request.method", "http.route", "http.response.status_code", "error.type"])'
+      - 'delete_key(span.attributes, "http.request.method") where not IsString(span.attributes["http.request.method"])'
+      - >-
+        delete_key(span.attributes, "http.request.method") where IsString(span.attributes["http.request.method"]) and
+        not ContainsValue(["CONNECT", "DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT", "TRACE", "_OTHER"],
+        span.attributes["http.request.method"])
+      - 'delete_key(span.attributes, "http.route") where not IsString(span.attributes["http.route"])'
+      - >-
+        delete_key(span.attributes, "http.route") where IsString(span.attributes["http.route"]) and
+        not IsMatch(span.attributes["http.route"], "^/([^/?#[:space:]\\p{Z}\\p{Cc}][^?#[:space:]\\p{Z}\\p{Cc}]{0,254})?$")
+      - 'delete_key(span.attributes, "http.response.status_code") where not IsInt(span.attributes["http.response.status_code"])'
+      - >-
+        delete_key(span.attributes, "http.response.status_code") where IsInt(span.attributes["http.response.status_code"]) and
+        (span.attributes["http.response.status_code"] < 100 or span.attributes["http.response.status_code"] > 599)
+      - >-
+        delete_key(span.attributes, "error.type") where not ContainsValue(
+        ["network_error", "timeout", "cancelled", "http_error", "invalid_response"], span.attributes["error.type"])
+      - 'set(span.status.message, "")'
+      - 'set(span.trace_state, "")'
+      - 'set(span.events, nil)'
+      - 'set(span.links, nil)'
   filter/log_sources:
     error_mode: propagate
     log_conditions:
@@ -171,6 +212,10 @@ service:
     traces:
       receivers: [otlp]
       processors: [memory_limiter, transform/allowlist, batch]
+      exporters: [otlp_grpc/jaeger]
+    traces/ingress:
+      receivers: [otlp/ingress]
+      processors: [memory_limiter, transform/trace_ingress, batch]
       exporters: [otlp_grpc/jaeger]
     logs:
       receivers: [fluent_forward]
