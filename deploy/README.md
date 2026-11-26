@@ -2,11 +2,17 @@
 
 ## Prerequisites
 
-Use an x86-64 Linux host with Docker Engine 28 or newer, the Docker Compose v2 plugin,
-Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands from the
-monorepo root on the Docker host. The operator account needs Docker access and
-access to the secret files. Docker Engine 28 or newer keeps localhost-published
-ports off the local network. [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+Use an x86-64 Linux host with Docker Engine 28.2 or newer, the Docker Compose v2
+plugin, Git, Bash, Python 3, and OpenSSL with Ed25519 support. Run the commands
+from the monorepo root on the Docker host. The operator account needs Docker
+access and access to the secret files. The supported Engine versions keep
+localhost-published ports off the local network.
+[Docker port publishing](https://docs.docker.com/engine/network/port-publishing/)
+
+The stack uses `fluentd-write-timeout` to bound writes from Docker's log driver
+to the Collector. Docker added this option in Engine 28.2. Upgrade hosts running
+an earlier Engine version before rolling out this stack.
+[Docker Engine 28.2 release notes](https://docs.docker.com/engine/release-notes/28/#2820)
 
 Publish a public DNS A record pointing to the host's public IPv4 address and
 allow inbound TCP 80 and 443 for Nginx. Do not publish an AAAA record until
