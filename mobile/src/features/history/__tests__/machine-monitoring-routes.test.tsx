@@ -1,6 +1,8 @@
 import { userEvent } from '@testing-library/react-native';
+import { router } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
 import { act, fireEvent, renderRouter, screen, waitFor, within } from 'expo-router/testing-library';
+import { Alert, Platform } from 'react-native';
 
 import AuthLayout from '../../../../app/(auth)/_layout';
 import ClaimDevice from '../../../../app/machines/[id]/claim-device';
@@ -91,11 +93,21 @@ async function press(name: string | RegExp) {
   await fireEvent.press(screen.getByRole('button', { name }));
 }
 
+async function respondToDeletePrompt(choice: 'Cancel' | 'Delete machine') {
+  const buttons = jest.mocked(Alert.alert).mock.lastCall?.[2];
+  const respond = buttons?.find(({ text }) => text === choice)?.onPress;
+  if (!respond) throw new Error(`No ${choice} button in the delete confirmation.`);
+  await act(async () => { respond(); });
+}
+
 beforeEach(() => {
   process.env.EXPO_PUBLIC_API_URL = base;
   jest.mocked(SecureStore.getItemAsync).mockResolvedValue(JSON.stringify({
     access_token: 'access', refresh_token: 'refresh', token_type: 'Bearer', expires_in: 900,
   }));
+  jest.mocked(SecureStore.setItemAsync).mockResolvedValue(undefined);
+  jest.mocked(SecureStore.deleteItemAsync).mockResolvedValue(undefined);
+  jest.spyOn(Alert, 'alert').mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -127,6 +139,204 @@ it('keeps machines visible while refetching after a tab switch', async () => {
   expect(await screen.findByRole('button', { name: 'Renamed fan' })).toBeOnTheScreen();
   expect(screen.queryByRole('button', { name: machine.name })).toBeNull();
   expect(screen.queryByRole('status')).toBeNull();
+});
+
+it('removes a deleted machine and its alerts from cached tabs while refreshes fail', async () => {
+  const pump = { ...machine, id: '7ebac931-e3b1-4a33-829a-13b5d852aaf8', name: 'Water pump' };
+  const pumpAlert = { ...active, id: '7b9c7f4a-2344-4a20-ae5e-1449a6d67621', machine_id: pump.id };
+  const { promise: deletion, resolve } = Promise.withResolvers<Response>();
+  let deleted = false;
+  const fetch = network((url, request) => {
+    if (url.pathname === root && request?.method === 'DELETE') return deletion;
+    if (url.pathname === '/v1/machines') {
+      return deleted ? json({ error: { code: 'internal_error', message: 'Machine list unavailable' } }, 503) : json([machine, pump]);
+    }
+    if (url.pathname === `/v1/machines/${pump.id}/alerts`) return json([pumpAlert]);
+    if (url.pathname === `/v1/machines/${pump.id}/telemetry`) return json({ items: [], next_cursor: null });
+    if (url.pathname === `/v1/machines/${pump.id}/baseline`) return json({ ...configured, machine_id: pump.id });
+    return undefined;
+  });
+  const navigation = await renderRouter(routes, { initialUrl: '/alerts' });
+
+  await screen.findByRole('button', { name: `Acknowledge alert for ${machine.name}` });
+  expect(screen.getByRole('button', { name: `Acknowledge alert for ${pump.name}` })).toBeOnTheScreen();
+  await press(/^Machines, tab/);
+  await screen.findByRole('button', { name: machine.name });
+  await press(machine.name);
+
+  await screen.findByRole('button', { name: 'Delete machine' });
+  await press('Delete machine');
+  await press('Delete machine');
+  expect(Alert.alert).toHaveBeenCalledTimes(1);
+  expect(Alert.alert).toHaveBeenCalledWith(
+    `Delete ${machine.name}?`,
+    expect.stringMatching(/monitoring will stop.*history.*sensor association/i),
+    [expect.objectContaining({ text: 'Cancel', style: 'cancel' }),
+      expect.objectContaining({ text: 'Delete machine', style: 'destructive' })],
+    expect.anything(),
+  );
+  await respondToDeletePrompt('Cancel');
+  expect(fetch.mock.calls.filter(([, request]) => request?.method === 'DELETE')).toHaveLength(0);
+  expect(navigation.getPathname()).toBe(detailPath);
+
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+  expect(screen.getByRole('button', { name: 'Delete machine' })).toBeDisabled();
+  expect(fetch.mock.calls.filter(([, request]) => request?.method === 'DELETE')).toHaveLength(1);
+  expect(navigation.getPathname()).toBe(detailPath);
+
+  await fireEvent.press(screen.getByRole('link', { name: /Machines/ }));
+  await screen.findByRole('button', { name: machine.name });
+  await press(machine.name);
+  await screen.findByRole('button', { name: 'Delete machine' });
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+  expect(fetch.mock.calls.filter(([, request]) => request?.method === 'DELETE')).toHaveLength(1);
+
+  await act(async () => {
+    deleted = true;
+    resolve(new Response(null, { status: 204 }));
+  });
+  expect(await screen.findByRole('button', { name: pump.name })).toBeOnTheScreen();
+  expect(navigation.getPathname()).toBe('/machines');
+  expect(screen.queryByRole('button', { name: machine.name })).toBeNull();
+  expect(await screen.findByRole('alert')).toHaveTextContent('Machine list unavailable');
+
+  await press(/^Alerts, tab/);
+  expect(await screen.findByRole('alert')).toHaveTextContent('Machine list unavailable');
+  expect(screen.getByRole('button', { name: `Acknowledge alert for ${pump.name}` })).toBeOnTheScreen();
+  expect(screen.queryByText(machine.name)).toBeNull();
+});
+
+it('limits remembered machine deletions to the signed-in session', async () => {
+  network((url, request) => {
+    if ((url.pathname === root && request?.method === 'DELETE') || url.pathname === '/v1/auth/logout') {
+      return new Response(null, { status: 204 });
+    }
+    if (url.pathname === '/v1/auth/login') return json({
+      access_token: 'next-access', refresh_token: 'next-refresh', token_type: 'Bearer', expires_in: 900,
+    });
+    return undefined;
+  });
+  await renderRouter(routes, { initialUrl: '/machines' });
+  await screen.findByRole('button', { name: machine.name });
+  await press(machine.name);
+  await screen.findByRole('button', { name: 'Delete machine' });
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+  expect(await screen.findByText('No machines yet.')).toBeOnTheScreen();
+
+  await press(/^Account, tab/);
+  await press('Sign out');
+  await screen.findByRole('header', { name: 'Sign in' });
+  await fireEvent.changeText(screen.getByLabelText('Email'), 'operator@example.test');
+  await fireEvent.changeText(screen.getByLabelText('Password'), 'a new long password');
+  await press('Sign in');
+  expect(await screen.findByRole('button', { name: machine.name })).toBeOnTheScreen();
+});
+
+it('keeps machine details available after deletion fails and allows another confirmation', async () => {
+  let attempts = 0;
+  network((url, request) => {
+    if (url.pathname !== root || request?.method !== 'DELETE') return undefined;
+    if (attempts++ === 0) return json({ error: { code: 'internal_error', message: 'Delete unavailable' } }, 503);
+    return new Response(null, { status: 204 });
+  });
+  const navigation = await renderRouter(routes, { initialUrl: detailPath });
+
+  await screen.findByRole('button', { name: 'Delete machine' });
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('Delete unavailable');
+  expect(screen.getByRole('header', { name: machine.name })).toBeOnTheScreen();
+  expect(navigation.getPathname()).toBe(detailPath);
+  expect(attempts).toBe(1);
+
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+  expect(await screen.findByRole('header', { name: 'Your machines' })).toBeOnTheScreen();
+  expect(navigation.getPathname()).toBe('/machines');
+  expect(attempts).toBe(2);
+});
+
+it('uses browser confirmation for deletion on web', async () => {
+  const fetch = network((url, request) => url.pathname === root && request?.method === 'DELETE'
+    ? json({ error: { code: 'internal_error', message: 'Delete unavailable' } }, 503) : undefined);
+  await renderRouter(routes, { initialUrl: detailPath });
+  await screen.findByRole('button', { name: 'Delete machine' });
+  const previousConfirm = Object.getOwnPropertyDescriptor(globalThis, 'confirm');
+  const confirm = jest.fn().mockReturnValueOnce(false).mockReturnValueOnce(true);
+  Object.defineProperty(globalThis, 'confirm', { configurable: true, value: confirm });
+  const platform = jest.replaceProperty(Platform, 'OS', 'web');
+
+  try {
+    await press('Delete machine');
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining(`Delete ${machine.name}?`));
+    expect(fetch.mock.calls.filter(([, request]) => request?.method === 'DELETE')).toHaveLength(0);
+    await press('Delete machine');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Delete unavailable');
+    expect(fetch.mock.calls.filter(([, request]) => request?.method === 'DELETE')).toHaveLength(1);
+    expect(Alert.alert).not.toHaveBeenCalled();
+  } finally {
+    platform.restore();
+    if (previousConfirm) Object.defineProperty(globalThis, 'confirm', previousConfirm);
+    else Reflect.deleteProperty(globalThis, 'confirm');
+  }
+});
+
+it('shows the delete action only after the selected machine loads', async () => {
+  const { promise: detail, resolve } = Promise.withResolvers<Response>();
+  network((url) => url.pathname === root ? detail : undefined);
+  await renderRouter(routes, { initialUrl: detailPath });
+
+  await screen.findByLabelText('Loading machine');
+  expect(screen.queryByRole('button', { name: 'Delete machine' })).toBeNull();
+  await act(async () => {
+    resolve(json({ error: { code: 'machine_not_found', message: 'Machine not found' } }, 404));
+  });
+  expect(await screen.findByRole('alert')).toHaveTextContent('Machine not found');
+  expect(screen.queryByRole('button', { name: 'Delete machine' })).toBeNull();
+});
+
+it.each([
+  { status: 404, code: 'machine_not_found', message: 'Machine not found', showDetails: false },
+  { status: 503, code: 'internal_error', message: 'Machine details unavailable', showDetails: true },
+])('handles $code when machine details refresh after refocus', async ({ status, code, message, showDetails }) => {
+  let reads = 0;
+  network((url) => url.pathname === root && ++reads > 1 ? json({ error: { code, message } }, status) : undefined);
+  await renderRouter(routes, { initialUrl: detailPath });
+  await screen.findByRole('button', { name: 'Delete machine' });
+
+  await act(async () => { router.push('/machines/new'); });
+  await screen.findByRole('header', { name: 'Add a machine' });
+  await act(async () => { router.back(); });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent(message);
+  expect(screen.queryByRole('header', { name: machine.name }) !== null).toBe(showDetails);
+  expect(screen.queryByRole('button', { name: 'Delete machine' }) !== null).toBe(showDetails);
+});
+
+it.each([
+  { route: 'baseline', action: 'Save baseline' },
+  { route: 'claim-device', action: 'Enter claim code' },
+])('hides the $route form if deletion finishes while it is open', async ({ route, action }) => {
+  const { promise: deletion, resolve } = Promise.withResolvers<Response>();
+  network((url, request) => url.pathname === root && request?.method === 'DELETE' ? deletion : undefined);
+  const navigation = await renderRouter(routes, { initialUrl: detailPath });
+  await screen.findByRole('button', { name: 'Delete machine' });
+  await press('Delete machine');
+  await respondToDeletePrompt('Delete machine');
+
+  const path = `${detailPath}/${route}`;
+  await act(async () => { router.push(path); });
+  await screen.findByRole('button', { name: action });
+  await act(async () => { resolve(new Response(null, { status: 204 })); });
+
+  expect(await screen.findByRole('alert')).toHaveTextContent('This machine was deleted.');
+  expect(screen.queryByRole('button', { name: action })).toBeNull();
+  expect(navigation.getPathname()).toBe(path);
+  expect(screen.getByRole('link', { name: /Machines/ })).toBeOnTheScreen();
 });
 
 it('keeps loaded alerts and offers a retry when refreshing fails', async () => {

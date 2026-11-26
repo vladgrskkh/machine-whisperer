@@ -27,6 +27,10 @@ type Detailer interface {
 	Detail(ctx context.Context, ownerUserID, machineID string) (machine.Machine, error)
 }
 
+type Deleter interface {
+	Delete(ctx context.Context, ownerUserID, machineID string) error
+}
+
 type machineResponse struct {
 	ID        string    `json:"id"         validate:"required" format:"uuid"`
 	Name      string    `json:"name"       validate:"required"                    minLength:"1" maxLength:"100"`
@@ -88,7 +92,7 @@ func NewCreate(usecase Creator) http.Handler {
 // @Summary List the user's machines
 // @ID listMachines
 // @Tags machines
-// @Description Returns an empty array when the user owns no machines.
+// @Description Lists active machines. Returns an empty array when the user owns no active machines.
 // @Produce json
 // @Security UserAccessJWT
 // @Success 200 {array} Machine "Owned machines."
@@ -122,7 +126,7 @@ func NewList(usecase Lister) http.Handler {
 // @Summary Get a machine
 // @ID getMachine
 // @Tags machines
-// @Description The machine must belong to the caller.
+// @Description The machine must be active and belong to the caller.
 // @Produce json
 // @Security UserAccessJWT
 // @Param id path string true "Machine UUID." Format(uuid)
@@ -136,14 +140,8 @@ func NewList(usecase Lister) http.Handler {
 // @Router /v1/machines/{id} [get]
 func NewDetail(usecase Detailer) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		owner, ok := middleware.UserID(r.Context())
+		owner, machineID, ok := machineTarget(w, r)
 		if !ok {
-			middleware.Unauthorized(w)
-			return
-		}
-		machineID, err := handler.ParseUUID(chi.URLParam(r, "id"))
-		if err != nil {
-			handler.Error(w, http.StatusBadRequest, invalidInput, "Invalid machine ID")
 			return
 		}
 		value, err := usecase.Detail(r.Context(), owner, machineID)
@@ -156,6 +154,56 @@ func NewDetail(usecase Detailer) http.Handler {
 			handler.JSON(w, http.StatusOK, publicMachine(value))
 		}
 	})
+}
+
+// NewDelete handles machine deletion for the authenticated owner.
+//
+// @Summary Delete a machine
+// @ID deleteMachine
+// @Tags machines
+// @Description Removes the machine from active owner routes and stops telemetry ingestion. The machine record, sensor binding, baselines, alerts and telemetry history are retained. Previously accepted telemetry continues to export.
+// @Description Repeating the request for the same owned machine succeeds.
+// @Produce json
+// @Security UserAccessJWT
+// @Param id path string true "Machine UUID." Format(uuid)
+// @Success 204 "Machine deleted or already deleted."
+// @Failure 400 {object} ErrorResponse "Invalid machine ID (`invalid_input`)."
+// @Failure 401 {object} ErrorResponse "Invalid or missing bearer credentials (`authentication_failed`)."
+// @Failure 404 {object} ErrorResponse "The machine is missing or belongs to another user (`machine_not_found`)."
+// @Failure 500 {object} ErrorResponse "Unexpected server error (`internal_error`)."
+// @Header all {string} Cache-Control "Always no-store."
+// @Header 401 {string} WWW-Authenticate "Bearer"
+// @Router /v1/machines/{id} [delete]
+func NewDelete(usecase Deleter) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		owner, machineID, ok := machineTarget(w, r)
+		if !ok {
+			return
+		}
+		err := usecase.Delete(r.Context(), owner, machineID)
+		switch {
+		case errors.Is(err, machine.ErrNotFound):
+			handler.Error(w, http.StatusNotFound, "machine_not_found", "Machine not found")
+		case err != nil:
+			handler.InternalError(w)
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+}
+
+func machineTarget(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+	ownerID, ok := middleware.UserID(r.Context())
+	if !ok {
+		middleware.Unauthorized(w)
+		return "", "", false
+	}
+	machineID, err := handler.ParseUUID(chi.URLParam(r, "id"))
+	if err != nil {
+		handler.Error(w, http.StatusBadRequest, invalidInput, "Invalid machine ID")
+		return "", "", false
+	}
+	return ownerID, machineID, true
 }
 
 func publicMachine(value machine.Machine) machineResponse {

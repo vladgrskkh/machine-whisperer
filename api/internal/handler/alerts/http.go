@@ -48,7 +48,7 @@ type alertResponse struct {
 // @Summary List machine alerts
 // @ID listMachineAlerts
 // @Tags alerts
-// @Description The machine must belong to the caller. Orders alerts by newest trigger first and returns an empty array when none exist.
+// @Description The machine must be active and belong to the caller. Orders alerts by newest trigger first and returns an empty array when none exist.
 // @Produce json
 // @Security UserAccessJWT
 // @Param id path string true "Machine UUID." Format(uuid)
@@ -87,7 +87,7 @@ func NewList(usecase Lister) http.Handler {
 // @Summary Acknowledge an alert
 // @ID acknowledgeAlert
 // @Tags alerts
-// @Description The alert must belong to the caller. Repeated acknowledgements preserve the first timestamp and leave the recovery state unchanged.
+// @Description The alert must belong to an active machine owned by the caller. Repeated acknowledgements preserve the first timestamp and leave the recovery state unchanged.
 // @Produce json
 // @Security UserAccessJWT
 // @Param id path string true "Alert UUID." Format(uuid)

@@ -2,7 +2,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useRef, useState } from 'react';
 
 import type { ApiClient } from '../../api/client';
-import { errorMessage } from '../../api/errors';
+import { ApiError, errorMessage } from '../../api/errors';
 import { useSession } from '../../auth/session-provider';
 
 type Query<T> =
@@ -40,7 +40,8 @@ export function useMachineQuery<T>(
         (error: unknown) => {
           if (signal.aborted) return;
           const message = errorMessage(error, fallback);
-          setQuery((previous) => previous.state === 'ready'
+          const missingMachine = error instanceof ApiError && error.status === 404 && error.code === 'machine_not_found';
+          setQuery((previous) => !missingMachine && previous.state === 'ready'
             ? { ...previous, refresh: { message } }
             : { state: 'error', message });
         },

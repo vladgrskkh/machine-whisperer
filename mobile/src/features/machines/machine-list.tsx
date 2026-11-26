@@ -6,6 +6,7 @@ import { QueryRefreshStatus } from '../../ui/query-refresh-status';
 import { colors, typography } from '../../ui/theme';
 import { WorkspaceScreen } from '../../ui/workspace-screen';
 import { MachineCard } from './machine-card';
+import { useMachineDeletions } from './machine-deletion-provider';
 import { useMachineQuery } from './use-machine-query';
 
 async function listMachines(api: ApiClient, signal: AbortSignal) {
@@ -13,7 +14,9 @@ async function listMachines(api: ApiClient, signal: AbortSignal) {
 }
 
 export function MachineList({ onAdd, onSelect }: { onAdd: () => void; onSelect: (machineId: string) => void }) {
+  const { deletedIds } = useMachineDeletions();
   const { query, refresh, retry } = useMachineQuery(listMachines, 'Could not load your machines.', { keepPreviousData: true });
+  const machines = query.state === 'ready' ? query.data.machines.filter(({ id }) => !deletedIds.has(id)) : [];
 
   return (
     <WorkspaceScreen tab>
@@ -30,8 +33,8 @@ export function MachineList({ onAdd, onSelect }: { onAdd: () => void; onSelect: 
         </View>
       )}
       {query.state === 'ready' && (
-        query.data.machines.length === 0 ? <Text style={typography.body}>No machines yet.</Text> : (
-          query.data.machines.map((machine) => (
+        machines.length === 0 ? <Text style={typography.body}>No machines yet.</Text> : (
+          machines.map((machine) => (
             <MachineCard key={machine.id} machine={machine} onSelect={onSelect} signal={query.data.signal} />
           ))
         )

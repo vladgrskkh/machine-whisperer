@@ -3,6 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 
 import { SessionProvider, useSessionStatus } from '../src/auth/session-provider';
+import { MachineDeletionProvider } from '../src/features/machines/machine-deletion-provider';
 import { colors } from '../src/ui/theme';
 
 function AppNavigation() {
@@ -32,7 +33,9 @@ export default function RootLayout() {
   return (
     <SessionProvider>
       <StatusBar style="dark" />
-      <AppNavigation />
+      <MachineDeletionProvider>
+        <AppNavigation />
+      </MachineDeletionProvider>
     </SessionProvider>
   );
 }

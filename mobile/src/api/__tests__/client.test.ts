@@ -47,6 +47,7 @@ it('maps machine and claim operations to authenticated API endpoints', async () 
     .mockResolvedValueOnce(new Response(JSON.stringify([machine])))
     .mockResolvedValueOnce(new Response(JSON.stringify(machine), { status: 201 }))
     .mockResolvedValueOnce(new Response(JSON.stringify(machine)))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
     .mockResolvedValueOnce(new Response(JSON.stringify(claimed)));
   const api = new ApiClient({
     baseUrl: 'https://example.test',
@@ -57,6 +58,7 @@ it('maps machine and claim operations to authenticated API endpoints', async () 
   await expect(api.listMachines()).resolves.toEqual([machine]);
   await expect(api.createMachine({ name: 'Workshop fan' })).resolves.toEqual(machine);
   await expect(api.getMachine(machine.id)).resolves.toEqual(machine);
+  await expect(api.deleteMachine(machine.id)).resolves.toBeUndefined();
   const claim = { device_id: deviceId, machine_id: machine.id, claim_code: claimCode };
   await expect(api.claimDevice(claim)).resolves.toEqual(claimed);
 
@@ -66,6 +68,7 @@ it('maps machine and claim operations to authenticated API endpoints', async () 
     ['https://example.test/v1/machines', 'GET', 'Bearer access', undefined],
     ['https://example.test/v1/machines', 'POST', 'Bearer access', { name: 'Workshop fan' }],
     [`https://example.test/v1/machines/${machine.id}`, 'GET', 'Bearer access', undefined],
+    [`https://example.test/v1/machines/${machine.id}`, 'DELETE', 'Bearer access', undefined],
     ['https://example.test/v1/devices/claim', 'POST', 'Bearer access', claim],
   ]);
 });

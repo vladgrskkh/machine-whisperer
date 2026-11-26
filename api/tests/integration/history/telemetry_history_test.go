@@ -61,6 +61,14 @@ func TestTelemetryHistoryOwnerAccess(t *testing.T) {
 	assert.Equal(t, "application/json", response.Header.Get("Content-Type"))
 	assert.JSONEq(t, emptyHistoryPage, response.Body)
 	assert.EqualValues(t, 1, calls.Load())
+
+	machinePath := testfixture.MachinesPath + "/" + machineID
+	deleted := testfixture.AuthHTTPRequest(t, server, http.MethodDelete, machinePath, "", owner)
+	require.Equal(t, http.StatusNoContent, deleted.Status, deleted.Body)
+	archived := testfixture.AuthHTTPRequest(t, server, http.MethodGet, path, "", owner)
+	assert.Equal(t, http.StatusNotFound, archived.Status)
+	assert.JSONEq(t, missing.Body, archived.Body)
+	assert.EqualValues(t, 1, calls.Load())
 }
 
 func TestTelemetryHistoryRejectsInvalidQuery(t *testing.T) {

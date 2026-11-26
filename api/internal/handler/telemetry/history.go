@@ -40,7 +40,7 @@ type HistoryLister interface {
 // @Summary Read machine telemetry history
 // @ID listMachineTelemetry
 // @Tags telemetry
-// @Description The machine must belong to the caller. Observations are available after export.
+// @Description The machine must be active and belong to the caller. Observations are available after export.
 // @Description Orders by descending observation time, device ID and event ID. Empty pages have an empty items array. An exhausted page has a null next_cursor.
 // @Description Provide each of limit and cursor at most once.
 // @Produce json

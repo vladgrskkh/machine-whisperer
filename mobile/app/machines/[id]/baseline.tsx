@@ -5,6 +5,7 @@ import { ActivityIndicator, Text } from 'react-native';
 import type { ApiClient } from '../../../src/api/client';
 import { parseUUID } from '../../../src/api/uuid';
 import { BaselineForm } from '../../../src/features/baseline/baseline-form';
+import { useMachineDeletions } from '../../../src/features/machines/machine-deletion-provider';
 import { useMachineQuery } from '../../../src/features/machines/use-machine-query';
 import { Button } from '../../../src/ui/button';
 import { colors, typography } from '../../../src/ui/theme';
@@ -13,6 +14,16 @@ import { WorkspaceScreen } from '../../../src/ui/workspace-screen';
 export default function BaselineRoute() {
   const { id: parameter } = useLocalSearchParams<{ id: string }>();
   const id = parseUUID(parameter);
+  const { deletedIds } = useMachineDeletions();
+
+  if (id && deletedIds.has(id)) {
+    return (
+      <WorkspaceScreen>
+        <Link href="/machines" dismissTo style={typography.link}>‹  Machines</Link>
+        <Text accessibilityRole="alert" style={typography.error}>This machine was deleted.</Text>
+      </WorkspaceScreen>
+    );
+  }
 
   return (
     <WorkspaceScreen>

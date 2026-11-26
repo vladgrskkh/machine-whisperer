@@ -40,7 +40,8 @@ func (r *Repository) Create(ctx context.Context, value device.Device) error {
 func (r *Repository) FindForAuthentication(ctx context.Context, deviceID string) (device.Device, error) {
 	var value device.Device
 	var keyVerifier []byte
-	err := r.pool.QueryRow(ctx, `SELECT machine_id::text,key_verifier,revoked_at FROM devices WHERE id=$1`, deviceID).
+	err := r.pool.QueryRow(ctx, `SELECT m.id::text,d.key_verifier,d.revoked_at FROM devices d
+		LEFT JOIN machines m ON m.id=d.machine_id AND m.deleted_at IS NULL WHERE d.id=$1`, deviceID).
 		Scan(&value.MachineID, &keyVerifier, &value.RevokedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return device.Device{}, device.ErrInvalidCredentials
@@ -83,8 +84,8 @@ func (r *Repository) LockMachineOwner(ctx context.Context, machineID, ownerUserI
 		return device.ErrTransactionRequired
 	}
 	var id string
-	err := tx.QueryRow(ctx, `SELECT id::text FROM machines WHERE id=$1 AND owner_user_id=$2 FOR SHARE`,
-		machineID, ownerUserID).Scan(&id)
+	err := tx.QueryRow(ctx, `SELECT id::text FROM machines
+		WHERE id=$1 AND owner_user_id=$2 AND deleted_at IS NULL FOR SHARE`, machineID, ownerUserID).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return device.ErrClaimUnavailable
 	}
@@ -102,7 +103,7 @@ func (r *Repository) Claim(ctx context.Context, deviceID, machineID, ownerUserID
 	// Hold ownership stable until the device binding commits.
 	tag, err := tx.Exec(ctx, `UPDATE devices
 		SET machine_id=target.id,claimed_at=$4,claim_verifier=NULL
-		FROM (SELECT id FROM machines WHERE id=$2 AND owner_user_id=$3 FOR SHARE) AS target
+		FROM (SELECT id FROM machines WHERE id=$2 AND owner_user_id=$3 AND deleted_at IS NULL FOR SHARE) AS target
 		WHERE devices.id=$1 AND devices.machine_id IS NULL AND devices.claim_verifier IS NOT NULL
 		AND devices.revoked_at IS NULL AND devices.claim_expires_at > $4`, deviceID, machineID, ownerUserID, at)
 	if err != nil {
