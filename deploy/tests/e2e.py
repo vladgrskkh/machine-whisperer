@@ -526,6 +526,21 @@ class DeploymentEndToEndTest(unittest.TestCase):
         streams = eventually("the five monitored services in Loki", series, timeout=60)
         self.assertTrue(all(set(stream) == {"service_name"} for stream in streams), streams)
 
+        success_start = time.time_ns()
+        machine_path = f"/v1/machines/{self.machine_id}"
+        self.request("GET", machine_path, 200, token=self.owner_token)
+        api_success = eventually("the successful API response in Loki", lambda: self.loki_range(
+            '{service_name="api"} | http_response_status_code="200" | severity_text="INFO"'
+            + f' |= "GET {machine_path}"', success_start))
+        api_success_line = api_success[0]["values"][0][1]
+        self.assertEqual(json.loads(api_success_line)["msg"], f"GET {machine_path}")
+        self.assertNotIn(self.owner_token, api_success_line)
+        success_trace_id = api_success[0]["stream"]["trace_id"]
+        edge_success = eventually("the successful Nginx response in the same trace", lambda: self.loki_range(
+            '{service_name="nginx"} | http_response_status_code="200" | severity_text="INFO"'
+            + f' | trace_id="{success_trace_id}"', success_start))
+        self.assertEqual(json.loads(edge_success[0]["values"][0][1])["http.response.status_code"], 200)
+
         untraced = time.time_ns()
         self.request("GET", "/untraced-log-check", 404, decode=False)
         edge_without_trace = eventually("a failure log from an untraced Nginx route", lambda: self.loki_range(

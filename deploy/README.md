@@ -395,14 +395,16 @@ only stream label.
 Docker forwards logs for API, Analytics, Nginx, PostgreSQL and ClickHouse to
 the Collector at `127.0.0.1:24224`. Set `MW_FLUENT_FORWARD_PORT` in the Compose
 env file if the host port is in use. The Collector forwards original Docker
-log lines to Loki over OTLP/HTTP with allowlisted searchable metadata. It drops
-debug records and records with an HTTP status below `400`. The saved lines
-can include SQL text, values, or request details emitted by a service. Loki
-listens on an internal storage network shared with the Collector and the query
-proxy. Grafana and the public Nginx route both reach the read-only query proxy.
+log lines to Loki over OTLP/HTTP with allowlisted searchable metadata. It keeps
+HTTP response records and drops debug records without an HTTP status. For
+public HTTPS requests, Nginx labels responses below `400` as `INFO`, `4xx` as
+`WARN`, and `5xx` as `ERROR`. Saved lines can include SQL text, values, or
+request details emitted by a service. Loki listens on an internal storage
+network shared with the Collector and the query proxy. Grafana and the public
+Nginx route both reach the read-only query proxy.
 
-After changing `deploy/tracing/collector.yaml`, run
-`mw up -d --no-deps --force-recreate otel-collector` to load the new pipeline.
+After changing the Nginx templates or `deploy/tracing/collector.yaml`, run
+`mw up -d --no-deps --force-recreate nginx otel-collector` to load the changes.
 
 For direct queries, use HTTPS under `https://<DOMAIN>/loki/api/v1/`. Sign in
 as `loki` with the password in `deploy/secrets/loki-password` (or the equivalent

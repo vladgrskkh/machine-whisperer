@@ -48,7 +48,7 @@ server {
     ssl_certificate /etc/letsencrypt/live/${DOMAIN}/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/${DOMAIN}/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    access_log /var/log/nginx/access.log mw_failure if=$mw_log_failure;
+    access_log /var/log/nginx/access.log mw_access;
 
     resolver 127.0.0.11 valid=10s ipv6=off;
     set $api_endpoint api:8443;

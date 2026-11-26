@@ -40,7 +40,7 @@ processors:
     log_conditions:
       - 'not ContainsValue(["mw.api", "mw.analytics", "mw.nginx", "mw.postgres", "mw.clickhouse"], log.attributes["fluent.tag"])'
   transform/log_allowlist:
-    error_mode: propagate
+    error_mode: ignore
     log_statements:
       - 'keep_keys(resource.attributes, [])'
       - 'keep_keys(scope.attributes, [])'
@@ -117,8 +117,7 @@ processors:
   filter/log_noise:
     error_mode: propagate
     log_conditions:
-      - 'log.attributes["http.response.status_code"] != nil and log.attributes["http.response.status_code"] < 400'
-      - 'log.severity_number == SEVERITY_NUMBER_DEBUG'
+      - 'log.severity_number == SEVERITY_NUMBER_DEBUG and log.attributes["http.response.status_code"] == nil'
   groupbyattrs/log_service:
     keys: [service.name]
   batch/logs:
